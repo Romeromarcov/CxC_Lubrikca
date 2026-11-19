@@ -751,6 +751,8 @@ class InMemoryRepository(Repository):
                 "metodo_pago": p.metodo_pago,
                 "fecha_pago": p.fecha_pago.isoformat(),
                 "vendedor_email": p.vendedor_email,
+                "numero_odoo": p.numero_odoo,
+                "referencia": p.referencia,
             }
             row.update(
                 self._pagos_human.get(

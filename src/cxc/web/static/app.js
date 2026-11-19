@@ -61,8 +61,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 window.loadConfigGastosContabilidad();
             }
         }
-        if (subpage === "motor" && typeof window.loadPoliticaVentasConfig === "function") {
-            window.loadPoliticaVentasConfig();
+        if (subpage === "motor") {
+            if (typeof window.loadPoliticaVentasConfig === "function") {
+                window.loadPoliticaVentasConfig();
+            }
+            if (typeof window.loadSiembraOdooEstado === "function") {
+                window.loadSiembraOdooEstado();
+            }
         }
     }
 
@@ -417,12 +422,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 applyComprasSubpage(tabParam || "facturas");
             } else if (path === "reportes") {
                 if (typeof switchReporteSubtab === "function") {
-                    switchReporteSubtab(["resumen", "cliente", "vendedor"].includes(tabParam) ? tabParam : "resumen");
+                    switchReporteSubtab(["resumen", "bd-propia", "cliente", "vendedor"].includes(tabParam) ? tabParam : "resumen");
                 }
                 if (typeof loadTasasPromedios === "function") loadTasasPromedios();
                 if (typeof loadReporteDiario === "function") loadReporteDiario();
                 if (typeof loadReporte === "function") loadReporte();
                 if (typeof loadReporteCxcCliente === "function") loadReporteCxcCliente();
+                if (typeof window.loadReportesSaldosPropios === "function") window.loadReportesSaldosPropios();
             } else if (path === "auditoria") {
                 const aSub = ["ordenes", "pagos", "entregas", "historico", "clientes", "integraciones"].includes(tabParam) ? tabParam : "ordenes";
                 if (typeof switchAuditoriaSubtab === "function") switchAuditoriaSubtab(aSub);
@@ -1474,6 +1480,9 @@ document.addEventListener("DOMContentLoaded", () => {
         // Se carga al abrir la pestaña: el cálculo tarda unos segundos y la
         // mayoría de las visitas solo miran la vista por cliente.
         if (name === "vendedor" && fullVendedoresCxc === null) loadReporteCxcVendedor();
+        if (name === "bd-propia" && typeof window.loadReportesSaldosPropios === "function") {
+            window.loadReportesSaldosPropios();
+        }
     };
 
     const _TRAMOS = ["vigente", "1_30", "31_60", "61_90", "mas_90"];

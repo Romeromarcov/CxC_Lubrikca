@@ -1,0 +1,822 @@
+"""Motor de Reportes 100% sobre Base de Datos propia de CxC (sin consultar Odoo).
+
+Calcula saldos reales por cliente, por vendedor, antigüedad FIFO y estado de cuenta
+exclusivamente con datos confirmados en las tablas locales de CxC:
+
+    Saldo Deudor = Ventas Confirmadas − Descuentos Confirmados − Pagos Confirmados
+
+Incluye ventas espejo de Odoo + pedidos ``ENVIADO_ODOO`` aún no re-sincronizados,
+descuentos aprobados en sistema + Notas de Crédito publicadas, pagos espejo de Odoo
+(convertidos a USD con tasas BCV locales cuando son VES), pagos Zelle de Terceros
+confirmados y cobros de efectivo confirmados en CxC (CxC-first).
+"""
+
+from __future__ import annotations
+
+import unicodedata
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+from ..decimal_utils import q2
+from ..models import (
+    EstadoBandeja,
+    EstadoVinculacion,
+    OrdenVenta,
+)
+from ..repositories import Repository
+
+ESTADOS_ORDEN_CONFIRMADA = ("sale", "done")
+ESTADOS_VINC_CONFIRMADA = frozenset(
+    {EstadoVinculacion.APROBADO, EstadoVinculacion.FACTURADO, EstadoVinculacion.CONCILIADO}
+)
+TRAMOS_MORA = ("vigente", "1_30", "31_60", "61_90", "mas_90")
+
+
+def _norm_nombre(txt: str) -> str:
+    nfd = unicodedata.normalize("NFD", (txt or "").strip().lower())
+    limpio = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+    return " ".join(limpio.split())
+
+
+def _es_activo(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    return str(val or "").strip().lower() in ("true", "1", "yes", "si", "sí")
+
+
+def _dec(val: Any) -> Decimal:
+    try:
+        return Decimal(str(val or "0"))
+    except Exception:
+        return Decimal("0")
+
+
+def _f(val: Decimal | float | int) -> float:
+    return float(q2(_dec(val)))
+
+
+def _indice_tasas_bcv_local(repo: Repository) -> tuple[dict[date, Decimal], Decimal]:
+    """Construye mapa ``fecha → tasa_bcv`` y tasa fallback más reciente solo desde BD CxC."""
+    por_fecha: dict[date, Decimal] = {}
+    ultima_tasa = Decimal("0")
+    ultima_fecha: date | None = None
+
+    try:
+        hist = repo.all_tasas_historicas_auditoria()
+    except Exception:
+        hist = []
+    for row in hist:
+        f_raw = str(row.get("fecha") or "")[:10]
+        t_val = _dec(row.get("tasa_bcv_usd"))
+        if f_raw and t_val > 0:
+            try:
+                f_d = date.fromisoformat(f_raw)
+                por_fecha[f_d] = t_val
+                if ultima_fecha is None or f_d >= ultima_fecha:
+                    ultima_fecha = f_d
+                    ultima_tasa = t_val
+            except ValueError:
+                continue
+
+    try:
+        series = repo.all_serie_tasas()
+    except Exception:
+        series = []
+    for s in sorted(series, key=lambda x: x.timestamp):
+        if s.tasa_bcv and s.tasa_bcv > 0:
+            f_d = s.timestamp.date()
+            por_fecha[f_d] = Decimal(str(s.tasa_bcv))
+            if ultima_fecha is None or f_d >= ultima_fecha:
+                ultima_fecha = f_d
+                ultima_tasa = Decimal(str(s.tasa_bcv))
+
+    return por_fecha, ultima_tasa
+
+
+def _tasa_bcv_en_fecha(
+    fecha_doc: date, por_fecha: dict[date, Decimal], fallback: Decimal
+) -> Decimal:
+    if fecha_doc in por_fecha:
+        return por_fecha[fecha_doc]
+    anteriores = [f for f in por_fecha if f <= fecha_doc]
+    if anteriores:
+        return por_fecha[max(anteriores)]
+    if por_fecha:
+        return por_fecha[min(por_fecha)]
+    return fallback
+
+
+def _a_usd_local(
+    monto: Decimal,
+    moneda: str,
+    fecha_doc: date,
+    por_fecha: dict[date, Decimal],
+    fallback_tasa: Decimal,
+) -> Decimal:
+    mon = (moneda or "USD").strip().upper()
+    if mon == "USD" or monto <= 0:
+        return q2(monto)
+    tasa = _tasa_bcv_en_fecha(fecha_doc, por_fecha, fallback_tasa)
+    if tasa <= 0:
+        return Decimal("0.00")
+    return q2(monto / tasa)
+
+
+def _so_ids_csv(so_id_raw: str | None) -> list[str]:
+    return [s.strip() for s in str(so_id_raw or "").split(",") if s.strip()]
+
+
+def _tramo_mora(dias_mora: int) -> str:
+    if dias_mora <= 0:
+        return "vigente"
+    if dias_mora <= 30:
+        return "1_30"
+    if dias_mora <= 60:
+        return "31_60"
+    if dias_mora <= 90:
+        return "61_90"
+    return "mas_90"
+
+
+def _bucket_cliente(cid: str, nombre: str, vendedor: str) -> dict[str, Any]:
+    return {
+        "cliente_id": cid,
+        "cliente_nombre": nombre or f"Cliente #{cid}",
+        "vendedor_email": vendedor,
+        "ventas_confirmadas_usd": Decimal("0"),
+        "descuentos_sistema_usd": Decimal("0"),
+        "notas_credito_usd": Decimal("0"),
+        "descuentos_confirmados_usd": Decimal("0"),
+        "pagos_odoo_usd": Decimal("0"),
+        "pagos_zelle_tercero_usd": Decimal("0"),
+        "pagos_efectivo_cxc_usd": Decimal("0"),
+        "pagos_otros_cxc_usd": Decimal("0"),
+        "pagos_confirmados_usd": Decimal("0"),
+        "n_ordenes": 0,
+        "n_pagos": 0,
+        "ordenes_fifo": [],  # list[tuple[date, date, Decimal, str]]
+        "movimientos": [],
+    }
+
+
+def _recolectar_estado_bd(
+    repo: Repository,
+    *,
+    docs_comerciales: Sequence[Any] = (),
+    docs_operativos: Sequence[Any] = (),
+    hoy: date | None = None,
+) -> dict[str, Any]:
+    hoy_d = hoy or date.today()
+    por_fecha_tasa, fallback_tasa = _indice_tasas_bcv_local(repo)
+
+    clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
+    nombre_a_cid = {_norm_nombre(c.nombre): c.cliente_id for c in clientes_map.values() if c.nombre}
+
+    buckets: dict[str, dict[str, Any]] = {}
+
+    def ensure_bucket(cid: str, nombre: str = "", vendedor: str = "") -> dict[str, Any]:
+        c_obj = clientes_map.get(cid)
+        nom = nombre or (c_obj.nombre if c_obj else "")
+        vend = vendedor or (c_obj.vendedor_email if c_obj else "")
+        b = buckets.get(cid)
+        if b is None:
+            b = _bucket_cliente(cid, nom, vend)
+            buckets[cid] = b
+        else:
+            if nom and b["cliente_nombre"].startswith("Cliente #"):
+                b["cliente_nombre"] = nom
+            if vend and not b["vendedor_email"]:
+                b["vendedor_email"] = vend
+        return b
+
+    def resolver_cid(
+        partner_odoo_id: Any, nombre_contraparte: str, vendedor: str = ""
+    ) -> tuple[str, str]:
+        if partner_odoo_id is not None and str(partner_odoo_id).strip():
+            cid = str(partner_odoo_id)
+            return cid, ensure_bucket(cid, nombre_contraparte, vendedor)["cliente_nombre"]
+        norm = _norm_nombre(nombre_contraparte)
+        if norm and norm in nombre_a_cid:
+            cid = nombre_a_cid[norm]
+            return cid, ensure_bucket(cid, nombre_contraparte, vendedor)["cliente_nombre"]
+        cid_sint = f"cxc:{norm or 'sin_nombre'}"
+        return cid_sint, ensure_bucket(cid_sint, nombre_contraparte, vendedor)["cliente_nombre"]
+
+    # 1. Ventas confirmadas desde espejo Odoo (ordenes_venta)
+    ordenes_all: list[OrdenVenta] = list(repo.all_ordenes())
+    ordenes_por_so: dict[str, OrdenVenta] = {o.so_id: o for o in ordenes_all}
+    for o in ordenes_all:
+        if o.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
+            continue
+        b = ensure_bucket(o.cliente_id, "", o.vendedor_email)
+        monto = q2(_dec(o.monto_total))
+        if monto <= 0:
+            continue
+        f_base = o.fecha_entrega or o.fecha
+        f_venc = f_base + timedelta(days=int(o.dias_credito or 0))
+        b["ventas_confirmadas_usd"] += monto
+        b["n_ordenes"] += 1
+        b["ordenes_fifo"].append((o.fecha, f_venc, monto, o.so_id))
+        b["movimientos"].append(
+            {
+                "fecha": o.fecha.isoformat(),
+                "tipo": "venta_odoo",
+                "etiqueta": "Venta Confirmada (Odoo)",
+                "referencia": o.so_id,
+                "fuente": "odoo",
+                "debito_usd": float(monto),
+                "credito_usd": 0.0,
+            }
+        )
+
+    # 1b. Pedidos nacidos en CxC enviados a Odoo todavía ausentes del espejo
+    for dc in docs_comerciales:
+        if getattr(dc, "tipo", "") != "pedido" or getattr(dc, "estado", "") != "ENVIADO_ODOO":
+            continue
+        so_name = str(getattr(dc, "odoo_order_name", "") or "").strip()
+        if so_name and so_name in ordenes_por_so:
+            continue
+        monto = q2(_dec(getattr(dc, "total_con_iva", 0)))
+        if monto <= 0:
+            continue
+        cid, _ = resolver_cid(
+            getattr(dc, "partner_odoo_id", None),
+            str(getattr(dc, "cliente_nombre", "") or ""),
+            str(getattr(dc, "vendedor_email", "") or ""),
+        )
+        b = buckets[cid]
+        f_ent = getattr(dc, "fecha_entrega", None)
+        f_cre = getattr(dc, "creado_en", None)
+        f_doc = f_ent or (f_cre.date() if isinstance(f_cre, datetime) else hoy_d)
+        ref_doc = so_name or str(getattr(dc, "numero", ""))
+        b["ventas_confirmadas_usd"] += monto
+        b["n_ordenes"] += 1
+        b["ordenes_fifo"].append((f_doc, f_doc, monto, ref_doc))
+        b["movimientos"].append(
+            {
+                "fecha": f_doc.isoformat(),
+                "tipo": "venta_cxc",
+                "etiqueta": "Pedido CxC enviado a Odoo",
+                "referencia": ref_doc,
+                "fuente": "cxc",
+                "debito_usd": float(monto),
+                "credito_usd": 0.0,
+            }
+        )
+
+    # 2. Descuentos confirmados (sistema aprobados + bandeja aprobada/facturada + NC posted)
+    no_otorgados_fn = getattr(repo, "all_descuentos_no_otorgados", None)
+    try:
+        no_otorgados = set((no_otorgados_fn() or {}).keys()) if callable(no_otorgados_fn) else set()
+    except Exception:
+        no_otorgados = set()
+
+    so_con_desc_aprobado: set[str] = set()
+    for d_row in repo.all_descuentos_sistema_aprobados():
+        if not _es_activo(d_row.get("activo", True)):
+            continue
+        so_id = str(d_row.get("so_id") or "").strip()
+        if not so_id or so_id in no_otorgados:
+            continue
+        ord_obj = ordenes_por_so.get(so_id)
+        if ord_obj is None or ord_obj.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
+            continue
+        monto_d = q2(_dec(d_row.get("monto")))
+        if monto_d <= 0:
+            continue
+        so_con_desc_aprobado.add(so_id)
+        b = ensure_bucket(ord_obj.cliente_id, "", ord_obj.vendedor_email)
+        b["descuentos_sistema_usd"] += monto_d
+        b["descuentos_confirmados_usd"] += monto_d
+        b["movimientos"].append(
+            {
+                "fecha": ord_obj.fecha.isoformat(),
+                "tipo": "descuento_aprobado",
+                "etiqueta": "Descuento Aprobado en Sistema",
+                "referencia": so_id,
+                "fuente": "cxc",
+                "debito_usd": 0.0,
+                "credito_usd": float(monto_d),
+            }
+        )
+
+    for bf in repo.all_bandeja():
+        if bf.so_id in so_con_desc_aprobado or bf.so_id in no_otorgados:
+            continue
+        if bf.estado not in (EstadoBandeja.APROBADO, EstadoBandeja.FACTURADO):
+            continue
+        ord_obj = ordenes_por_so.get(bf.so_id)
+        if ord_obj is None or ord_obj.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
+            continue
+        monto_d = q2(_dec(bf.total_descuentos))
+        if monto_d <= 0:
+            continue
+        b = ensure_bucket(ord_obj.cliente_id, "", ord_obj.vendedor_email)
+        b["descuentos_sistema_usd"] += monto_d
+        b["descuentos_confirmados_usd"] += monto_d
+        b["movimientos"].append(
+            {
+                "fecha": ord_obj.fecha.isoformat(),
+                "tipo": "descuento_bandeja",
+                "etiqueta": f"Descuento Confirmado ({bf.estado.value})",
+                "referencia": bf.so_id,
+                "fuente": "cxc",
+                "debito_usd": 0.0,
+                "credito_usd": float(monto_d),
+            }
+        )
+
+    try:
+        facturas_all = repo.all_facturas()
+    except NotImplementedError:
+        facturas_all = []
+    for fac in facturas_all:
+        if fac.move_type != "out_refund" or fac.estado != "posted":
+            continue
+        monto_nc = q2(abs(_dec(fac.monto_total_signed_usd)))
+        if monto_nc <= 0:
+            continue
+        ord_match = next(
+            (ordenes_por_so[s] for s in _so_ids_csv(fac.so_id) if s in ordenes_por_so),
+            None,
+        )
+        if ord_match is None:
+            continue
+        b = ensure_bucket(ord_match.cliente_id, "", ord_match.vendedor_email)
+        b["notas_credito_usd"] += monto_nc
+        b["descuentos_confirmados_usd"] += monto_nc
+        b["movimientos"].append(
+            {
+                "fecha": fac.fecha.isoformat(),
+                "tipo": "nota_credito",
+                "etiqueta": "Nota de Crédito (Odoo)",
+                "referencia": fac.numero or fac.factura_id,
+                "fuente": "odoo",
+                "debito_usd": 0.0,
+                "credito_usd": float(monto_nc),
+            }
+        )
+
+    # 3. Pagos confirmados desde espejo Odoo (usando vinculaciones confirmadas + tasas locales)
+    vincs_por_pago: dict[str, list[Any]] = {}
+    for v in repo.all_vinculaciones():
+        if v.estado in ESTADOS_VINC_CONFIRMADA:
+            vincs_por_pago.setdefault(str(v.pago_id), []).append(v)
+
+    pagos_all = repo.all_pagos()
+    pagos_odoo_ids = {str(p.pago_id) for p in pagos_all}
+    for p in pagos_all:
+        b = ensure_bucket(p.cliente_id, "", p.vendedor_email)
+        f_p = p.fecha_pago.date()
+        vincs = vincs_por_pago.get(str(p.pago_id), [])
+        vinc_congelado = Decimal("0")
+        aplicado_nativo = Decimal("0")
+        for v in vincs:
+            aplicado_nativo += _dec(v.monto_aplicado)
+            if v.equiv_usd_bcv is not None:
+                vinc_congelado += q2(_dec(v.equiv_usd_bcv))
+            else:
+                vinc_congelado += _a_usd_local(
+                    _dec(v.monto_aplicado), p.moneda.value, f_p, por_fecha_tasa, fallback_tasa
+                )
+        remanente_nativo = max(Decimal("0"), _dec(p.monto) - aplicado_nativo)
+        remanente_usd = _a_usd_local(
+            remanente_nativo, p.moneda.value, f_p, por_fecha_tasa, fallback_tasa
+        )
+        monto_usd = q2(vinc_congelado + remanente_usd)
+        if monto_usd <= 0:
+            continue
+        b["pagos_odoo_usd"] += monto_usd
+        b["pagos_confirmados_usd"] += monto_usd
+        b["n_pagos"] += 1
+        ref_lbl = p.numero_odoo or p.referencia or f"PAGO-{p.pago_id}"
+        b["movimientos"].append(
+            {
+                "fecha": f_p.isoformat(),
+                "tipo": "pago_odoo",
+                "etiqueta": f"Pago Confirmado Odoo ({p.moneda.value})",
+                "referencia": ref_lbl,
+                "fuente": "odoo",
+                "debito_usd": 0.0,
+                "credito_usd": float(monto_usd),
+            }
+        )
+
+    # 3b. Pagos confirmados CxC-first (Zelle de Terceros + Efectivo CxC + pagos no reflejados)
+    for dop in docs_operativos:
+        if getattr(dop, "tipo", "") != "pago":
+            continue
+        est = str(getattr(dop, "estado", "") or "")
+        confirmado = bool(getattr(dop, "confirmado_cxc", False)) or est in (
+            "CONFIRMADO_CXC",
+            "ENVIADO_ODOO",
+        )
+        if not confirmado:
+            continue
+        es_zt = bool(getattr(dop, "es_zelle_tercero", False))
+        odoo_mod = str(getattr(dop, "odoo_model", "") or "")
+        odoo_rid = getattr(dop, "odoo_res_id", None)
+        if (
+            not es_zt
+            and odoo_mod in ("", "account.payment")
+            and odoo_rid is not None
+            and str(odoo_rid) in pagos_odoo_ids
+        ):
+            continue
+        monto_raw = _dec(getattr(dop, "monto", 0))
+        if monto_raw <= 0:
+            continue
+        mon_op = str(getattr(dop, "moneda", "VES") or "VES").upper()
+        f_doc_op = getattr(dop, "fecha_documento", None)
+        if not isinstance(f_doc_op, date):
+            cre = getattr(dop, "creado_en", None)
+            f_doc_op = cre.date() if isinstance(cre, datetime) else hoy_d
+        monto_usd = _a_usd_local(monto_raw, mon_op, f_doc_op, por_fecha_tasa, fallback_tasa)
+        if monto_usd <= 0:
+            continue
+
+        cid, _ = resolver_cid(
+            getattr(dop, "partner_odoo_id", None),
+            str(getattr(dop, "contraparte_nombre", "") or ""),
+        )
+        b = buckets[cid]
+        met = str(getattr(dop, "metodo_pago", "") or "").lower()
+        if es_zt:
+            b["pagos_zelle_tercero_usd"] += monto_usd
+            etq = "Pago Zelle Tercero Confirmado (CxC)"
+            tipo_mov = "pago_zelle_tercero"
+        elif "efectivo" in met or "cash" in met:
+            b["pagos_efectivo_cxc_usd"] += monto_usd
+            etq = "Cobro Efectivo Confirmado (CxC)"
+            tipo_mov = "pago_efectivo_cxc"
+        else:
+            b["pagos_otros_cxc_usd"] += monto_usd
+            etq = "Cobro Confirmado en CxC"
+            tipo_mov = "pago_cxc"
+
+        b["pagos_confirmados_usd"] += monto_usd
+        b["n_pagos"] += 1
+        rec = str(getattr(dop, "numero_recibo", "") or "").strip()
+        num = str(getattr(dop, "numero", "") or "").strip()
+        b["movimientos"].append(
+            {
+                "fecha": f_doc_op.isoformat(),
+                "tipo": tipo_mov,
+                "etiqueta": etq,
+                "referencia": f"{num} ({rec})" if rec else num,
+                "fuente": "cxc",
+                "debito_usd": 0.0,
+                "credito_usd": float(monto_usd),
+            }
+        )
+
+    # 4. Cierre por cliente + antigüedad FIFO
+    clientes_out: list[dict[str, Any]] = []
+    por_vendedor: dict[str, dict[str, Any]] = {}
+    tot_tramos: dict[str, Decimal] = dict.fromkeys(TRAMOS_MORA, Decimal("0"))
+
+    for cid, b in buckets.items():
+        ventas = q2(b["ventas_confirmadas_usd"])
+        descuentos = q2(b["descuentos_confirmados_usd"])
+        pagos_c = q2(b["pagos_confirmados_usd"])
+        if ventas == 0 and descuentos == 0 and pagos_c == 0:
+            continue
+
+        saldo_bruto = q2(ventas - descuentos - pagos_c)
+        saldo_deudor = max(Decimal("0.00"), saldo_bruto)
+        saldo_favor = max(Decimal("0.00"), -saldo_bruto)
+
+        # FIFO de órdenes abiertas para tramos de mora
+        credito_rest = q2(descuentos + pagos_c)
+        tramos_cli: dict[str, Decimal] = dict.fromkeys(TRAMOS_MORA, Decimal("0"))
+        max_dias_mora = 0
+        for _f_ord, f_venc, m_ord, _so in sorted(b["ordenes_fifo"], key=lambda x: (x[0], x[3])):
+            cubierto = min(m_ord, credito_rest)
+            credito_rest = q2(credito_rest - cubierto)
+            rem = q2(m_ord - cubierto)
+            if rem <= 0:
+                continue
+            dias_m = (hoy_d - f_venc).days
+            if dias_m > max_dias_mora:
+                max_dias_mora = dias_m
+            tr = _tramo_mora(dias_m)
+            tramos_cli[tr] = q2(tramos_cli[tr] + rem)
+
+        for tr in TRAMOS_MORA:
+            tot_tramos[tr] = q2(tot_tramos[tr] + tramos_cli[tr])
+
+        vencido_cli = q2(sum((tramos_cli[t] for t in TRAMOS_MORA if t != "vigente"), Decimal("0")))
+        fila_cli = {
+            "cliente_id": cid,
+            "cliente_nombre": b["cliente_nombre"],
+            "vendedor_email": b["vendedor_email"] or "Sin asignar",
+            "n_ordenes": int(b["n_ordenes"]),
+            "n_pagos": int(b["n_pagos"]),
+            "ventas_confirmadas_usd": _f(ventas),
+            "descuentos_sistema_usd": _f(b["descuentos_sistema_usd"]),
+            "notas_credito_usd": _f(b["notas_credito_usd"]),
+            "descuentos_confirmados_usd": _f(descuentos),
+            "pagos_odoo_usd": _f(b["pagos_odoo_usd"]),
+            "pagos_zelle_tercero_usd": _f(b["pagos_zelle_tercero_usd"]),
+            "pagos_efectivo_cxc_usd": _f(b["pagos_efectivo_cxc_usd"]),
+            "pagos_otros_cxc_usd": _f(b["pagos_otros_cxc_usd"]),
+            "pagos_confirmados_usd": _f(pagos_c),
+            "saldo_neto_usd": _f(saldo_bruto),
+            "saldo_deudor_usd": _f(saldo_deudor),
+            "saldo_favor_usd": _f(saldo_favor),
+            "vencido_usd": _f(vencido_cli),
+            "vigente_usd": _f(tramos_cli["vigente"]),
+            "tramos": {k: _f(v) for k, v in tramos_cli.items()},
+            "dias_mora_max": max_dias_mora,
+            "_movimientos": b["movimientos"],
+        }
+        clientes_out.append(fila_cli)
+
+        vend = fila_cli["vendedor_email"]
+        bv = por_vendedor.setdefault(
+            vend,
+            {
+                "vendedor_email": vend,
+                "n_clientes": 0,
+                "n_clientes_con_saldo": 0,
+                "ventas_confirmadas_usd": 0.0,
+                "descuentos_confirmados_usd": 0.0,
+                "pagos_confirmados_usd": 0.0,
+                "saldo_deudor_usd": 0.0,
+                "vencido_usd": 0.0,
+            },
+        )
+        bv["n_clientes"] += 1
+        if saldo_deudor > 0:
+            bv["n_clientes_con_saldo"] += 1
+        bv["ventas_confirmadas_usd"] = round(
+            bv["ventas_confirmadas_usd"] + fila_cli["ventas_confirmadas_usd"], 2
+        )
+        bv["descuentos_confirmados_usd"] = round(
+            bv["descuentos_confirmados_usd"] + fila_cli["descuentos_confirmados_usd"], 2
+        )
+        bv["pagos_confirmados_usd"] = round(
+            bv["pagos_confirmados_usd"] + fila_cli["pagos_confirmados_usd"], 2
+        )
+        bv["saldo_deudor_usd"] = round(bv["saldo_deudor_usd"] + fila_cli["saldo_deudor_usd"], 2)
+        bv["vencido_usd"] = round(bv["vencido_usd"] + fila_cli["vencido_usd"], 2)
+
+    clientes_out.sort(key=lambda x: (-x["saldo_deudor_usd"], x["cliente_nombre"]))
+    vendedores_out = sorted(
+        por_vendedor.values(), key=lambda x: (-x["saldo_deudor_usd"], x["vendedor_email"])
+    )
+    last_sync = repo.get_last_sync()
+    return {
+        "generado_en": datetime.now().isoformat(),
+        "ultimo_sync_bd": last_sync.isoformat() if last_sync else None,
+        "tasa_bcv_referencia": float(fallback_tasa),
+        "clientes": clientes_out,
+        "vendedores": vendedores_out,
+        "tramos_globales": {k: _f(v) for k, v in tot_tramos.items()},
+    }
+
+
+def _resumir_kpis(clientes_rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    ventas = round(sum(float(c["ventas_confirmadas_usd"]) for c in clientes_rows), 2)
+    descuentos = round(sum(float(c["descuentos_confirmados_usd"]) for c in clientes_rows), 2)
+    desc_sis = round(sum(float(c["descuentos_sistema_usd"]) for c in clientes_rows), 2)
+    nc_odoo = round(sum(float(c["notas_credito_usd"]) for c in clientes_rows), 2)
+    pagos = round(sum(float(c["pagos_confirmados_usd"]) for c in clientes_rows), 2)
+    pagos_odoo = round(sum(float(c["pagos_odoo_usd"]) for c in clientes_rows), 2)
+    zelle3 = round(sum(float(c["pagos_zelle_tercero_usd"]) for c in clientes_rows), 2)
+    efec_cxc = round(sum(float(c["pagos_efectivo_cxc_usd"]) for c in clientes_rows), 2)
+    deudor = round(sum(float(c["saldo_deudor_usd"]) for c in clientes_rows), 2)
+    favor = round(sum(float(c["saldo_favor_usd"]) for c in clientes_rows), 2)
+    vencido = round(sum(float(c["vencido_usd"]) for c in clientes_rows), 2)
+    vigente = round(sum(float(c["vigente_usd"]) for c in clientes_rows), 2)
+    tramos = {k: round(sum(float(c["tramos"][k]) for c in clientes_rows), 2) for k in TRAMOS_MORA}
+    return {
+        "total_clientes": len(clientes_rows),
+        "clientes_con_saldo": sum(1 for c in clientes_rows if c["saldo_deudor_usd"] > 0),
+        "ventas_confirmadas_usd": ventas,
+        "descuentos_sistema_usd": desc_sis,
+        "notas_credito_usd": nc_odoo,
+        "descuentos_confirmados_usd": descuentos,
+        "pagos_odoo_usd": pagos_odoo,
+        "pagos_zelle_tercero_usd": zelle3,
+        "pagos_efectivo_cxc_usd": efec_cxc,
+        "pagos_confirmados_usd": pagos,
+        "saldo_deudor_usd": deudor,
+        "saldo_favor_usd": favor,
+        "vencido_usd": vencido,
+        "vigente_usd": vigente,
+        "tramos": tramos,
+    }
+
+
+def _cumple_antiguedad(c: dict[str, Any], filtro: str) -> bool:
+    if not filtro or filtro == "*":
+        return True
+    if filtro == "vencido_total":
+        return float(c["vencido_usd"]) > 0
+    if filtro == "vigentes":
+        return float(c["vigente_usd"]) > 0
+    if filtro in c["tramos"]:
+        return float(c["tramos"][filtro]) > 0
+    return True
+
+
+def calcular_saldos_propios(
+    repo: Repository,
+    *,
+    docs_comerciales: Sequence[Any] = (),
+    docs_operativos: Sequence[Any] = (),
+    hoy: date | None = None,
+    vendedor: str | None = None,
+    antiguedad: str | None = None,
+    q: str | None = None,
+    solo_con_saldo: bool = False,
+) -> dict[str, Any]:
+    """Reporte completo de Saldos CxC calculado 100% sobre la base de datos propia."""
+    base = _recolectar_estado_bd(
+        repo,
+        docs_comerciales=docs_comerciales,
+        docs_operativos=docs_operativos,
+        hoy=hoy,
+    )
+    clientes_limpios = [
+        {k: v for k, v in c.items() if k != "_movimientos"} for c in base["clientes"]
+    ]
+    filtrados = clientes_limpios
+    if vendedor and vendedor != "*":
+        v_low = vendedor.strip().lower()
+        filtrados = [c for c in filtrados if c["vendedor_email"].lower() == v_low]
+    if antiguedad and antiguedad != "*":
+        filtrados = [c for c in filtrados if _cumple_antiguedad(c, antiguedad)]
+    if solo_con_saldo:
+        filtrados = [c for c in filtrados if c["saldo_deudor_usd"] > 0]
+    if q and q.strip():
+        qn = q.strip().lower()
+        filtrados = [
+            c
+            for c in filtrados
+            if qn in c["cliente_nombre"].lower()
+            or qn in c["cliente_id"].lower()
+            or qn in c["vendedor_email"].lower()
+        ]
+
+    return {
+        "fuente": "bd_propia_cxc",
+        "solo_lectura": True,
+        "formula": "Saldo Deudor = Ventas Confirmadas - Descuentos Confirmados - Pagos Confirmados",
+        "generado_en": base["generado_en"],
+        "ultimo_sync_bd": base["ultimo_sync_bd"],
+        "tasa_bcv_referencia": base["tasa_bcv_referencia"],
+        "kpis": _resumir_kpis(filtrados),
+        "kpis_globales": _resumir_kpis(clientes_limpios),
+        "vendedores": base["vendedores"],
+        "clientes": filtrados,
+    }
+
+
+def estado_cuenta_cliente(
+    repo: Repository,
+    cliente_id: str,
+    *,
+    docs_comerciales: Sequence[Any] = (),
+    docs_operativos: Sequence[Any] = (),
+    hoy: date | None = None,
+) -> dict[str, Any] | None:
+    """Devuelve el estado de cuenta cronológico de un cliente desde BD propia."""
+    base = _recolectar_estado_bd(
+        repo,
+        docs_comerciales=docs_comerciales,
+        docs_operativos=docs_operativos,
+        hoy=hoy,
+    )
+    target = next((c for c in base["clientes"] if str(c["cliente_id"]) == str(cliente_id)), None)
+    if target is None:
+        return None
+    movs_ord = sorted(
+        target["_movimientos"],
+        key=lambda m: (str(m["fecha"]), 0 if m["debito_usd"] > 0 else 1, str(m["referencia"])),
+    )
+    saldo_corrido = Decimal("0.00")
+    movs_con_saldo: list[dict[str, Any]] = []
+    for m in movs_ord:
+        saldo_corrido = q2(saldo_corrido + _dec(m["debito_usd"]) - _dec(m["credito_usd"]))
+        movs_con_saldo.append({**m, "saldo_acumulado_usd": float(saldo_corrido)})
+    resumen = {k: v for k, v in target.items() if k != "_movimientos"}
+    return {
+        "fuente": "bd_propia_cxc",
+        "solo_lectura": True,
+        "resumen": resumen,
+        "movimientos": movs_con_saldo,
+    }
+
+
+def comparativo_bd_vs_odoo(
+    repo: Repository,
+    *,
+    docs_comerciales: Sequence[Any] = (),
+    docs_operativos: Sequence[Any] = (),
+    hoy: date | None = None,
+) -> dict[str, Any]:
+    """Compara la cartera neta de BD propia CxC contra los documentos espejo de Odoo."""
+    rep = calcular_saldos_propios(
+        repo, docs_comerciales=docs_comerciales, docs_operativos=docs_operativos, hoy=hoy
+    )
+    kg = rep["kpis_globales"]
+
+    try:
+        facturas_all = repo.all_facturas()
+    except NotImplementedError:
+        facturas_all = []
+    fact_out_usd = Decimal("0")
+    nc_out_usd = Decimal("0")
+    for f in facturas_all:
+        if f.estado != "posted":
+            continue
+        if f.move_type in ("out_invoice", "out_debit"):
+            fact_out_usd += q2(abs(_dec(f.monto_total_signed_usd)))
+        elif f.move_type == "out_refund":
+            nc_out_usd += q2(abs(_dec(f.monto_total_signed_usd)))
+
+    saldo_teorico_odoo = _f(
+        max(Decimal("0"), fact_out_usd - nc_out_usd - _dec(kg["pagos_odoo_usd"]))
+    )
+    brecha = round(kg["saldo_deudor_usd"] - saldo_teorico_odoo, 2)
+    return {
+        "generado_en": rep["generado_en"],
+        "bd_propia": kg,
+        "espejo_odoo": {
+            "facturado_bruto_usd": _f(fact_out_usd),
+            "notas_credito_usd": _f(nc_odoo := nc_out_usd),
+            "facturado_neto_usd": _f(max(Decimal("0"), fact_out_usd - nc_odoo)),
+            "pagos_odoo_usd": kg["pagos_odoo_usd"],
+            "saldo_referencial_odoo_usd": saldo_teorico_odoo,
+        },
+        "explicacion_diferencias": {
+            "descuentos_sistema_sin_nc_usd": kg["descuentos_sistema_usd"],
+            "pagos_zelle_tercero_cxc_usd": kg["pagos_zelle_tercero_usd"],
+            "pagos_efectivo_cxc_usd": kg["pagos_efectivo_cxc_usd"],
+            "brecha_neta_usd": brecha,
+        },
+    }
+
+
+def exportar_saldos_csv(reporte: dict[str, Any]) -> bytes:
+    """Genera CSV UTF-8 con BOM listo para Excel con el reporte de BD propia."""
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "Cliente ID",
+            "Cliente",
+            "Vendedor",
+            "Ordenes",
+            "Pagos",
+            "Ventas Confirmadas USD",
+            "Descuentos Sistema USD",
+            "Notas Credito USD",
+            "Descuentos Confirmados USD",
+            "Pagos Odoo USD",
+            "Zelle Terceros USD",
+            "Efectivo CxC USD",
+            "Pagos Confirmados USD",
+            "Saldo Deudor USD",
+            "Saldo a Favor USD",
+            "Vigente USD",
+            "1-30 Dias USD",
+            "31-60 Dias USD",
+            "61-90 Dias USD",
+            "+90 Dias USD",
+        ]
+    )
+    for c in reporte.get("clientes") or []:
+        t = c.get("tramos") or {}
+        writer.writerow(
+            [
+                c.get("cliente_id", ""),
+                c.get("cliente_nombre", ""),
+                c.get("vendedor_email", ""),
+                c.get("n_ordenes", 0),
+                c.get("n_pagos", 0),
+                f"{c.get('ventas_confirmadas_usd', 0):.2f}",
+                f"{c.get('descuentos_sistema_usd', 0):.2f}",
+                f"{c.get('notas_credito_usd', 0):.2f}",
+                f"{c.get('descuentos_confirmados_usd', 0):.2f}",
+                f"{c.get('pagos_odoo_usd', 0):.2f}",
+                f"{c.get('pagos_zelle_tercero_usd', 0):.2f}",
+                f"{c.get('pagos_efectivo_cxc_usd', 0):.2f}",
+                f"{c.get('pagos_confirmados_usd', 0):.2f}",
+                f"{c.get('saldo_deudor_usd', 0):.2f}",
+                f"{c.get('saldo_favor_usd', 0):.2f}",
+                f"{t.get('vigente', 0):.2f}",
+                f"{t.get('1_30', 0):.2f}",
+                f"{t.get('31_60', 0):.2f}",
+                f"{t.get('61_90', 0):.2f}",
+                f"{t.get('mas_90', 0):.2f}",
+            ]
+        )
+    return ("\ufeff" + buf.getvalue()).encode("utf-8")

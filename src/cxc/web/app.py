@@ -183,6 +183,7 @@ from cxc.reconciliation.reconcile import OdooFacturasReader, Reconciler
 from cxc.repositories import Repository
 from cxc.sheets import serde
 from cxc.sync.incremental import IncrementalSync
+from cxc.sync.siembra_odoo import SiembraOdooService
 from cxc.web import reporte_cxc_excel, reporte_cxc_vendedor
 from cxc.web.bots_api import router as bots_router
 from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
@@ -191,6 +192,7 @@ from cxc.web.capturas_api import run_reintentos_capturas_en_background
 from cxc.web.directorio_api import router as directorio_router
 from cxc.web.documentos_api import router as documentos_router
 from cxc.web.operativos_api import router as operativos_router
+from cxc.web.reportes_propios_api import router as reportes_propios_router
 
 logger = logging.getLogger("cxc.web.app")
 
@@ -205,6 +207,7 @@ app.include_router(operativos_router)  # pagos, compras y gastos operativos (ope
 # de ``/api/bots/capturas|catalogo|contactos`` ganan a ``/api/bots/{bot}``.
 app.include_router(bots_router)
 app.include_router(directorio_router)  # directorio y plan de cuentas Odoo (directorio_api.py)
+app.include_router(reportes_propios_router)  # reportes BD propia y siembra Odoo (Fase 5)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -3242,84 +3245,79 @@ async def run_sync_in_background():
             reader = OdooXmlRpcReader(config.odoo)
 
             if _first_run:
-                # Hallazgo real (agosto 2026, DB Postgres local vacía): un
-                # cliente puede no tener cambios en Odoo en los últimos 7
-                # días aunque tenga una orden reciente (write_date de
-                # res.partner no se toca al crear una orden) -- con la
-                # ventana de 7 días aplicada TAMBIÉN a clientes, una orden
-                # podía llegar sin su cliente y violar la FK
-                # ordenes_venta.cliente_id (visto en vivo: cliente_id=725
-                # ausente). Con cursor nunca fijado (``get_last_sync() is
-                # None`` -- primera vez real, no un simple reinicio del
-                # server), se hace un sync SIN acotar por fecha (since=None
-                # -- ver changed_clientes: ya maneja este caso con
-                # active_test=False) para garantizar que todo cliente
-                # referenciado exista antes que su(s) orden(es). Con cursor
-                # ya fijado (reinicio normal), se mantiene el catch-up de 7
-                # días como antes.
-                _es_bootstrap_real = repo.get_last_sync() is None
-                if _es_bootstrap_real:
-                    print("FastAPI Daemon: Primera corrida — DB vacía, sync completo sin acotar.")
-                    since_override = None
-                else:
+                _siembra_auto = os.environ.get(
+                    "SIEMBRA_HISTORICA_AUTO", "1"
+                ).strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
+                )
+                if _siembra_auto and SiembraOdooService.requiere_siembra_inicial(repo):
                     print(
-                        "FastAPI Daemon: Primera corrida — lookback 7 días para recuperar ventas."
+                        "FastAPI Daemon: Ejecutando siembra histórica inicial Odoo -> BD CxC "
+                        "(preservando correlativos)..."
                     )
-                    since_override = datetime.now() - timedelta(days=7)
-                clientes = reader.changed_clientes(since_override)
-                ordenes = reader.changed_ordenes(since_override)
-                lineas = reader.changed_lineas(since_override)
-                pagos = reader.changed_pagos(since_override)
-                repo.upsert_clientes(clientes)
-                repo.upsert_ordenes(ordenes)
-                repo.upsert_lineas(lineas)
-                repo.upsert_pagos(pagos)
-                # Bug real (reportado por el usuario, agosto 2026, cliente
-                # CONSTRUCTORA GRANO AGREGADO): esta corrida "primera vez"
-                # nunca traía Facturas/Entregas/Catálogo/Líneas de Factura/
-                # Líneas de Entrega -- solo clientes/órdenes/líneas/pagos --
-                # a diferencia de IncrementalSync.run() (la corrida normal),
-                # que sí trae las 9 fuentes. Cualquier factura cuyo
-                # write_date en Odoo nunca cambió DESPUÉS del momento del
-                # bootstrap quedaba invisible para siempre (el ciclo delta
-                # normal solo mira "qué cambió desde el cursor", nunca
-                # vuelve a mirar hacia atrás). Confirmado en vivo: 358 de
-                # 695 facturas de venta posted en Odoo (51%) ausentes del
-                # espejo local -- afecta directamente total_facturado_neto/
-                # saldo_cxc de cualquier orden cuya factura cayó en ese
-                # hueco (se ve como "nunca facturada", comparando contra el
-                # monto TEÓRICO/real completo de la orden en vez del saldo
-                # de factura ya neteado). Se usa el mismo helper
-                # ``_sync_opcional`` de IncrementalSync (tolera backends que
-                # no implementen alguno de estos espejos) en vez de
-                # duplicar su try/except.
-                sync_bootstrap = IncrementalSync(repo, reader)
-                facturas = reader.changed_facturas(since_override)
-                entregas = reader.changed_entregas(since_override)
-                catalogo = reader.changed_catalogo(since_override)
-                lineas_factura = reader.changed_lineas_factura(since_override)
-                entregas_lineas = reader.changed_entregas_lineas(since_override)
-                sync_bootstrap._sync_opcional("facturas", facturas, repo.upsert_facturas)
-                sync_bootstrap._sync_opcional("entregas", entregas, repo.upsert_entregas)
-                sync_bootstrap._sync_opcional("catálogo", catalogo, repo.upsert_catalogo)
-                sync_bootstrap._sync_opcional(
-                    "líneas de factura", lineas_factura, repo.upsert_lineas_factura
-                )
-                sync_bootstrap._sync_opcional(
-                    "líneas de entrega", entregas_lineas, repo.upsert_entregas_lineas
-                )
-                repo.set_last_sync(datetime.now())
-                total_first = (
-                    len(clientes)
-                    + len(ordenes)
-                    + len(lineas)
-                    + len(pagos)
-                    + len(facturas)
-                    + len(entregas)
-                    + len(catalogo)
-                    + len(lineas_factura)
-                    + len(entregas_lineas)
-                )
+                    res_siembra = await asyncio.to_thread(
+                        SiembraOdooService(repo, reader).ejecutar,
+                        actor="auto_bootstrap",
+                    )
+                    total_first = sum(
+                        int(v) for v in (res_siembra.get("conteos_sembrados") or {}).values()
+                    )
+                    print(
+                        "FastAPI Daemon: Siembra histórica completada "
+                        f"({res_siembra.get('estado')}): "
+                        f"{res_siembra.get('conteos_sembrados')} · "
+                        f"correlativos={res_siembra.get('correlativos_count')}"
+                    )
+                else:
+                    _es_bootstrap_real = repo.get_last_sync() is None
+                    if _es_bootstrap_real:
+                        print(
+                            "FastAPI Daemon: Primera corrida — DB vacía, sync completo sin acotar."
+                        )
+                        since_override = None
+                    else:
+                        print(
+                            "FastAPI Daemon: Primera corrida — "
+                            "lookback 7 días para recuperar ventas."
+                        )
+                        since_override = datetime.now() - timedelta(days=7)
+                    clientes = reader.changed_clientes(since_override)
+                    ordenes = reader.changed_ordenes(since_override)
+                    lineas = reader.changed_lineas(since_override)
+                    pagos = reader.changed_pagos(since_override)
+                    repo.upsert_clientes(clientes)
+                    repo.upsert_ordenes(ordenes)
+                    repo.upsert_lineas(lineas)
+                    repo.upsert_pagos(pagos)
+                    sync_bootstrap = IncrementalSync(repo, reader)
+                    facturas = reader.changed_facturas(since_override)
+                    entregas = reader.changed_entregas(since_override)
+                    catalogo = reader.changed_catalogo(since_override)
+                    lineas_factura = reader.changed_lineas_factura(since_override)
+                    entregas_lineas = reader.changed_entregas_lineas(since_override)
+                    sync_bootstrap._sync_opcional("facturas", facturas, repo.upsert_facturas)
+                    sync_bootstrap._sync_opcional("entregas", entregas, repo.upsert_entregas)
+                    sync_bootstrap._sync_opcional("catálogo", catalogo, repo.upsert_catalogo)
+                    sync_bootstrap._sync_opcional(
+                        "líneas de factura", lineas_factura, repo.upsert_lineas_factura
+                    )
+                    sync_bootstrap._sync_opcional(
+                        "líneas de entrega", entregas_lineas, repo.upsert_entregas_lineas
+                    )
+                    repo.set_last_sync(datetime.now())
+                    total_first = (
+                        len(clientes)
+                        + len(ordenes)
+                        + len(lineas)
+                        + len(pagos)
+                        + len(facturas)
+                        + len(entregas)
+                        + len(catalogo)
+                        + len(lineas_factura)
+                        + len(entregas_lineas)
+                    )
                 _REPORTE_SALDOS_CACHE["data"] = None
                 _REPORTE_SALDOS_CACHE["timestamp"] = 0.0
                 _VENTAS_CACHE["data"] = None

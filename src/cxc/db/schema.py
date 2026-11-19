@@ -1435,3 +1435,33 @@ politica_credito_cliente = Table(
     Column("actualizado_por", String, nullable=False, server_default="sistema"),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
 )
+
+# --- Fase 5: Catálogo de correlativos Odoo + CxC y Bitácora de Siembra Histórica ---
+correlativos_sistema = Table(
+    "correlativos_sistema",
+    metadata,
+    Column("entidad", String, primary_key=True),
+    Column("prefijo", String, primary_key=True),
+    Column("ultimo_numero", Integer, nullable=False, server_default="0"),
+    Column("ejemplo_maximo", String, nullable=False, server_default=""),
+    Column("fuente", String, nullable=False, server_default="odoo"),  # odoo | cxc
+    Column("total_registros", Integer, nullable=False, server_default="0"),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+siembra_bitacora = Table(
+    "siembra_bitacora",
+    metadata,
+    Column("siembra_id", Integer, primary_key=True, autoincrement=True),
+    Column("tipo", String, nullable=False, server_default="completa"),
+    # EN_PROGRESO | COMPLETADA | COMPLETADA_CON_AVISOS | ERROR
+    Column("estado", String, nullable=False, server_default="EN_PROGRESO", index=True),
+    Column("actor", String, nullable=False, server_default="sistema"),
+    Column("iniciada_en", DateTime(timezone=False), nullable=False),
+    Column("finalizada_en", DateTime(timezone=False), nullable=True),
+    Column("duracion_seg", Numeric(10, 2), nullable=True),
+    Column("conteos_json", Text, nullable=False, server_default="{}"),
+    Column("correlativos_json", Text, nullable=False, server_default="[]"),
+    Column("avisos_json", Text, nullable=False, server_default="[]"),
+    Column("error", Text, nullable=False, server_default=""),
+)

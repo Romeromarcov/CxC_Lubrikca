@@ -448,6 +448,8 @@ def map_linea(rec: dict[str, Any]) -> LineaOrden:
 
 def map_pago(rec: dict[str, Any]) -> Pago:
     moneda = Moneda.USD if _m2o_name(rec.get("currency_id")) == "USD" else Moneda.VES
+    numero = str(rec.get("name") or _m2o_name(rec.get("move_id")) or "").strip()
+    ref = str(rec.get("memo") or rec.get("payment_reference") or rec.get("ref") or "").strip()
     return Pago(
         pago_id=str(rec["id"]),
         cliente_id=_m2o_id(rec.get("partner_id")),
@@ -456,6 +458,8 @@ def map_pago(rec: dict[str, Any]) -> Pago:
         metodo_pago=_m2o_id(rec.get("journal_id")),
         fecha_pago=_to_datetime(rec.get("date") or rec["fecha_pago"]),
         vendedor_email=str(rec.get("vendedor_email", "") or ""),
+        numero_odoo=numero,
+        referencia=ref,
     )
 
 
@@ -1277,6 +1281,15 @@ class OdooXmlRpcReader(OdooReader):
         return out
 
     # --- Pagos ---------------------------------------------------------------
+    def _campo_ref_pago(self) -> str | None:
+        try:
+            disp = set(
+                self._execute(self.MODEL_PAGO, "fields_get", [], {"attributes": ["string"]}) or {}
+            )
+        except Exception:
+            return None
+        return next((c for c in ("memo", "payment_reference", "ref") if c in disp), None)
+
     def _montos_reembolsados_en_pagos(self, move_ids: list[int]) -> dict[int, Decimal]:
         """``move_id`` -> monto reembolsado. Ver ``montos_reembolsados_en_pagos``
 
@@ -1304,20 +1317,21 @@ class OdooXmlRpcReader(OdooReader):
             ["payment_type", "=", "inbound"],
             ["state", "in", PAGO_ESTADOS_CONFIRMADOS],
         ]
-        recs = self._search_read(
-            self.MODEL_PAGO,
-            domain,
-            [
-                "id",
-                "partner_id",
-                "amount",
-                "currency_id",
-                "journal_id",
-                "date",
-                "is_reconciled",
-                "move_id",
-            ],
-        )
+        campos_pago = [
+            "id",
+            "name",
+            "partner_id",
+            "amount",
+            "currency_id",
+            "journal_id",
+            "date",
+            "is_reconciled",
+            "move_id",
+        ]
+        campo_ref = self._campo_ref_pago()
+        if campo_ref:
+            campos_pago.append(campo_ref)
+        recs = self._search_read(self.MODEL_PAGO, domain, campos_pago)
         partner_ids = _ids_of(recs, "partner_id")
         vendedores = self._vendedor_por_partner(partner_ids)
         move_ids = [int(_m2o_id(r["move_id"])) for r in recs if r.get("move_id")]
@@ -1357,10 +1371,23 @@ class OdooXmlRpcReader(OdooReader):
         ids = [int(p) for p in pago_ids if str(p).isdigit()]
         if not ids:
             return []
+        campos_pago = [
+            "id",
+            "name",
+            "partner_id",
+            "amount",
+            "currency_id",
+            "journal_id",
+            "date",
+            "move_id",
+        ]
+        campo_ref = self._campo_ref_pago()
+        if campo_ref:
+            campos_pago.append(campo_ref)
         recs = self._read(
             self.MODEL_PAGO,
             sorted(set(ids)),
-            ["id", "partner_id", "amount", "currency_id", "journal_id", "date", "move_id"],
+            campos_pago,
         )
         vendedores = self._vendedor_por_partner(_ids_of(recs, "partner_id"))
         for r in recs:
@@ -1386,13 +1413,7 @@ class OdooXmlRpcReader(OdooReader):
             "state",
             "move_id",
         ]
-        try:
-            disp = set(
-                self._execute(self.MODEL_PAGO, "fields_get", [], {"attributes": ["string"]}) or {}
-            )
-        except Exception:
-            disp = set()
-        campo_ref = next((c for c in ("memo", "payment_reference", "ref") if c in disp), None)
+        campo_ref = self._campo_ref_pago()
         if campo_ref:
             campos_base.append(campo_ref)
 
