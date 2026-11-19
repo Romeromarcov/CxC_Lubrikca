@@ -2,6 +2,8 @@
 (function () {
     "use strict";
 
+    let _recibidosCache = [];
+
     function _cxc() {
         return window.CxC || {};
     }
@@ -20,6 +22,127 @@
         if (typeof _cxc().monto === "function") return _cxc().monto(v);
         const n = Number(v || 0);
         return Number.isFinite(n) ? n.toFixed(2) : "—";
+    }
+
+    function _usd(v) {
+        if (v == null) return "—";
+        const n = Number(v);
+        return Number.isFinite(n) ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—";
+    }
+
+    function odooLinkHtml(d) {
+        const num = d.odoo_numero || d.numero_pago_odoo || "";
+        const oid = d.odoo_pago_id || (d.odoo_res_id != null ? String(d.odoo_res_id) : "");
+        if (!oid && !num) return "";
+        const etiqueta = num ? `${_esc(num)} (#${_esc(oid || num)})` : `Odoo #${_esc(oid)}`;
+        if (d.odoo_url) {
+            return `<div class="cap-sub"><a href="${_esc(d.odoo_url)}" target="_blank" rel="noopener" style="color:#0284c7; text-decoration:underline;">🔗 ${etiqueta} ↗</a></div>`;
+        }
+        return `<div class="cap-sub" style="color:#475569;">🔗 ${etiqueta}</div>`;
+    }
+
+    function equivalentesHtml(d) {
+        const eq = d.equivalentes || {};
+        const uBcv = d.monto_bcv_usd ?? eq.monto_bcv_usd;
+        const uBin = d.monto_binance_usd ?? eq.monto_binance_usd;
+        const uEur = d.monto_eur_usd ?? eq.monto_eur_usd;
+        const tBcv = d.tasa_bcv ?? eq.tasa_bcv;
+        const tBin = d.tasa_binance ?? eq.tasa_binance;
+        const tEur = d.tasa_bcv_eur ?? eq.tasa_bcv_eur;
+        return `
+            <span style="font-size:0.74rem; color:#2563eb; display:block;" title="${tBcv != null ? "Tasa BCV: " + tBcv : ""}">BCV: <strong>${_usd(uBcv)}</strong></span>
+            <span style="font-size:0.74rem; color:#d97706; display:block;" title="${tBin != null ? "Tasa Binance: " + tBin : ""}">Binance: <strong>${_usd(uBin)}</strong></span>
+            <span style="font-size:0.74rem; color:#7c3aed; display:block;" title="${tEur != null ? "Tasa EUR: " + tEur : ""}">EUR: <strong>${_usd(uEur)}</strong></span>`;
+    }
+
+    function usuariosPagoHtml(d, direccion = "recibidos") {
+        const reg = d.registrado_por_nombre || d.creado_por || "—";
+        const apr = d.aprobado_o_recibido_por_nombre || d.aprobado_por || d.confirmado_cxc_por || "";
+        const lbl1 = direccion === "enviados" ? "Generó" : "Registró";
+        const lbl2 = direccion === "enviados" ? "Aprobó" : "Recibió/Aprobó";
+        return `<div><strong>${lbl1}:</strong> ${_esc(reg)}</div>`
+            + `<div class="cap-sub"><strong>${lbl2}:</strong> ${_esc(apr || "Pendiente")}</div>`;
+    }
+
+    function cerrarDetallePagoUnificado() {
+        const modal = document.getElementById("modal-detalle-pago-unificado");
+        if (modal) modal.style.display = "none";
+    }
+
+    function abrirDetallePagoUnificado(d, direccion = "recibidos") {
+        const modal = document.getElementById("modal-detalle-pago-unificado");
+        const tit = document.getElementById("modal-detalle-pago-unificado-titulo");
+        const body = document.getElementById("modal-detalle-pago-unificado-body");
+        if (!modal || !body || !d) return;
+
+        const eq = d.equivalentes || {};
+        const tBcv = d.tasa_bcv ?? eq.tasa_bcv;
+        const tBin = d.tasa_binance ?? eq.tasa_binance;
+        const tEur = d.tasa_bcv_eur ?? eq.tasa_bcv_eur;
+        const uBcv = d.monto_bcv_usd ?? eq.monto_bcv_usd;
+        const uBin = d.monto_binance_usd ?? eq.monto_binance_usd;
+        const uEur = d.monto_eur_usd ?? eq.monto_eur_usd;
+
+        const campo = (ico, lbl, val) =>
+            `<div style="margin-bottom:0.45rem;"><span style="font-size:0.74rem; color:#64748b; display:block;">${ico} ${lbl}</span><strong>${val}</strong></div>`;
+        const tarjeta = (ico, nom, col, tasa, equiv) => `
+            <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:0.75rem 1rem; text-align:center;">
+                <div style="font-size:0.75rem; color:#64748b; font-weight:600; margin-bottom:0.35rem;">${ico} ${nom}</div>
+                <div style="font-size:1.05rem; font-weight:700; color:${col};">${tasa != null ? Number(tasa).toFixed(4) : "—"}</div>
+                <div style="border-top:1px dashed #e2e8f0; margin:0.4rem 0;"></div>
+                <div style="font-size:0.7rem; color:#94a3b8;">Equivalente USD</div>
+                <div style="font-size:0.95rem; font-weight:700; color:#0f172a;">${_usd(equiv)}</div>
+            </div>`;
+
+        const numOdoo = d.odoo_numero || d.numero_pago_odoo || "";
+        const oid = d.odoo_pago_id || (d.odoo_res_id != null ? String(d.odoo_res_id) : "");
+        const odooVal = d.odoo_url
+            ? `<a href="${_esc(d.odoo_url)}" target="_blank" rel="noopener" style="color:#0284c7;">${_esc(numOdoo || "Pago #" + oid)} (#${_esc(oid)}) ↗</a>`
+            : _esc(numOdoo || (oid ? `#${oid}` : "—"));
+
+        const montoOrig = d.monto != null
+            ? (String(d.moneda || "").toUpperCase() === "VES"
+                ? `Bs. ${_monto(d.monto)}`
+                : `${_usd(d.monto)} (${_esc(d.moneda || "USD")})`)
+            : "—";
+
+        const lblContra = direccion === "enviados" ? "Proveedor" : "Cliente";
+        const lblReg = direccion === "enviados" ? "Generó recibo" : "Registró / Vendedor";
+        const lblApr = direccion === "enviados" ? "Aprobó" : "Aprobó / Recibió efectivo";
+
+        if (tit) tit.textContent = `Detalle de Pago ${d.numero || ""}`;
+        let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(175px, 1fr)); gap:0.5rem 1rem; margin-bottom:1rem;">
+            ${campo("📄", "Documento / Nº", _esc(d.numero || "—"))}
+            ${campo("🔗", "N° y ID en Odoo", odooVal)}
+            ${campo("📅", "Fecha", _esc(d.fecha_documento || "—"))}
+            ${campo("👤", lblContra, _esc(d.contraparte_nombre || "—"))}
+            ${campo("✍️", lblReg, _esc(d.registrado_por_nombre || d.creado_por || "—"))}
+            ${campo("✅", lblApr, _esc(d.aprobado_o_recibido_por_nombre || d.aprobado_por || d.confirmado_cxc_por || "Pendiente"))}
+            ${campo("💰", "Monto Original", montoOrig)}
+            ${campo("🏦", "Diario / Método", _esc(d.diario_nombre || d.banco || d.metodo_pago || "—"))}
+            ${campo("🔖", "Referencia", _esc(d.referencia || "—"))}
+            ${campo("🧾", "Comprobante Recibo", _esc(d.numero_recibo || "—"))}
+            ${campo("📌", "Estado", _esc(d.estado || "—"))}
+            ${campo("🌐", "Origen", _esc(d.origen_sistema === "odoo" ? "Odoo" : (d.origen || "CxC")))}
+        </div>`;
+
+        html += `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.75rem; margin-bottom:1rem;">
+            ${tarjeta("🏦", "Tasa BCV", "#0369a1", tBcv, uBcv)}
+            ${tarjeta("🟡", "Tasa Binance", "#b45309", tBin, uBin)}
+            ${tarjeta("💶", "Tasa BCV-EUR", "#7c3aed", tEur, uEur)}
+        </div>`;
+
+        if (d.notas) {
+            html += `<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.75rem; margin-bottom:0.75rem; font-size:0.86rem;"><strong>Notas:</strong> ${_esc(d.notas)}</div>`;
+        }
+        const enlaces = [];
+        if (d.preview_path) enlaces.push(`<a href="${_esc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="text-decoration:none;">🔗 Abrir Preview</a>`);
+        if (d.recibo_path) enlaces.push(`<a href="${_esc(d.recibo_path)}" target="_blank" rel="noopener" class="btn-primary" style="text-decoration:none;">🧾 Abrir Recibo</a>`);
+        if (enlaces.length) {
+            html += `<div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">${enlaces.join("")}</div>`;
+        }
+        body.innerHTML = html;
+        modal.style.display = "flex";
     }
 
     function origenChip(d) {
@@ -61,11 +184,13 @@
         return "";
     }
 
-    function accionesHtml(d, puedeAprobar, puedeRecibo) {
+    function accionesHtml(d, puedeAprobar, puedeRecibo, idx = -1, dir = "recibidos") {
+        const btns = [
+            `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem;" data-unif-detalle="${idx}" data-unif-dir="${dir}">👁️ Detalle</button>`,
+        ];
         if (d.origen_sistema === "odoo") {
-            return `<span class="cap-sub">${_esc(d.odoo_ref || "En Odoo")} · Solo lectura</span>`;
+            return btns.join("") + `<span class="cap-sub">${_esc(d.odoo_numero || d.odoo_ref || "Odoo")}</span>`;
         }
-        const btns = [];
         if (d.preview_path) {
             btns.push(`<a href="${_esc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; text-decoration:none;">🔗 Preview</a>`);
         }
@@ -128,14 +253,18 @@
             }
 
             const items = data.items || [];
+            _recibidosCache = items;
             if (!items.length) {
                 tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay pagos recibidos con estos filtros.</td></tr>';
                 return;
             }
 
-            tbody.innerHTML = items.map((d) => {
-                const eq = d.validacion && d.validacion.equivalente_usd && d.validacion.equivalente_usd.usd_bcv != null
-                    ? `<div class="cap-sub">≈ $${Number(d.validacion.equivalente_usd.usd_bcv).toFixed(2)} BCV</div>` : "";
+            tbody.innerHTML = items.map((d, idx) => {
+                const montoOrig = d.monto != null
+                    ? (String(d.moneda || "").toUpperCase() === "VES"
+                        ? `Bs. ${_monto(d.monto)}`
+                        : `${_usd(d.monto)} <small>${_esc(d.moneda || "USD")}</small>`)
+                    : "—";
                 const refTxt = d.es_efectivo
                     ? '<span style="color:#0369a1; font-weight:600;">Efectivo (memo vacío)</span>'
                     : _esc(d.referencia || "—");
@@ -143,15 +272,15 @@
                     ? `<span style="color:#7c3aed; font-weight:600;">Asiento Tercero (CxP/CxC)</span><div class="cap-sub">${_esc(d.beneficiario_tercero || d.proveedor_tercero_nombre || "Sin banco")}</div>`
                     : _esc(d.diario_nombre || d.banco || "Por definir");
                 return `<tr>
-                    <td><strong>${_esc(d.numero)}</strong><div>${origenChip(d)}</div></td>
+                    <td><strong>${_esc(d.numero)}</strong>${odooLinkHtml(d)}<div>${origenChip(d)}</div></td>
                     <td>${_esc(d.fecha_documento || "—")}</td>
-                    <td><strong>${_esc(d.contraparte_nombre || "Sin cliente")}</strong><div class="cap-sub">${_esc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Sin vincular"))}</div></td>
-                    <td><strong>${d.monto != null ? _monto(d.monto) : "—"} ${_esc(d.moneda)}</strong>${eq}</td>
-                    <td>${diarioTxt}</td>
-                    <td>${refTxt}<div class="cap-sub">${_esc(d.metodo_pago || "")}</div></td>
-                    <td>${_esc(d.pedido_ref || "—")}</td>
+                    <td><strong>${_esc(d.contraparte_nombre || "Sin cliente")}</strong><div class="cap-sub">${_esc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Sin vincular"))}${d.pedido_ref ? " · Ped: " + _esc(d.pedido_ref) : ""}</div></td>
+                    <td>${usuariosPagoHtml(d, "recibidos")}</td>
+                    <td><strong>${montoOrig}</strong></td>
+                    <td>${equivalentesHtml(d)}</td>
+                    <td>${diarioTxt}<div class="cap-sub">${refTxt}${d.metodo_pago ? " · " + _esc(d.metodo_pago) : ""}</div></td>
                     <td>${estadoBadgeUnificado(d)}${alertasHtml(d)}</td>
-                    <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${accionesHtml(d, puedeAprobar, puedeRecibo)}</td>
+                    <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${accionesHtml(d, puedeAprobar, puedeRecibo, idx, "recibidos")}</td>
                 </tr>`;
             }).join("");
         } catch (err) {
@@ -260,9 +389,14 @@
     window.CxC = Object.assign(window.CxC || {}, {
         pagos: {
             origenChip,
+            odooLinkHtml,
+            equivalentesHtml,
+            usuariosPagoHtml,
             estadoBadge: estadoBadgeUnificado,
             accionesHtml,
             syncZelleTerceroModalUI,
+            abrirDetallePagoUnificado,
+            cerrarDetallePagoUnificado,
         },
     });
     window.loadPagosRecibidosUnificados = loadPagosRecibidosUnificados;
@@ -317,6 +451,13 @@
                 }
                 loadPagosRecibidosUnificados();
             });
+        });
+
+        document.getElementById("op-pagos-table-body")?.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-unif-detalle][data-unif-dir='recibidos']");
+            if (!btn) return;
+            const d = _recibidosCache[Number(btn.getAttribute("data-unif-detalle"))];
+            if (d) abrirDetallePagoUnificado(d, "recibidos");
         });
 
         const pathSeg = window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0];

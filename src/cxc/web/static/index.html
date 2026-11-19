@@ -127,7 +127,48 @@
                     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                         <a href="/pagos?tab=recibidos" class="btn btn-primary nav-sub-link" data-page="pagos" data-tab="recibidos" style="background:#2563eb; color:#fff; border-color:#2563eb; padding:0.5rem 0.9rem;">➕ Registrar / Revisar Pagos</a>
                         <a href="/ventas" class="btn-secondary nav-sub-link" data-page="ventas" data-tab="documentos" style="padding:0.5rem 0.9rem;">📝 Cotizaciones y Pedidos</a>
-                        <a href="/reportes" class="btn-secondary nav-sub-link" data-page="reportes" data-tab="resumen" style="padding:0.5rem 0.9rem;">📑 Ver Reportes</a>
+                        <a href="/reportes" class="btn-secondary nav-sub-link" data-page="reportes" data-tab="consolidado" style="padding:0.5rem 0.9rem;">📑 Ver Reportes</a>
+                    </div>
+                </section>
+
+                <!-- Tasas de cambio vigentes (movidas al Inicio en Fase 5B) -->
+                <section id="inicio-tasas-card" class="card" style="padding:1.15rem 1.35rem; margin-bottom:1.25rem; border-left:5px solid #2563eb;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.85rem;">
+                        <div>
+                            <h3 style="margin:0 0 0.15rem 0; font-size:1rem; color:#0f172a;">💱 Tasas de Cambio del Día</h3>
+                            <p style="margin:0; font-size:0.8rem; color:#64748b;">BCV Oficial, Euro BCV, Binance vigente y promedios por ventana horaria <span id="inicio-rate-actualizado" style="font-weight:600; color:#475569;"></span></p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="if (window.loadTasasPromedios) window.loadTasasPromedios();" style="padding:0.35rem 0.75rem; font-size:0.8rem;">↻ Actualizar tasas</button>
+                    </div>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 0.7rem;">
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#64748b; display:block;">BCV Oficial (USD)</span>
+                            <strong style="font-size:1.1rem; color:#0f172a;" id="inicio-rate-bcv-actual">—</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#64748b; display:block;">BCV Euro (EUR)</span>
+                            <strong style="font-size:1.1rem; color:#334155;" id="inicio-rate-bcv-euro">—</strong>
+                        </div>
+                        <div style="background:#eff6ff; border:1px solid #93c5fd; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#1d4ed8; font-weight:700; display:block;">Binance Vigente</span>
+                            <strong style="font-size:1.1rem; color:#1e40af;" id="inicio-rate-binance-vigente">—</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#64748b; display:block;">Prom. Mañana (6-9am)</span>
+                            <strong style="font-size:1.05rem; color:#2563eb;" id="inicio-rate-binance-manana">—</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#64748b; display:block;">Prom. Tarde (10am-1pm)</span>
+                            <strong style="font-size:1.05rem; color:#2563eb;" id="inicio-rate-binance-tarde">—</strong>
+                        </div>
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#64748b; display:block;">Prom. Diario</span>
+                            <strong style="font-size:1.05rem; color:#059669;" id="inicio-rate-binance-diario">—</strong>
+                        </div>
+                        <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; padding:0.65rem; text-align:center;">
+                            <span style="font-size:0.74rem; color:#92400e; display:block;">Brecha BCV / Binance</span>
+                            <strong style="font-size:1.05rem; color:#d97706;" id="inicio-rate-diferencial-pct">—</strong>
+                        </div>
                     </div>
                 </section>
 
@@ -152,8 +193,8 @@
                         </div>
                         <p>Cotizaciones con lista comercial, validación contra motor CxC, pedidos pendientes y comparativa Teórico vs Real.</p>
                         <div class="inicio-sublinks">
-                            <a href="/ventas" class="nav-sub-link" data-page="ventas" data-tab="seguimiento">📊 Órdenes Odoo</a>
                             <a href="/ventas?tab=documentos" class="nav-sub-link" data-page="ventas" data-tab="documentos">📝 Cotizaciones / Pedidos</a>
+                            <a href="/ventas?tab=seguimiento" class="nav-sub-link" data-page="ventas" data-tab="seguimiento">📊 Teórico vs Real</a>
                         </div>
                     </div>
 
@@ -175,11 +216,11 @@
                             <h3>📑 Reportes</h3>
                             <span class="inicio-card-badge">Solo lectura</span>
                         </div>
-                        <p>Resumen ejecutivo (tasas BCV/Binance, tarjetas de cartera, reporte diario) y saldos por cliente y vendedor.</p>
+                        <p>Consolidado ejecutivo de cartera neta (CxC vs CxP), reporte diario, saldos por cobrar (cliente/vendedor) y cuentas por pagar a proveedores.</p>
                         <div class="inicio-sublinks">
-                            <a href="/reportes?tab=resumen" class="nav-sub-link" data-page="reportes" data-tab="resumen">📊 Resumen</a>
-                            <a href="/reportes?tab=cliente" class="nav-sub-link" data-page="reportes" data-tab="cliente">👤 Por Cliente</a>
-                            <a href="/reportes?tab=vendedor" class="nav-sub-link" data-page="reportes" data-tab="vendedor">🧑‍💼 Por Vendedor</a>
+                            <a href="/reportes?tab=consolidado" class="nav-sub-link" data-page="reportes" data-tab="consolidado">📊 Consolidado</a>
+                            <a href="/reportes?tab=cxc" class="nav-sub-link" data-page="reportes" data-tab="cxc">📈 Reporte CxC</a>
+                            <a href="/reportes?tab=cxp" class="nav-sub-link" data-page="reportes" data-tab="cxp">📉 Reporte CxP</a>
                         </div>
                     </div>
 
@@ -555,6 +596,15 @@
                         </div>
                     </div>
 
+                    <div class="dashboard-kpi-row" style="margin:0 0 1rem 0;">
+                        <div class="card kpi-card cob-kpi" data-cob-estado="*" role="button" tabindex="0"><h3>Total pagos</h3><p id="cob-kpi-total">—</p><span>CxC + Espejo Odoo</span></div>
+                        <div class="card kpi-card cob-kpi" data-cob-estado="pendiente" role="button" tabindex="0"><h3>Pendientes</h3><p id="cob-kpi-pendientes">—</p><span>Por vincular / aplicar</span></div>
+                        <div class="card kpi-card cob-kpi" data-cob-estado="vinculado_local" role="button" tabindex="0"><h3>Vinculados</h3><p id="cob-kpi-vinculados">—</p><span>Aplicados en CxC</span></div>
+                        <div class="card kpi-card cob-kpi" data-cob-estado="conciliado_odoo" role="button" tabindex="0"><h3>Conciliados Odoo</h3><p id="cob-kpi-conciliados">—</p><span>Aplicados en Odoo</span></div>
+                        <div class="card kpi-card cob-kpi" data-cob-recibido="true" role="button" tabindex="0"><h3>Recibidos</h3><p id="cob-kpi-recibidos">—</p><span>Con recibo entregado</span></div>
+                        <div class="card kpi-card cob-kpi" data-cob-duplicado="true" role="button" tabindex="0"><h3>Duplicados</h3><p id="cob-kpi-duplicados">—</p><span>Alertas de revisión</span></div>
+                    </div>
+
                     <div class="filter-panel" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:0.85rem 1rem; margin-bottom: 1rem; display:flex; flex-direction:column; gap:0.65rem;">
                         <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
                             <select id="cobranza-vendedor-filter" class="filter-select">
@@ -727,13 +777,13 @@
                         <table class="cxc-table">
                             <thead>
                                 <tr>
-                                    <th>Documento / Origen</th>
+                                    <th>Documento / Odoo</th>
                                     <th>Fecha</th>
                                     <th>Cliente</th>
-                                    <th>Monto</th>
-                                    <th>Banco / Destino</th>
-                                    <th>Referencia / Método</th>
-                                    <th>Pedido</th>
+                                    <th>Registró / Aprobó-Recibió</th>
+                                    <th>Monto Original</th>
+                                    <th>Equiv. BCV / Binance / EUR</th>
+                                    <th>Diario / Referencia</th>
                                     <th>Estado / Alertas</th>
                                     <th>Acciones</th>
                                 </tr>
@@ -792,18 +842,19 @@
                         <table class="cxc-table">
                             <thead>
                                 <tr>
-                                    <th>Documento / Origen</th>
+                                    <th>Documento / Odoo</th>
                                     <th>Fecha</th>
                                     <th>Proveedor</th>
-                                    <th>Monto</th>
-                                    <th>Banco / Diario</th>
-                                    <th>Referencia / Factura</th>
+                                    <th>Generó / Aprobó</th>
+                                    <th>Monto Original</th>
+                                    <th>Equiv. BCV / Binance / EUR</th>
+                                    <th>Diario / Referencia</th>
                                     <th>Estado / Alertas</th>
                                     <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody id="op-pagos-enviados-table-body">
-                                <tr><td colspan="8" class="table-empty">Cargando pagos enviados...</td></tr>
+                                <tr><td colspan="9" class="table-empty">Cargando pagos enviados...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -943,6 +994,71 @@
                     </div>
                 </section>
 
+                <!-- Cruce con Ingresos y Egresos del Sistema (Reglas R4 y R5 - Fase 5B) -->
+                <section class="card" id="bancos-sistema-cruce-card" style="padding:1.5rem; border-left:5px solid #0284c7;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">🔄 Conciliación contra Ingresos y Egresos del Sistema (R4 / R5)</h2>
+                            <p style="color:#475569; margin:0;">Cruza débitos y créditos del banco contra pagos recibidos no-efectivo (Regla R5) y pagos enviados / gastos menores (Regla R4) reportados en CxC.</p>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                            <select id="sys-conc-dir" class="filter-select" aria-label="Dirección conciliación sistema" onchange="if (window.loadConciliacionGastos) window.loadConciliacionGastos();">
+                                <option value="todos">🌐 Todos (Ingresos R5 + Egresos R4)</option>
+                                <option value="ingreso">📥 Solo Ingresos (Regla R5)</option>
+                                <option value="egreso">📤 Solo Egresos (Regla R4)</option>
+                            </select>
+                            <button type="button" class="btn-secondary" onclick="if (window.loadConciliacionGastos) window.loadConciliacionGastos();">↻ Actualizar cruce</button>
+                        </div>
+                    </div>
+
+                    <div class="dashboard-kpi-row" style="margin:1rem 0;">
+                        <div class="card kpi-card"><h3>Egresos del sistema</h3><p id="cmp-r4-total">—</p><span>Gastos y pagos prov.</span></div>
+                        <div class="card kpi-card"><h3>Ingresos del sistema</h3><p id="sys-ing-total">—</p><span>Pagos CxC (no efectivo / no 3ro)</span></div>
+                        <div class="card kpi-card"><h3>Conciliados con banco</h3><p id="cmp-r4-conciliados">—</p><span>Ingresos + Egresos vinculados</span></div>
+                        <div class="card kpi-card"><h3>Sin conciliar</h3><p id="cmp-r4-pendientes">—</p><span>Pendientes de cruce</span></div>
+                        <div class="card kpi-card"><h3>Sugerencias R4 / R5</h3><p id="cmp-r4-sugerencias">—</p><span>Coincidencias detectadas</span></div>
+                    </div>
+
+                    <h3 style="margin:0.5rem 0;">🔍 Sugerencias Automáticas Banco ↔ Sistema (R4 / R5)</h3>
+                    <div class="table-wrapper" style="margin-bottom:1.25rem;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Dirección / Regla</th>
+                                    <th>Movimiento Bancario</th>
+                                    <th>Monto</th>
+                                    <th>Documento CxC</th>
+                                    <th>Puntaje / Motivo</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cmp-r4-tbody">
+                                <tr><td colspan="6" class="table-empty">Cargando sugerencias del sistema...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h3 style="margin:0.5rem 0;">📋 Ingresos y Egresos Reportados en el Sistema</h3>
+                    <div class="table-wrapper" style="max-height:340px; overflow:auto;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Dirección</th>
+                                    <th>Documento</th>
+                                    <th>Fecha</th>
+                                    <th>Contraparte / Concepto</th>
+                                    <th>Monto</th>
+                                    <th>Referencia</th>
+                                    <th>Conciliación Banco</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sys-conc-docs-tbody">
+                                <tr><td colspan="7" class="table-empty">Cargando documentos reportados...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- Pre-conciliación (fase 2) -->
                 <section class="card" id="bancos-conc-panel" style="padding:1.5rem;">
                     <div class="panel-header-row">
@@ -1002,11 +1118,11 @@
 
         <div id="tab-ventas" class="tab-panel">
             <div class="config-subnav tab-navigation" role="tablist" aria-label="Secciones de Ventas" style="margin-bottom:1rem;">
-                <button type="button" class="tab-btn ventas-subnav-btn active" data-ventas-subpage="seguimiento">📊 Seguimiento de Órdenes (Teórico vs. Real)</button>
-                <button type="button" class="tab-btn ventas-subnav-btn" data-ventas-subpage="documentos">📝 Cotizaciones y Pedidos</button>
+                <button type="button" class="tab-btn ventas-subnav-btn active" data-ventas-subpage="documentos">📝 Cotizaciones y Pedidos (Consolidado)</button>
+                <button type="button" class="tab-btn ventas-subnav-btn" data-ventas-subpage="seguimiento">📊 Análisis Teórico vs. Real</button>
             </div>
 
-            <div class="ventas-stack" data-ventas-panel="seguimiento" style="display:flex; flex-direction:column; gap:1.5rem;">
+            <div class="ventas-stack config-subpage-hidden" data-ventas-panel="seguimiento" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <section class="kpi-panel" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
                     <div class="kpi-card">
                         <h3>Subtotal de la Orden (Total)</h3>
@@ -1059,6 +1175,7 @@
                                 <input type="checkbox" id="ventas-solo-alertas"> Solo con alerta
                             </label>
                             <input type="text" id="ventas-search" placeholder="🔍 Buscar por cliente o SO...">
+                            <button type="button" class="btn btn-primary" onclick="abrirNuevoDocumento('cotizacion')" style="padding: 0.5rem 0.95rem; font-size: 0.85rem;">➕ Crear Nuevo (Cotización)</button>
                             <button class="btn btn-secondary" onclick="descargarVentasExcel()" style="padding: 0.5rem 1rem; font-size: 0.85rem;">📥 Descargar Excel</button>
                         </div>
                     </div>
@@ -1075,7 +1192,8 @@
                                     <th title="Días de crédito reales otorgados por Odoo (payment_term de la orden)">Días Crédito</th>
                                     <th title="Fecha de vencimiento (Fecha Entrega + Días Crédito) y días vencido -- fuente única para las demás páginas (Reporte de Saldos, CxC por Cliente)">Días Vencido</th>
                                     <th title="¿Existe factura posted en Odoo para esta orden?">Facturada</th>
-                                    <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real</th>
+                                    <th title="Base imponible sin impuestos (Subtotal)">Subtotal</th>
+                                    <th title="Total real de la orden con impuestos (amount_total) — el que usa Cuentas por Cobrar">Venta Neta Real (c/ Imp.)</th>
                                     <th title="Facturado con impuestos, menos Notas de Crédito, más Notas de Débito">Facturado Neto</th>
                                     <th title="Teórica Neta VES + IVA (+ IGTF si aplica) -- según la lista VES vigente para la fecha de la orden">Teórica Neta VES + Imp.</th>
                                     <th title="Teórica Neta USD + IVA (+ IGTF si aplica) -- según la lista USD vigente para la fecha de la orden">Teórica Neta USD + Imp.</th>
@@ -1088,7 +1206,7 @@
                             </thead>
                             <tbody id="ventas-table-body">
                                 <tr>
-                                    <td colspan="16" class="table-empty">Cargando reporte de ventas...</td>
+                                    <td colspan="18" class="table-empty">Cargando reporte de ventas...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -1096,38 +1214,36 @@
                 </section>
             </div>
 
-            <!-- SUB-SECCIÓN DENTRO DE VENTAS: DOCUMENTOS DE COTIZACIONES Y PEDIDOS -->
-            <div data-ventas-panel="documentos" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.5rem;">
+            <!-- SUB-SECCIÓN DENTRO DE VENTAS: VISTA CONSOLIDADA DE COTIZACIONES Y PEDIDOS -->
+            <div data-ventas-panel="documentos" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <section class="card" style="padding:1.5rem;">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">📝 Cotizaciones y Pedidos (Unificado CxC + Odoo)</h2>
-                            <p style="color:#475569; margin:0;">Vista unificada indicando origen (CxC vs Odoo). Los pedidos que cumplen todos los parámetros se auto-envían directo a Odoo; los demás quedan retenidos para aprobación en CxC.</p>
+                            <h2 style="margin:0 0 0.25rem 0;">📝 Pedidos y Cotizaciones (Consolidado)</h2>
+                            <p style="color:#475569; margin:0;">Vista consolidada única de cotizaciones y todos los pedidos confirmados. Todo documento nace como <strong>Cotización</strong> y se convierte en Pedido; al confirmarse en Odoo queda bloqueado contra ediciones y se sincroniza ante ajustes en Odoo.</p>
                         </div>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                            <button type="button" class="btn-secondary" onclick="abrirNuevoDocumento('cotizacion')">➕ Nueva Cotización</button>
-                            <button type="button" class="btn-primary" onclick="abrirNuevoDocumento('pedido')">🛒 Nuevo Pedido</button>
-                            <button type="button" class="btn-secondary" onclick="window.loadDocumentosComerciales()">↻ Actualizar</button>
+                            <button type="button" id="doc-btn-nueva-cotizacion" class="btn-primary" onclick="abrirNuevoDocumento('cotizacion')">➕ Crear Nuevo (Cotización)</button>
+                            <button type="button" class="btn-secondary" onclick="if (window.sincronizarYRecargarVentas) window.sincronizarYRecargarVentas(); else if (window.loadDocumentosComerciales) window.loadDocumentosComerciales();">↻ Sincronizar Odoo y Actualizar</button>
                         </div>
                     </div>
 
                     <div class="dashboard-kpi-row" style="margin:1rem 0;">
-                        <div class="card kpi-card"><h3>Total Unificado</h3><p id="docs-kpi-total">0</p><span>CxC + Odoo (sin duplicados)</span></div>
-                        <div class="card kpi-card"><h3>🏢 Nacidos en CxC</h3><p id="docs-kpi-cxc">0</p><span>Cotizaciones y pedidos CxC/Bot</span></div>
-                        <div class="card kpi-card"><h3>🟣 Nacidos en Odoo</h3><p id="docs-kpi-odoo">0</p><span>Órdenes directas de Odoo</span></div>
-                        <div class="card kpi-card"><h3>📋 Cotizaciones</h3><p id="docs-kpi-cot">0</p><span>Con enlace de preview compartible</span></div>
-                        <div class="card kpi-card"><h3>⏳ Retenidos aprobación</h3><p id="docs-kpi-ped">0</p><span>Por revisar o autorizar en CxC</span></div>
-                        <div class="card kpi-card"><h3>⚡ Auto-enviados</h3><p id="docs-kpi-autosend">0</p><span>Pasaron directo por política</span></div>
-                        <div class="card kpi-card"><h3>✅ En Odoo (Total)</h3><p id="docs-kpi-enviados">0</p><span>CxC + Odoo confirmadas</span></div>
+                        <div class="card kpi-card"><h3>Pedidos Confirmados</h3><p id="docs-kpi-enviados">0</p><span>Consolidado en Odoo</span></div>
+                        <div class="card kpi-card"><h3>📋 Cotizaciones</h3><p id="docs-kpi-cot">0</p><span>Convertibles a pedido</span></div>
+                        <div class="card kpi-card"><h3>⏳ Pendientes aprobación</h3><p id="docs-kpi-ped">0</p><span>Por revisar en CxC</span></div>
+                        <div class="card kpi-card"><h3>⚡ Auto-enviados</h3><p id="docs-kpi-autosend">0</p><span>Directos por política</span></div>
+                        <div class="card kpi-card"><h3>Subtotal Confirmado</h3><p id="docs-kpi-subtotal">$0.00</p><span>Base sin impuestos</span></div>
+                        <div class="card kpi-card"><h3>Total c/ Impuestos</h3><p id="docs-kpi-total-iva">$0.00</p><span>Total facturable consolidado</span></div>
                     </div>
 
                     <div id="docs-aviso-general" style="margin-bottom:0.75rem;"></div>
 
                     <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
                         <select id="docs-filtro-origen" class="filter-select" aria-label="Origen del documento">
-                            <option value="todos">Todos los orígenes (CxC + Odoo)</option>
-                            <option value="cxc">🏢 Solo nacidos en CxC / Bot</option>
-                            <option value="odoo">🟣 Solo nacidos en Odoo</option>
+                            <option value="todos">Todos (Consolidado CxC + Odoo)</option>
+                            <option value="cxc">Nacidos en CxC / Bot</option>
+                            <option value="odoo">Directos en Odoo</option>
                         </select>
                         <select id="docs-filtro-tipo" class="filter-select" aria-label="Tipo de documento">
                             <option value="">Todos los tipos</option>
@@ -1138,7 +1254,7 @@
                             <option value="">Todos los estados</option>
                             <option value="PENDIENTE_APROBACION">⏳ Pedido pendiente por aprobación</option>
                             <option value="BORRADOR">📋 Cotización vigente</option>
-                            <option value="ENVIADO_ODOO">✅ Aprobados / Enviados a Odoo</option>
+                            <option value="ENVIADO_ODOO">✅ Confirmados en Odoo</option>
                             <option value="RECHAZADO">❌ Rechazados</option>
                             <option value="ERROR">⚠️ Con error</option>
                         </select>
@@ -1154,14 +1270,15 @@
                                     <th>Contacto / Rol</th>
                                     <th>Lista</th>
                                     <th>Líneas / Litros</th>
-                                    <th>Subtotal Est.</th>
+                                    <th>Subtotal</th>
+                                    <th>Total c/ Impuestos</th>
                                     <th>Estado / Orden Odoo</th>
                                     <th>Fecha</th>
                                     <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody id="docs-table-body">
-                                <tr><td colspan="9" class="table-empty">Cargando documentos comerciales...</td></tr>
+                                <tr><td colspan="10" class="table-empty">Cargando documentos comerciales...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1322,17 +1439,20 @@
         <div id="tab-compras" class="tab-panel">
             <div class="config-subnav tab-navigation" role="tablist" aria-label="Submódulos de Compras" style="margin-bottom:1rem;">
                 <button type="button" class="tab-btn compras-subnav-btn active" data-compras-subpage="facturas">📄 Facturas de Proveedor <span id="badge-op-compras-pend" class="state-badge" style="margin-left:4px;">0</span></button>
-                <button type="button" class="tab-btn compras-subnav-btn" data-compras-subpage="gastos">🧾 Gastos Menores (Sin Factura)</button>
-                <button type="button" class="tab-btn compras-subnav-btn" data-compras-subpage="conciliacion">🔄 Conciliación de Gastos</button>
+                <button type="button" class="tab-btn compras-subnav-btn" data-compras-subpage="gastos">🧾 Gastos Menores y Caja Chica</button>
                 <button type="button" class="tab-btn compras-subnav-btn" data-compras-subpage="cuentas">📚 Plan de Cuentas y Reglas</button>
+                <button type="button" class="tab-btn" onclick="if (window.CxC && window.CxC.shell) window.CxC.shell.navigate('pagos', 'conciliacion');">🏦 Conciliación Bancaria →</button>
             </div>
 
             <div id="compras-gastos-banner" class="card config-subpage-hidden" style="margin-bottom:1rem; border-left:4px solid #ea580c; padding:1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
                 <div>
-                    <h3 style="margin:0 0 0.2rem 0; color:#9a3412;">🧾 Gastos Menores sin Factura Fiscal</h3>
-                    <p style="margin:0; font-size:0.84rem; color:#475569;">Vista filtrada en gastos menores capturados por bots o web. Al aprobarse generan asientos contables directos (<code>move_type='entry'</code>) en Odoo sin contaminar el Libro de Compras.</p>
+                    <h3 style="margin:0 0 0.2rem 0; color:#9a3412;">🧾 Gastos Menores sin Factura Fiscal &amp; Caja Chica</h3>
+                    <p style="margin:0; font-size:0.84rem; color:#475569;">Registra gastos menores sin factura fiscal (<code>move_type='entry'</code>) y agrúpalos en rendiciones de Caja Chica. La conciliación contra extractos bancarios ahora vive unificada en <strong>Pagos → Conciliación Bancaria</strong>.</p>
                 </div>
-                <button type="button" class="btn-primary" onclick="abrirModalNuevoOperativo('gasto')">➕ Registrar Gasto Menor</button>
+                <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                    <button type="button" class="btn-primary" onclick="abrirModalNuevoOperativo('gasto')">➕ Registrar Gasto Menor</button>
+                    <a href="/pagos?tab=conciliacion" class="btn-secondary nav-sub-link" data-page="pagos" data-tab="conciliacion" style="text-decoration:none; padding:0.48rem 0.9rem;">🏦 Ir a Conciliación Bancaria →</a>
+                </div>
             </div>
 
             <div data-compras-panel="facturas" style="display:flex; flex-direction:column; gap:1.5rem;">
@@ -1407,109 +1527,78 @@
                 </section>
             </div>
 
-            <div data-compras-panel="conciliacion" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.5rem;">
-                <section class="card" style="padding:1.5rem; border-left:5px solid #0284c7;">
-                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+            <section id="compras-cajachica-section" class="card config-subpage-hidden" style="padding:1.5rem; margin-top:1.25rem; border-left:5px solid #ea580c;">
+                <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                    <div>
+                        <h2 style="margin:0 0 0.25rem 0;">🧺 Rendición de Caja Chica y Lotes de Gastos Menores</h2>
+                        <p style="color:#475569; margin:0;">Agrupa gastos menores para rendición de caja chica y contabilización por lote hacia Odoo. La conciliación bancaria unificada está en <strong>Pagos → Conciliación Bancaria</strong>.</p>
+                    </div>
+                    <button type="button" class="btn-secondary" onclick="if (window.loadConciliacionGastos) window.loadConciliacionGastos();">↻ Actualizar Caja Chica</button>
+                </div>
+
+                <form id="cmp-cajachica-form" class="cxc-form" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1rem; margin:1rem 0;">
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0.75rem;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">🔄 Conciliación de Pagos de Gastos Menores y Caja Chica</h2>
-                            <p style="color:#475569; margin:0;">Cruza débitos bancarios contra gastos menores y pagos a proveedor en CxC (Regla R4) y agrupa gastos de efectivo en lotes de Caja Chica.</p>
+                            <label style="font-size:0.78rem; font-weight:600; color:#475569;">Responsable de Caja Chica</label>
+                            <input type="text" id="cmp-lote-responsable" class="filter-select" style="width:100%; cursor:text;" placeholder="Nombre del custodio o vendedor">
                         </div>
-                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                            <button type="button" class="btn-secondary" onclick="if (window.loadConciliacionGastos) window.loadConciliacionGastos();">↻ Actualizar</button>
-                            <a href="/pagos?tab=conciliacion" class="btn btn-primary nav-sub-link" data-page="pagos" data-tab="conciliacion" style="background:#2563eb; color:#fff; border-color:#2563eb; padding:0.5rem 0.95rem; text-decoration:none;">🏦 Ir a Conciliación Bancaria</a>
+                        <div>
+                            <label style="font-size:0.78rem; font-weight:600; color:#475569;">Moneda del Lote</label>
+                            <select id="cmp-lote-moneda" class="filter-select" style="width:100%;">
+                                <option value="USD">USD</option>
+                                <option value="VES">VES</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; font-weight:600; color:#475569;">Notas de rendición</label>
+                            <input type="text" id="cmp-lote-notas" class="filter-select" style="width:100%; cursor:text;" placeholder="Ej. Reposición semanal Caja Chica">
                         </div>
                     </div>
-
-                    <div class="dashboard-kpi-row" style="margin:1rem 0;">
-                        <div class="card kpi-card"><h3>Egresos elegibles</h3><p id="cmp-r4-total">—</p><span>Gastos y pagos prov.</span></div>
-                        <div class="card kpi-card"><h3>Conciliados con banco</h3><p id="cmp-r4-conciliados">—</p><span>Vinculados a extracto</span></div>
-                        <div class="card kpi-card"><h3>Sin conciliar</h3><p id="cmp-r4-pendientes">—</p><span>Pendientes de cruce</span></div>
-                        <div class="card kpi-card"><h3>Sugerencias Regla R4</h3><p id="cmp-r4-sugerencias">—</p><span>Coincidencias detectadas</span></div>
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-top:0.75rem;">
+                        <button type="submit" class="btn-primary">🧺 Crear Lote con Gastos Seleccionados</button>
+                        <span id="cmp-lote-status" style="font-size:0.84rem; font-weight:600;"></span>
                     </div>
+                </form>
 
-                    <h3 style="margin:0.5rem 0;">🔍 Sugerencias Automáticas Banco ↔ Egresos (Regla R4)</h3>
-                    <div class="table-wrapper" style="margin-bottom:1.5rem;">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Débito Bancario</th>
-                                    <th>Monto</th>
-                                    <th>Documento CxC</th>
-                                    <th>Puntaje / Motivo</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="cmp-r4-tbody">
-                                <tr><td colspan="5" class="table-empty">Cargando sugerencias R4...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
+                <div class="table-wrapper" style="margin-bottom:1.25rem;">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Sel.</th>
+                                <th>Documento</th>
+                                <th>Fecha</th>
+                                <th>Comercio / Concepto</th>
+                                <th>Monto</th>
+                                <th>Conciliación Banco</th>
+                                <th>Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cmp-egresos-tbody">
+                            <tr><td colspan="7" class="table-empty">Cargando egresos...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
 
-                    <h3 style="margin:0.5rem 0;">🧺 Rendición de Caja Chica y Egresos CxC</h3>
-                    <form id="cmp-cajachica-form" class="cxc-form" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1rem; margin-bottom:1rem;">
-                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0.75rem;">
-                            <div>
-                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Responsable de Caja Chica</label>
-                                <input type="text" id="cmp-lote-responsable" class="filter-select" style="width:100%; cursor:text;" placeholder="Nombre del custodio o vendedor">
-                            </div>
-                            <div>
-                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Moneda del Lote</label>
-                                <select id="cmp-lote-moneda" class="filter-select" style="width:100%;">
-                                    <option value="USD">USD</option>
-                                    <option value="VES">VES</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Notas de rendición</label>
-                                <input type="text" id="cmp-lote-notas" class="filter-select" style="width:100%; cursor:text;" placeholder="Ej. Reposición semanal Caja Chica">
-                            </div>
-                        </div>
-                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-top:0.75rem;">
-                            <button type="submit" class="btn-primary">🧺 Crear Lote con Gastos Seleccionados</button>
-                            <span id="cmp-lote-status" style="font-size:0.84rem; font-weight:600;"></span>
-                        </div>
-                    </form>
-
-                    <div class="table-wrapper" style="margin-bottom:1.25rem;">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Sel.</th>
-                                    <th>Documento</th>
-                                    <th>Fecha</th>
-                                    <th>Comercio / Concepto</th>
-                                    <th>Monto</th>
-                                    <th>Conciliación Banco</th>
-                                    <th>Acción</th>
-                                </tr>
-                            </thead>
-                            <tbody id="cmp-egresos-tbody">
-                                <tr><td colspan="7" class="table-empty">Cargando egresos...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <h4 style="margin:0.5rem 0;">📋 Lotes de Caja Chica Registrados</h4>
-                    <div class="table-wrapper">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>Código</th>
-                                    <th>Responsable</th>
-                                    <th>Moneda</th>
-                                    <th>Gastos</th>
-                                    <th>Total</th>
-                                    <th>Estado</th>
-                                    <th>Acciones</th>
-                                </tr>
-                            </thead>
-                            <tbody id="cmp-lotes-tbody">
-                                <tr><td colspan="7" class="table-empty">Cargando lotes de caja chica...</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-            </div>
+                <h4 style="margin:0.5rem 0;">📋 Lotes de Caja Chica Registrados</h4>
+                <div class="table-wrapper">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Código</th>
+                                <th>Responsable</th>
+                                <th>Moneda</th>
+                                <th>Gastos</th>
+                                <th>Total</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cmp-lotes-tbody">
+                            <tr><td colspan="7" class="table-empty">Cargando lotes de caja chica...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
 
             <div data-compras-panel="cuentas" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.5rem;">
                 <section class="card" style="padding:1.5rem; border-left:5px solid #2563eb;">
@@ -1604,51 +1693,24 @@
         <div id="tab-reportes" class="tab-panel">
             <div class="reporte-layout">
                 <div class="subtab-nav" role="tablist" style="margin-bottom: 1.5rem;">
-                    <button type="button" class="subtab-btn active" data-rep-subtab="resumen" onclick="switchReporteSubtab('resumen')">📊 Resumen Ejecutivo</button>
-                    <button type="button" class="subtab-btn" data-rep-subtab="bd-propia" onclick="switchReporteSubtab('bd-propia')">💾 Saldos BD Propia</button>
-                    <button type="button" class="subtab-btn" data-rep-subtab="cliente" onclick="switchReporteSubtab('cliente')">👤 Por Cliente</button>
-                    <button type="button" class="subtab-btn" data-rep-subtab="vendedor" onclick="switchReporteSubtab('vendedor')">🧑‍💼 Por Vendedor</button>
+                    <button type="button" class="subtab-btn active" data-rep-subtab="consolidado" onclick="switchReporteSubtab('consolidado')">📊 Reporte Consolidado</button>
+                    <button type="button" class="subtab-btn" data-rep-subtab="cxc" onclick="switchReporteSubtab('cxc')">📈 Reporte CxC</button>
+                    <button type="button" class="subtab-btn" data-rep-subtab="cxp" onclick="switchReporteSubtab('cxp')">📉 Reporte CxP</button>
                 </div>
 
-                <div class="subtab-panel active" data-rep-subtab-panel="resumen">
+                <div class="subtab-panel active" data-rep-subtab-panel="consolidado">
                     <div class="dashboard-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
-                <div id="rep-bd-propia-banner" class="card" style="padding:0.9rem 1.2rem; border-left:4px solid #0284c7; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
-                    <div><strong>💾 Saldos BD Propia CxC:</strong> Cargando resumen local...</div>
+                <div id="rep-bd-propia-banner" class="card" style="padding:1rem 1.25rem; border-left:5px solid #0284c7; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                    <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center;">
+                        <div><span style="font-size:0.75rem; color:#64748b; display:block;">📈 Por Cobrar (CxC BD Propia)</span><strong id="rep-net-cxc" style="font-size:1.15rem; color:#0284c7;">—</strong></div>
+                        <div><span style="font-size:0.75rem; color:#64748b; display:block;">📉 Por Pagar (CxP BD Propia)</span><strong id="rep-net-cxp" style="font-size:1.15rem; color:#dc2626;">—</strong></div>
+                        <div><span style="font-size:0.75rem; color:#64748b; display:block;">⚖️ Posición Neta (CxC − CxP)</span><strong id="rep-net-posicion" style="font-size:1.15rem; color:#0f172a;">—</strong></div>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                        <button type="button" class="btn-secondary" onclick="switchReporteSubtab('cxc')">📈 Ver Reporte CxC</button>
+                        <button type="button" class="btn-secondary" onclick="switchReporteSubtab('cxp')">📉 Ver Reporte CxP</button>
+                    </div>
                 </div>
-                <!-- Promedios de Tasa Binance y Diferencial BCV -->
-                <section class="card" style="margin-bottom:1rem">
-                    <div class="panel-header">
-                        <h2>Promedios de Tasa Binance & Brecha BCV</h2>
-                        <p>Cálculo automático de promedios turno mañana (6 AM - 9 AM), tarde (10 AM - 1 PM), día completo y % de diferencial BCV vs. Binance</p>
-                    </div>
-
-                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem;">
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">BCV Oficial</span>
-                            <strong style="font-size:1.1rem; color:#0f172a" id="lbl-rate-bcv-actual">-</strong>
-                        </div>
-                        <div style="background:#eff6ff; border:1px solid #93c5fd; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#1d4ed8; font-weight:700; display:block">Binance Vigente</span>
-                            <strong style="font-size:1.1rem; color:#1e40af" id="lbl-rate-binance-vigente">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Mañana (6am-9am)</span>
-                            <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-manana">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Tarde (10am-1pm)</span>
-                            <strong style="font-size:1.1rem; color:#2563eb" id="lbl-rate-binance-tarde">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Prom. Diario</span>
-                            <strong style="font-size:1.1rem; color:#059669" id="lbl-rate-binance-diario">-</strong>
-                        </div>
-                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:0.75rem; text-align:center">
-                            <span style="font-size:0.75rem; color:#64748b; display:block">Brecha BCV/Binance</span>
-                            <strong style="font-size:1.1rem; color:#d97706" id="lbl-rate-diferencial-pct">-</strong>
-                        </div>
-                    </div>
-                </section>
                 <!-- TARJETAS DE SALDOS (movidas desde Reporte General de Saldos) -->
                 <!-- Fila 1: TOTAL GENERAL POR COBRAR (Sola arriba del todo) -->
                 <div style="margin-bottom: 1.25rem;">
@@ -1940,7 +2002,100 @@
                     </div>
                 </div>
 
-                <div class="subtab-panel" data-rep-subtab-panel="cliente" style="display:none;">
+                <div class="subtab-panel" data-rep-subtab-panel="cxc" style="display:none;">
+                    <section class="reporte-panel card" style="border-left:5px solid #0284c7; margin-bottom:1.5rem;">
+                        <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+                            <div>
+                                <h2 style="margin:0 0 0.25rem 0;">📈 Reporte de Cuentas por Cobrar (BD Propia — Solo Lectura)</h2>
+                                <p style="margin:0; color:#475569;">Fórmula local: <strong>Ventas Confirmadas − Descuentos y NC Confirmados − Pagos Confirmados</strong> (incluye Zelle de Terceros y Efectivo CxC). Alterna entre vista por cliente y por vendedor.</p>
+                            </div>
+                            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                                <a id="rep-prop-csv-link" href="/api/reportes/saldos-propios/csv" class="btn-secondary" style="text-decoration:none; padding:0.48rem 0.9rem;">📥 Exportar CSV</a>
+                                <button type="button" class="btn-secondary" onclick="if (window.loadReportesSaldosPropios) window.loadReportesSaldosPropios();">↻ Actualizar</button>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin:0.9rem 0 0.25rem 0;">
+                            <button type="button" id="btn-cxc-vista-clientes" class="btn-primary" onclick="if (window.switchCxcVista) window.switchCxcVista('clientes');">👤 Por Cliente</button>
+                            <button type="button" id="btn-cxc-vista-vendedores" class="btn-secondary" onclick="if (window.switchCxcVista) window.switchCxcVista('vendedores');">🧑‍💼 Por Vendedor</button>
+                        </div>
+
+                        <div class="dashboard-kpi-row" style="margin:1rem 0;">
+                            <div class="card kpi-card"><h3>Ventas Confirmadas</h3><p id="rep-prop-kpi-ventas">—</p><span>Odoo + Pedidos CxC</span></div>
+                            <div class="card kpi-card"><h3>Descuentos Confirmados</h3><p id="rep-prop-kpi-descuentos">—</p><span id="rep-prop-kpi-descuentos-sub">—</span></div>
+                            <div class="card kpi-card"><h3>Pagos Confirmados</h3><p id="rep-prop-kpi-pagos">—</p><span id="rep-prop-kpi-pagos-sub">—</span></div>
+                            <div class="card kpi-card"><h3>Saldo Deudor Neto</h3><p id="rep-prop-kpi-deudor">—</p><span id="rep-prop-kpi-deudor-sub">—</span></div>
+                            <div class="card kpi-card"><h3>Saldo a Favor</h3><p id="rep-prop-kpi-favor">—</p><span>Abonos excedentes</span></div>
+                        </div>
+
+                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
+                            <select id="rep-prop-vendedor" class="filter-select" aria-label="Vendedor BD propia">
+                                <option value="*">Todos los vendedores</option>
+                            </select>
+                            <select id="rep-prop-antiguedad" class="filter-select" aria-label="Antigüedad BD propia">
+                                <option value="*">Todas las antigüedades</option>
+                                <option value="vencido_total">Total vencido</option>
+                                <option value="vigentes">Vigente</option>
+                                <option value="1_30">1 - 30 días</option>
+                                <option value="31_60">31 - 60 días</option>
+                                <option value="61_90">61 - 90 días</option>
+                                <option value="mas_90">+90 días</option>
+                            </select>
+                            <input type="text" id="rep-prop-q" class="filter-select" placeholder="🔍 Buscar cliente, ID o vendedor..." style="cursor:text; min-width:240px; flex:1;">
+                            <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.84rem; color:#334155;">
+                                <input type="checkbox" id="rep-prop-solo-saldo"> Solo con deuda
+                            </label>
+                        </div>
+
+                        <div id="rep-cxc-vista-clientes">
+                            <h3 style="margin:0.5rem 0;">👤 Saldos por Cliente</h3>
+                            <div class="table-wrapper" style="margin-bottom:0.75rem;">
+                                <table class="cxc-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Cliente</th>
+                                            <th>Vendedor</th>
+                                            <th>Ventas Conf.</th>
+                                            <th>Desc. / NC</th>
+                                            <th>Pagos Conf.</th>
+                                            <th>Saldo Deudor</th>
+                                            <th>Vencido</th>
+                                            <th>Detalle</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rep-prop-clientes-tbody">
+                                        <tr><td colspan="8" class="table-empty">Cargando saldos sobre BD propia...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div id="rep-cxc-vista-vendedores" style="display:none;">
+                            <h3 style="margin:0.5rem 0;">🧑‍💼 Saldos por Vendedor (clic para expandir clientes)</h3>
+                            <div class="table-wrapper">
+                                <table class="cxc-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Vendedor</th>
+                                            <th>Clientes</th>
+                                            <th>Ventas Conf.</th>
+                                            <th>Desc. / NC</th>
+                                            <th>Pagos Conf.</th>
+                                            <th>Saldo Deudor</th>
+                                            <th>Vencido</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rep-prop-vendedores-tbody">
+                                        <tr><td colspan="7" class="table-empty">Cargando resumen por vendedor...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <details class="card" style="padding:1rem 1.25rem; margin-bottom:1.5rem;">
+                        <summary style="cursor:pointer; font-weight:700; color:#334155;">📐 Detalle Extendido Odoo / Priorización de Cobro (Odoo)</summary>
+                        <div style="margin-top:1rem;">
 
                 <!-- Grilla de priorización de cobro por cliente -->
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
@@ -2040,11 +2195,10 @@
                         </table>
                     </div>
                 </section>
-
                 </div>
 
-
-                <div class="subtab-panel" data-rep-subtab-panel="vendedor" style="display:none;">
+                <!-- Subtab CxC (Panel por Vendedor integrado dentro del detalle extendido) -->
+                <div style="margin-top:1rem;">
                 <section class="reporte-panel card" style="margin-bottom: 1.5rem;">
                     <div class="panel-header-row">
                         <div>
@@ -2095,34 +2249,34 @@
                         </table>
                     </div>
                 </section>
+                        </div>
+                        </div>
+                    </details>
                 </div>
 
-                <div class="subtab-panel" data-rep-subtab-panel="bd-propia" style="display:none;">
-                    <section class="reporte-panel card" style="border-left:5px solid #0284c7;">
+                <div class="subtab-panel" data-rep-subtab-panel="cxp" style="display:none;">
+                    <section class="reporte-panel card" style="border-left:5px solid #dc2626;">
                         <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
                             <div>
-                                <h2 style="margin:0 0 0.25rem 0;">💾 Saldos Calculados 100% sobre Base de Datos Propia (Solo Lectura)</h2>
-                                <p style="margin:0; color:#475569;">Fórmula local sin consultar Odoo: <strong>Ventas Confirmadas − Descuentos y NC Confirmados − Pagos Confirmados</strong> (incluye Zelle de Terceros y Efectivo confirmado en CxC).</p>
+                                <h2 style="margin:0 0 0.25rem 0;">📉 Reporte de Cuentas por Pagar (BD Propia — Solo Lectura)</h2>
+                                <p style="margin:0; color:#475569;">Fórmula inversa sobre BD propia: <strong>Facturas Compra Confirmadas − Notas Crédito − Pagos a Proveedores − Zelle 3ros</strong>. Los gastos sin factura (<code>move_type='entry'</code>) se muestran aparte sin inflar la deuda.</p>
                             </div>
                             <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                                <a id="rep-prop-csv-link" href="/api/reportes/saldos-propios/csv" class="btn-secondary" style="text-decoration:none; padding:0.48rem 0.9rem;">📥 Exportar CSV</a>
-                                <button type="button" class="btn-secondary" onclick="if (window.loadReportesSaldosPropios) window.loadReportesSaldosPropios();">↻ Actualizar</button>
+                                <a id="rep-cxp-csv-link" href="/api/reportes/cxp-propios/csv" class="btn-secondary" style="text-decoration:none; padding:0.48rem 0.9rem;">📥 Exportar CSV</a>
+                                <button type="button" class="btn-secondary" onclick="if (window.loadReportesCxPPropios) window.loadReportesCxPPropios();">↻ Actualizar</button>
                             </div>
                         </div>
 
                         <div class="dashboard-kpi-row" style="margin:1rem 0;">
-                            <div class="card kpi-card"><h3>Ventas Confirmadas</h3><p id="rep-prop-kpi-ventas">—</p><span>Odoo + Pedidos CxC</span></div>
-                            <div class="card kpi-card"><h3>Descuentos Confirmados</h3><p id="rep-prop-kpi-descuentos">—</p><span id="rep-prop-kpi-descuentos-sub">—</span></div>
-                            <div class="card kpi-card"><h3>Pagos Confirmados</h3><p id="rep-prop-kpi-pagos">—</p><span id="rep-prop-kpi-pagos-sub">—</span></div>
-                            <div class="card kpi-card"><h3>Saldo Deudor Neto</h3><p id="rep-prop-kpi-deudor">—</p><span id="rep-prop-kpi-deudor-sub">—</span></div>
-                            <div class="card kpi-card"><h3>Saldo a Favor</h3><p id="rep-prop-kpi-favor">—</p><span>Abonos excedentes</span></div>
+                            <div class="card kpi-card"><h3>Compras Confirmadas</h3><p id="rep-cxp-kpi-compras">—</p><span>Odoo + Facturas CxC</span></div>
+                            <div class="card kpi-card"><h3>Notas de Crédito Prov.</h3><p id="rep-cxp-kpi-descuentos">—</p><span>Rebajas / devoluciones</span></div>
+                            <div class="card kpi-card"><h3>Pagos + Zelle 3ros</h3><p id="rep-cxp-kpi-pagos">—</p><span id="rep-cxp-kpi-pagos-sub">—</span></div>
+                            <div class="card kpi-card"><h3>Saldo por Pagar Neto</h3><p id="rep-cxp-kpi-pagar">—</p><span id="rep-cxp-kpi-pagar-sub">—</span></div>
+                            <div class="card kpi-card"><h3>Gastos sin Factura</h3><p id="rep-cxp-kpi-gastos">—</p><span>Asientos directos (informativo)</span></div>
                         </div>
 
                         <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem;">
-                            <select id="rep-prop-vendedor" class="filter-select" aria-label="Vendedor BD propia">
-                                <option value="*">Todos los vendedores</option>
-                            </select>
-                            <select id="rep-prop-antiguedad" class="filter-select" aria-label="Antigüedad BD propia">
+                            <select id="rep-cxp-antiguedad" class="filter-select" aria-label="Antigüedad CxP">
                                 <option value="*">Todas las antigüedades</option>
                                 <option value="vencido_total">Total vencido</option>
                                 <option value="vigentes">Vigente</option>
@@ -2131,53 +2285,33 @@
                                 <option value="61_90">61 - 90 días</option>
                                 <option value="mas_90">+90 días</option>
                             </select>
-                            <input type="text" id="rep-prop-q" class="filter-select" placeholder="🔍 Buscar cliente, ID o vendedor..." style="cursor:text; min-width:240px; flex:1;">
+                            <input type="text" id="rep-cxp-q" class="filter-select" placeholder="🔍 Buscar proveedor, RIF o ID..." style="cursor:text; min-width:240px; flex:1;">
                             <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.84rem; color:#334155;">
-                                <input type="checkbox" id="rep-prop-solo-saldo"> Solo con deuda
+                                <input type="checkbox" id="rep-cxp-solo-saldo"> Solo con saldo por pagar
                             </label>
                         </div>
 
-                        <h3 style="margin:0.5rem 0;">👤 Saldos por Cliente</h3>
-                        <div class="table-wrapper" style="margin-bottom:1.5rem;">
-                            <table class="cxc-table">
-                                <thead>
-                                    <tr>
-                                        <th>Cliente</th>
-                                        <th>Vendedor</th>
-                                        <th>Ventas Conf.</th>
-                                        <th>Desc. / NC</th>
-                                        <th>Pagos Conf.</th>
-                                        <th>Saldo Deudor</th>
-                                        <th>Vencido</th>
-                                        <th>Detalle</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="rep-prop-clientes-tbody">
-                                    <tr><td colspan="8" class="table-empty">Cargando saldos sobre BD propia...</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <h3 style="margin:0.5rem 0;">🧑‍💼 Resumen por Vendedor (BD Propia)</h3>
+                        <h3 style="margin:0.5rem 0;">🏭 Saldos por Pagar por Proveedor</h3>
                         <div class="table-wrapper">
                             <table class="cxc-table">
                                 <thead>
                                     <tr>
-                                        <th>Vendedor</th>
-                                        <th>Clientes</th>
-                                        <th>Ventas Conf.</th>
-                                        <th>Desc. / NC</th>
-                                        <th>Pagos Conf.</th>
-                                        <th>Saldo Deudor</th>
+                                        <th>Proveedor</th>
+                                        <th>Compras Conf.</th>
+                                        <th>Notas Crédito</th>
+                                        <th>Pagos + Zelle 3ro</th>
+                                        <th>Saldo por Pagar</th>
                                         <th>Vencido</th>
+                                        <th>Detalle</th>
                                     </tr>
                                 </thead>
-                                <tbody id="rep-prop-vendedores-tbody">
-                                    <tr><td colspan="7" class="table-empty">Cargando resumen por vendedor...</td></tr>
+                                <tbody id="rep-cxp-proveedores-tbody">
+                                    <tr><td colspan="7" class="table-empty">Cargando cuentas por pagar...</td></tr>
                                 </tbody>
                             </table>
                         </div>
                     </section>
+                </div>
 
                     <div id="modal-estado-cuenta-propio" class="modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:90; align-items:center; justify-content:center; padding:1rem;">
                         <div class="card" style="max-width:920px; width:100%; max-height:85vh; overflow:auto; padding:1.5rem; background:#fff;">
@@ -2204,7 +2338,6 @@
                             </div>
                         </div>
                     </div>
-                </div>
             </div>
         </div>
 
@@ -3576,6 +3709,17 @@
             </div>
         </div>
 
+        <!-- Modal unificado de detalle de un pago (Pagos Recibidos Unificados + Pagos Enviados) -->
+        <div id="modal-detalle-pago-unificado" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99998; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
+            <div class="card" style="max-width:740px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem; background:#fff;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                    <h2 id="modal-detalle-pago-unificado-titulo" style="margin:0;">Detalle del Pago</h2>
+                    <button type="button" class="btn btn-secondary" onclick="if (window.CxC && window.CxC.pagos && window.CxC.pagos.cerrarDetallePagoUnificado) window.CxC.pagos.cerrarDetallePagoUnificado();" style="padding:0.3rem 0.7rem;">✕</button>
+                </div>
+                <div id="modal-detalle-pago-unificado-body"></div>
+            </div>
+        </div>
+
         <!-- Modal de detalle de orden (Fase 5 -- líneas de producto por modo) -->
         <div id="modal-detalle-orden" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.7); z-index:99998; justify-content:center; align-items:center; padding:1.5rem; overflow-y:auto;">
             <div class="card" style="max-width:1080px; width:100%; max-height:90vh; overflow-y:auto; padding:1.5rem;">
@@ -3958,13 +4102,13 @@
             </div>
         </div>
 
-    <script src="/static/app.js?v=20261119_6"></script>
-    <script src="/static/js/shell.js?v=20261119_6"></script>
-    <script src="/static/js/pagos_unificados.js?v=20261119_6"></script>
-    <script src="/static/js/pagos_enviados.js?v=20261119_6"></script>
-    <script src="/static/js/config_tesoreria.js?v=20261119_6"></script>
-    <script src="/static/js/ventas_unificadas.js?v=20261119_6"></script>
-    <script src="/static/js/compras_unificadas.js?v=20261119_6"></script>
-    <script src="/static/js/reportes_propios.js?v=20261119_6"></script>
+    <script src="/static/app.js?v=20261119_7"></script>
+    <script src="/static/js/shell.js?v=20261119_7"></script>
+    <script src="/static/js/pagos_unificados.js?v=20261119_7"></script>
+    <script src="/static/js/pagos_enviados.js?v=20261119_7"></script>
+    <script src="/static/js/config_tesoreria.js?v=20261119_7"></script>
+    <script src="/static/js/ventas_unificadas.js?v=20261119_7"></script>
+    <script src="/static/js/compras_unificadas.js?v=20261119_7"></script>
+    <script src="/static/js/reportes_propios.js?v=20261119_7"></script>
 </body>
 </html>

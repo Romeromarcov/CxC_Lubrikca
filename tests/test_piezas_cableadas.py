@@ -62,6 +62,10 @@ SIN_LLAMADOR_A_PROPOSITO: dict[str, str] = {
     "pagos_duplicados.py::clave_de_pago": (
         "la usa `detectar_pagos_duplicados`, que sí está cableada"
     ),
+    "saldos_propios.py::fifo_antiguedad": (
+        "helper compartido dentro de `engine`, lo consumen `saldos_propios.py` y "
+        "`saldos_cxp.py` (ambos cableados en `reportes_propios_api.py`)"
+    ),
     # --- anteriores a este plan, cada una con su motivo ---
     # El calendario de días hábiles lo consume ``discounts.py`` para la ventana de
     # contado; la aplicación nunca pregunta por un día hábil directamente.
@@ -292,7 +296,7 @@ def test_la_regla_del_descuento_de_linea_vive_en_UN_solo_lugar() -> None:
     inicio = fuente.index("def _descuentos_lineas_desde_espejo")
     fin = fuente.index("def _productos_despachados_desde_espejo")
     cuerpo = fuente[inicio:fin]
-    assert cuerpo.count("descuento_de_linea(") == 2, (
-        "las dos mitades (orden y factura) tienen que llamar a la pieza del motor"
-    )
+    assert (
+        cuerpo.count("descuento_de_linea(") == 2
+    ), "las dos mitades (orden y factura) tienen que llamar a la pieza del motor"
     assert "disc_pct" not in cuerpo, "la regla volvió a estar inline en el camino vivo"

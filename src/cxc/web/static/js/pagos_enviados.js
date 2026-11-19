@@ -2,6 +2,8 @@
 (function () {
     "use strict";
 
+    let _enviadosCache = [];
+
     function _cxc() {
         return window.CxC || {};
     }
@@ -12,6 +14,12 @@
 
     function _monto(v) {
         return typeof _cxc().monto === "function" ? _cxc().monto(v) : String(v ?? "—");
+    }
+
+    function _usd(v) {
+        if (v == null) return "—";
+        const n = Number(v);
+        return Number.isFinite(n) ? `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—";
     }
 
     async function loadOperativosPagosEnviados() {
@@ -51,13 +59,19 @@
             }
 
             const items = data.items || [];
+            _enviadosCache = items;
             if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="table-empty">No hay pagos a proveedores con estos filtros.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay pagos a proveedores con estos filtros.</td></tr>';
                 return;
             }
 
             const pagosApi = _cxc().pagos || {};
-            tbody.innerHTML = items.map((d) => {
+            tbody.innerHTML = items.map((d, idx) => {
+                const montoOrig = d.monto != null
+                    ? (String(d.moneda || "").toUpperCase() === "VES"
+                        ? `Bs. ${_monto(d.monto)}`
+                        : `${_usd(d.monto)} <small>${_esc(d.moneda || "USD")}</small>`)
+                    : "—";
                 const refTxt = d.es_efectivo
                     ? '<span style="color:#0369a1; font-weight:600;">Efectivo (memo vacío)</span>'
                     : _esc(d.referencia || "—");
@@ -65,26 +79,36 @@
                 const origHtml = typeof pagosApi.origenChip === "function"
                     ? pagosApi.origenChip(d)
                     : _esc(d.origen_sistema || d.origen || "");
+                const odooHtml = typeof pagosApi.odooLinkHtml === "function"
+                    ? pagosApi.odooLinkHtml(d)
+                    : "";
+                const usrHtml = typeof pagosApi.usuariosPagoHtml === "function"
+                    ? pagosApi.usuariosPagoHtml(d, "enviados")
+                    : _esc(d.registrado_por_nombre || "—");
+                const eqHtml = typeof pagosApi.equivalentesHtml === "function"
+                    ? pagosApi.equivalentesHtml(d)
+                    : "—";
                 const estHtml = typeof pagosApi.estadoBadge === "function"
                     ? pagosApi.estadoBadge(d)
                     : _esc(d.estado);
                 const alHtml = typeof _cxc().alertasHtml === "function" ? _cxc().alertasHtml(d) : "";
                 const actHtml = typeof pagosApi.accionesHtml === "function"
-                    ? pagosApi.accionesHtml(d, puedeAprobar, puedeAprobar)
+                    ? pagosApi.accionesHtml(d, puedeAprobar, puedeAprobar, idx, "enviados")
                     : "";
                 return `<tr>
-                    <td><strong>${_esc(d.numero)}</strong><div>${origHtml}</div></td>
+                    <td><strong>${_esc(d.numero)}</strong>${odooHtml}<div>${origHtml}</div></td>
                     <td>${_esc(d.fecha_documento || "—")}</td>
                     <td><strong>${_esc(d.contraparte_nombre || "Sin proveedor")}</strong><div class="cap-sub">${_esc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Se creará al aprobar"))}</div></td>
-                    <td><strong>${d.monto != null ? _monto(d.monto) : "—"} ${_esc(d.moneda)}</strong></td>
-                    <td>${_esc(d.diario_nombre || d.banco || "Por definir")}</td>
-                    <td>${refTxt}${subRef ? `<div class="cap-sub">${subRef}</div>` : ""}</td>
+                    <td>${usrHtml}</td>
+                    <td><strong>${montoOrig}</strong></td>
+                    <td>${eqHtml}</td>
+                    <td>${_esc(d.diario_nombre || d.banco || "Por definir")}<div class="cap-sub">${refTxt}${subRef ? " · " + subRef : ""}</div></td>
                     <td>${estHtml}${alHtml}</td>
                     <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${actHtml}</td>
                 </tr>`;
             }).join("");
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="8" class="table-empty">❌ ${_esc(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">❌ ${_esc(err.message)}</td></tr>`;
         }
     }
 
@@ -106,6 +130,16 @@
                     loadOperativosPagosEnviados();
                 }
             });
+        });
+
+        document.getElementById("op-pagos-enviados-table-body")?.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-unif-detalle][data-unif-dir='enviados']");
+            if (!btn) return;
+            const d = _enviadosCache[Number(btn.getAttribute("data-unif-detalle"))];
+            const pagosApi = _cxc().pagos || {};
+            if (d && typeof pagosApi.abrirDetallePagoUnificado === "function") {
+                pagosApi.abrirDetallePagoUnificado(d, "enviados");
+            }
         });
 
         const pathSeg = window.location.pathname.toLowerCase().replace(/^\/+|\/+$/g, "").split("/")[0];

@@ -140,6 +140,38 @@ def _tramo_mora(dias_mora: int) -> str:
     return "mas_90"
 
 
+def fifo_antiguedad(
+    items: Sequence[tuple[date, date, Decimal, str]],
+    credito_total: Decimal,
+    hoy_d: date,
+) -> tuple[dict[str, Decimal], int]:
+    """Reparte ``credito_total`` FIFO sobre obligaciones y clasifica mora remanente."""
+    credito_rest = q2(credito_total)
+    tramos: dict[str, Decimal] = dict.fromkeys(TRAMOS_MORA, Decimal("0"))
+    max_dias_mora = 0
+    for _f_ord, f_venc, m_ord, _ref in sorted(items, key=lambda x: (x[0], x[3])):
+        cubierto = min(m_ord, credito_rest)
+        credito_rest = q2(credito_rest - cubierto)
+        rem = q2(m_ord - cubierto)
+        if rem <= 0:
+            continue
+        dias_m = (hoy_d - f_venc).days
+        if dias_m > max_dias_mora:
+            max_dias_mora = dias_m
+        tr = _tramo_mora(dias_m)
+        tramos[tr] = q2(tramos[tr] + rem)
+    return tramos, max_dias_mora
+
+
+# Aliases públicos compartidos con ``saldos_cxp.py``
+norm_nombre = _norm_nombre
+dec = _dec
+round_usd = _f
+indice_tasas_bcv_local = _indice_tasas_bcv_local
+a_usd_local = _a_usd_local
+tramo_mora = _tramo_mora
+
+
 def _bucket_cliente(cid: str, nombre: str, vendedor: str) -> dict[str, Any]:
     return {
         "cliente_id": cid,
@@ -489,20 +521,7 @@ def _recolectar_estado_bd(
         saldo_favor = max(Decimal("0.00"), -saldo_bruto)
 
         # FIFO de órdenes abiertas para tramos de mora
-        credito_rest = q2(descuentos + pagos_c)
-        tramos_cli: dict[str, Decimal] = dict.fromkeys(TRAMOS_MORA, Decimal("0"))
-        max_dias_mora = 0
-        for _f_ord, f_venc, m_ord, _so in sorted(b["ordenes_fifo"], key=lambda x: (x[0], x[3])):
-            cubierto = min(m_ord, credito_rest)
-            credito_rest = q2(credito_rest - cubierto)
-            rem = q2(m_ord - cubierto)
-            if rem <= 0:
-                continue
-            dias_m = (hoy_d - f_venc).days
-            if dias_m > max_dias_mora:
-                max_dias_mora = dias_m
-            tr = _tramo_mora(dias_m)
-            tramos_cli[tr] = q2(tramos_cli[tr] + rem)
+        tramos_cli, max_dias_mora = fifo_antiguedad(b["ordenes_fifo"], descuentos + pagos_c, hoy_d)
 
         for tr in TRAMOS_MORA:
             tot_tramos[tr] = q2(tot_tramos[tr] + tramos_cli[tr])
@@ -546,6 +565,7 @@ def _recolectar_estado_bd(
                 "pagos_confirmados_usd": 0.0,
                 "saldo_deudor_usd": 0.0,
                 "vencido_usd": 0.0,
+                "clientes": [],
             },
         )
         bv["n_clientes"] += 1
@@ -562,6 +582,17 @@ def _recolectar_estado_bd(
         )
         bv["saldo_deudor_usd"] = round(bv["saldo_deudor_usd"] + fila_cli["saldo_deudor_usd"], 2)
         bv["vencido_usd"] = round(bv["vencido_usd"] + fila_cli["vencido_usd"], 2)
+        bv["clientes"].append(
+            {
+                "cliente_id": cid,
+                "cliente_nombre": fila_cli["cliente_nombre"],
+                "ventas_confirmadas_usd": fila_cli["ventas_confirmadas_usd"],
+                "descuentos_confirmados_usd": fila_cli["descuentos_confirmados_usd"],
+                "pagos_confirmados_usd": fila_cli["pagos_confirmados_usd"],
+                "saldo_deudor_usd": fila_cli["saldo_deudor_usd"],
+                "vencido_usd": fila_cli["vencido_usd"],
+            }
+        )
 
     clientes_out.sort(key=lambda x: (-x["saldo_deudor_usd"], x["cliente_nombre"]))
     vendedores_out = sorted(
@@ -621,6 +652,9 @@ def _cumple_antiguedad(c: dict[str, Any], filtro: str) -> bool:
     if filtro in c["tramos"]:
         return float(c["tramos"][filtro]) > 0
     return True
+
+
+cumple_antiguedad = _cumple_antiguedad
 
 
 def calcular_saldos_propios(

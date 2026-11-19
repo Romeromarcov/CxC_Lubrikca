@@ -45,6 +45,7 @@ from .modelos import (
 )
 from .politica_ventas import evaluar_politica_auto_envio
 from .repositorio import RepoDocumentos
+from .sync_odoo import orden_confirmada_en_odoo
 
 logger = logging.getLogger("cxc.documentos.servicio")
 
@@ -679,6 +680,15 @@ class ServicioDocumentos:
             ref = existente.odoo_order_name or existente.odoo_order_id
             raise DocumentoYaEnviado(
                 f"El documento {existente.numero} ya fue enviado a Odoo ({ref})."
+            )
+        so_name = (existente.odoo_order_name or "").strip()
+        orden_espejo = (
+            self._repo_cxc.get_orden(so_name) if (self._repo_cxc is not None and so_name) else None
+        )
+        if orden_confirmada_en_odoo(orden_espejo, existente):
+            raise DocumentoYaEnviado(
+                f"El pedido {existente.numero} ({so_name or 'Odoo'}) ya está confirmado en Odoo "
+                "y no se puede editar."
             )
         descuentos_previos = [
             d.get("codigo") for d in existente.descuentos_elegidos if d.get("codigo")

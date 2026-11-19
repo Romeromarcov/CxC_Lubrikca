@@ -172,13 +172,14 @@
 
     async function loadConciliacionGastos() {
         const r4Tbody = document.getElementById("cmp-r4-tbody");
+        const sysDocsTbody = document.getElementById("sys-conc-docs-tbody");
         const egTbody = document.getElementById("cmp-egresos-tbody");
         const lotesTbody = document.getElementById("cmp-lotes-tbody");
-        if (!r4Tbody && !egTbody && !lotesTbody) return;
+        if (!r4Tbody && !sysDocsTbody && !egTbody && !lotesTbody) return;
 
         try {
             const [rConc, rLotes] = await Promise.all([
-                fetch("/api/compras/conciliacion-gastos"),
+                fetch("/api/bancos/conciliacion/operativos-sistema"),
                 fetch("/api/compras/lotes-caja-chica"),
             ]);
             const dConc = await rConc.json().catch(() => ({}));
@@ -186,14 +187,26 @@
             if (!rConc.ok) throw new Error(dConc.detail || dConc.error || `Error ${rConc.status}`);
 
             const puedeConciliar = Boolean(dConc.puede_conciliar);
-            const sugs = dConc.sugerencias_r4 || [];
+            const dirFiltro = (document.getElementById("sys-conc-dir") || {}).value || "todos";
+            const sugsAll = dConc.sugerencias_sistema || dConc.sugerencias_r4 || [];
+            const sugs = dirFiltro === "todos"
+                ? sugsAll
+                : sugsAll.filter((s) => s.direccion === dirFiltro);
             const egresos = dConc.egresos || [];
+            const ingresos = dConc.ingresos || [];
             const lotes = dLotes.items || [];
 
+            const totEgr = dConc.total_egresos || 0;
+            const totIng = dConc.total_ingresos || 0;
+            const concEgr = dConc.conciliados_count || 0;
+            const concIng = dConc.ingresos_conciliados_count || 0;
+            const pendTot = (dConc.pendientes_count || 0) + (dConc.ingresos_pendientes_count || 0);
+
             for (const [idEl, val] of [
-                ["cmp-r4-total", dConc.total_egresos || 0],
-                ["cmp-r4-conciliados", dConc.conciliados_count || 0],
-                ["cmp-r4-pendientes", dConc.pendientes_count || 0],
+                ["cmp-r4-total", totEgr],
+                ["sys-ing-total", totIng],
+                ["cmp-r4-conciliados", concEgr + concIng],
+                ["cmp-r4-pendientes", pendTot],
                 ["cmp-r4-sugerencias", sugs.length],
             ]) {
                 const el = document.getElementById(idEl);
@@ -202,18 +215,53 @@
 
             if (r4Tbody) {
                 if (!sugs.length) {
-                    r4Tbody.innerHTML = '<tr><td colspan="5" class="table-empty">No hay sugerencias automáticas R4 pendientes entre débitos bancarios y egresos CxC.</td></tr>';
+                    r4Tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay sugerencias automáticas R4/R5 pendientes entre movimientos bancarios y documentos del sistema.</td></tr>';
                 } else {
                     r4Tbody.innerHTML = sugs.map((s) => {
+                        const dirBadge = s.direccion === "ingreso" || s.regla === "R5"
+                            ? '<span class="semaphore verde">📥 Ingreso · R5</span>'
+                            : '<span class="semaphore amarillo">📤 Egreso · R4</span>';
                         const btn = puedeConciliar
                             ? `<button type="button" class="btn-primary" style="padding:0.32rem 0.65rem; font-size:0.78rem; background:#0284c7;" data-r4-vincular="1" data-doc-id="${s.documento_id}" data-huella="${_esc(s.huella)}">🔗 Conciliar</button>`
                             : '<span class="cap-sub">Solo lectura</span>';
                         return `<tr>
+                            <td>${dirBadge}</td>
                             <td><strong>${_esc(s.banco)} · ${_esc(s.fecha_banco || "—")}</strong><div class="cap-sub">Ref: ${_esc(s.referencia_banco || "—")} · ${_esc(s.descripcion_banco || "")}</div></td>
                             <td><strong>${_monto(s.monto_banco)} ${_esc(s.moneda_banco || s.moneda_doc)}</strong></td>
                             <td><strong>${_esc(s.numero)}</strong> (${_esc(s.tipo)})<div class="cap-sub">${_esc(s.contraparte || "Sin contraparte")} · Ref: ${_esc(s.referencia_doc || "S/N")}</div></td>
                             <td><span class="state-badge abierta">Pts ${s.puntaje}</span><div class="cap-sub">${_esc(s.motivo || "")}</div></td>
                             <td>${btn}</td>
+                        </tr>`;
+                    }).join("");
+                }
+            }
+
+            if (sysDocsTbody) {
+                const comb = [
+                    ...ingresos.map((d) => ({ ...d, _dir: "ingreso" })),
+                    ...egresos.map((d) => ({ ...d, _dir: "egreso" })),
+                ];
+                const filtDocs = dirFiltro === "todos" ? comb : comb.filter((x) => x._dir === dirFiltro);
+                filtDocs.sort((a, b) => String(b.fecha_documento || "").localeCompare(String(a.fecha_documento || "")));
+                if (!filtDocs.length) {
+                    sysDocsTbody.innerHTML = '<tr><td colspan="7" class="table-empty">Sin ingresos o egresos reportados para este filtro.</td></tr>';
+                } else {
+                    sysDocsTbody.innerHTML = filtDocs.slice(0, 120).map((d) => {
+                        const dirChip = d._dir === "ingreso"
+                            ? '<span class="semaphore verde">📥 Ingreso</span>'
+                            : '<span class="semaphore amarillo">📤 Egreso</span>';
+                        const estBanco = d.conciliado_banco_huella
+                            ? `<span class="semaphore verde">🏦 Conciliado</span><div class="cap-sub">${_esc(d.conciliado_banco_huella.slice(0, 14))}…</div>` +
+                              (puedeConciliar ? `<button type="button" class="btn-secondary" style="margin-top:2px; padding:2px 6px; font-size:0.72rem; color:#991b1b;" data-r4-desvincular="1" data-doc-id="${d.documento_id}">✖ Desvincular</button>` : "")
+                            : '<span class="semaphore rojo">⏳ Sin conciliar</span>';
+                        return `<tr>
+                            <td>${dirChip}</td>
+                            <td><strong>${_esc(d.numero)}</strong><div class="cap-sub">${_esc(d.tipo)}</div></td>
+                            <td>${_esc(d.fecha_documento || "—")}</td>
+                            <td><strong>${_esc(d.contraparte_nombre || "Sin contraparte")}</strong><div class="cap-sub">${_esc(d.concepto || d.categoria || "")}</div></td>
+                            <td><strong>${d.monto != null ? _monto(d.monto) : "—"} ${_esc(d.moneda)}</strong></td>
+                            <td>${_esc(d.referencia || "—")}</td>
+                            <td>${estBanco}</td>
                         </tr>`;
                     }).join("");
                 }
@@ -452,7 +500,7 @@
             }
         });
 
-        document.getElementById("cmp-egresos-tbody")?.addEventListener("click", async (e) => {
+        const _handleDesvincularClick = async (e) => {
             const btn = e.target.closest("[data-r4-desvincular]");
             if (!btn) return;
             const docId = Number(btn.getAttribute("data-doc-id"));
@@ -469,7 +517,9 @@
             } catch (err) {
                 alert("❌ " + err.message);
             }
-        });
+        };
+        document.getElementById("cmp-egresos-tbody")?.addEventListener("click", _handleDesvincularClick);
+        document.getElementById("sys-conc-docs-tbody")?.addEventListener("click", _handleDesvincularClick);
 
         document.getElementById("cmp-cajachica-form")?.addEventListener("submit", async (e) => {
             e.preventDefault();

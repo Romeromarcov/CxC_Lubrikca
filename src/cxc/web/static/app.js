@@ -330,11 +330,20 @@ document.addEventListener("DOMContentLoaded", () => {
             if (typeof window.loadOperativosPagosEnviados === "function") window.loadOperativosPagosEnviados();
         } else if (target === "conciliacion") {
             if (typeof loadBancos === "function") loadBancos();
+            if (typeof window.loadConciliacionGastos === "function") window.loadConciliacionGastos();
         }
     }
 
     function applyComprasSubpage(subpage) {
-        const target = ["facturas", "gastos", "conciliacion", "cuentas"].includes(subpage) ? subpage : "facturas";
+        if (subpage === "conciliacion") {
+            if (window.CxC && window.CxC.shell && typeof window.CxC.shell.navigate === "function") {
+                window.CxC.shell.navigate("pagos", "conciliacion");
+            } else {
+                applyPagosSubpage("conciliacion");
+            }
+            return;
+        }
+        const target = ["facturas", "gastos", "cuentas"].includes(subpage) ? subpage : "facturas";
         const panelFacturas = target === "facturas" || target === "gastos";
         document.querySelectorAll("#tab-compras [data-compras-panel]").forEach((panel) => {
             const nombre = panel.getAttribute("data-compras-panel");
@@ -343,6 +352,8 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         const bannerGastos = document.getElementById("compras-gastos-banner");
         if (bannerGastos) bannerGastos.classList.toggle("config-subpage-hidden", target !== "gastos");
+        const cajaSection = document.getElementById("compras-cajachica-section");
+        if (cajaSection) cajaSection.classList.toggle("config-subpage-hidden", target !== "gastos");
         document.querySelectorAll(".compras-subnav-btn").forEach((btn) => {
             btn.classList.toggle("active", btn.getAttribute("data-compras-subpage") === target);
         });
@@ -354,8 +365,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (panelFacturas) {
             if (typeof loadOperativosCompras === "function") loadOperativosCompras();
-        } else if (target === "conciliacion") {
-            if (typeof window.loadConciliacionGastos === "function") window.loadConciliacionGastos();
+            if (target === "gastos" && typeof window.loadConciliacionGastos === "function") {
+                window.loadConciliacionGastos();
+            }
         } else if (target === "cuentas") {
             if (typeof loadPlanCuentasOdoo === "function" && !_ctaCargadoUnaVez) loadPlanCuentasOdoo(false);
         }
@@ -414,21 +426,22 @@ document.addEventListener("DOMContentLoaded", () => {
                     window.loadOperativosPagosEnviados();
                 }
             } else if (path === "ventas") {
-                if (tabParam === "documentos" || tabParam === "seguimiento") {
-                    if (typeof applyVentasSubpage === "function") applyVentasSubpage(tabParam);
-                }
+                const vSub = tabParam === "seguimiento" ? "seguimiento" : "documentos";
+                if (typeof applyVentasSubpage === "function") applyVentasSubpage(vSub);
                 if (typeof loadVentas === "function") loadVentas();
             } else if (path === "compras") {
                 applyComprasSubpage(tabParam || "facturas");
             } else if (path === "reportes") {
-                if (typeof switchReporteSubtab === "function") {
-                    switchReporteSubtab(["resumen", "bd-propia", "cliente", "vendedor"].includes(tabParam) ? tabParam : "resumen");
-                }
+                const repTab = ["consolidado", "cxc", "cxp", "resumen", "bd-propia", "cliente", "vendedor"].includes(tabParam)
+                    ? tabParam
+                    : "consolidado";
+                if (typeof switchReporteSubtab === "function") switchReporteSubtab(repTab);
                 if (typeof loadTasasPromedios === "function") loadTasasPromedios();
                 if (typeof loadReporteDiario === "function") loadReporteDiario();
                 if (typeof loadReporte === "function") loadReporte();
                 if (typeof loadReporteCxcCliente === "function") loadReporteCxcCliente();
                 if (typeof window.loadReportesSaldosPropios === "function") window.loadReportesSaldosPropios();
+                if (typeof window.loadReportesCxPPropios === "function") window.loadReportesCxPPropios();
             } else if (path === "auditoria") {
                 const aSub = ["ordenes", "pagos", "entregas", "historico", "clientes", "integraciones"].includes(tabParam) ? tabParam : "ordenes";
                 if (typeof switchAuditoriaSubtab === "function") switchAuditoriaSubtab(aSub);
@@ -1471,17 +1484,32 @@ document.addEventListener("DOMContentLoaded", () => {
     let fullVendedoresCxc = null;  // null = todavía no cargado
 
     window.switchReporteSubtab = function(name) {
+        const aliasMap = {
+            resumen: "consolidado",
+            "bd-propia": "cxc",
+            cliente: "cxc",
+            vendedor: "cxc",
+        };
+        const canon = aliasMap[name] || (["consolidado", "cxc", "cxp"].includes(name) ? name : "consolidado");
         document.querySelectorAll(".subtab-btn[data-rep-subtab]").forEach(btn => {
-            btn.classList.toggle("active", btn.dataset.repSubtab === name);
+            btn.classList.toggle("active", btn.dataset.repSubtab === canon);
         });
         document.querySelectorAll(".subtab-panel[data-rep-subtab-panel]").forEach(panel => {
-            panel.style.display = (panel.dataset.repSubtabPanel === name) ? "block" : "none";
+            panel.style.display = (panel.dataset.repSubtabPanel === canon) ? "block" : "none";
         });
-        // Se carga al abrir la pestaña: el cálculo tarda unos segundos y la
-        // mayoría de las visitas solo miran la vista por cliente.
-        if (name === "vendedor" && fullVendedoresCxc === null) loadReporteCxcVendedor();
-        if (name === "bd-propia" && typeof window.loadReportesSaldosPropios === "function") {
-            window.loadReportesSaldosPropios();
+        if (name === "vendedor" && typeof window.switchCxcVista === "function") {
+            window.switchCxcVista("vendedores");
+        } else if (name === "cliente" && typeof window.switchCxcVista === "function") {
+            window.switchCxcVista("clientes");
+        }
+        if (canon === "cxc") {
+            if (typeof window.loadReportesSaldosPropios === "function") window.loadReportesSaldosPropios();
+            if (fullVendedoresCxc === null && typeof loadReporteCxcVendedor === "function") loadReporteCxcVendedor();
+        } else if (canon === "cxp") {
+            if (typeof window.loadReportesCxPPropios === "function") window.loadReportesCxPPropios();
+        } else if (canon === "consolidado") {
+            if (typeof window.loadReportesSaldosPropios === "function") window.loadReportesSaldosPropios();
+            if (typeof window.loadReportesCxPPropios === "function") window.loadReportesCxPPropios();
         }
     };
 
@@ -2206,6 +2234,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? `<span class="state-badge" style="background:#ede9fe;color:#5b21b6;" title="${ciTitle}">🏭 Industrial</span>`
                 : `<span class="state-badge" style="background:#f1f5f9;color:#64748b;" title="${ciTitle}">Comercial</span>`;
 
+            const subtotalVal = item.venta_teorica_subtotal != null
+                ? Number(item.venta_teorica_subtotal)
+                : Number(item.venta_neta_real || 0) / 1.16;
+
             row.innerHTML = `
                 <td><strong>${item.so_id}</strong></td>
                 <td><small>${item.fecha_entrega ?? '—'}</small></td>
@@ -2221,6 +2253,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             : '<span style="color:#059669">Vigente</span>'
                 }</td>
                 <td>${facturadaCell}</td>
+                <td style="text-align:right">${fmt(subtotalVal)}</td>
                 <td><strong>${fmt(item.venta_neta_real)}</strong></td>
                 <td><strong>${fmt(item.total_facturado_neto)}</strong></td>
                 <td><strong style="color:#2563eb;">${naVal(item.ves_neta_teorica_iva)}</strong></td>
@@ -2789,28 +2822,43 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/config/tasas-promedios");
             if (res.ok) {
                 const d = await res.json();
-                const bcvLbl = document.getElementById("lbl-rate-bcv-actual");
-                const vigLbl = document.getElementById("lbl-rate-binance-vigente");
-                const mLbl = document.getElementById("lbl-rate-binance-manana");
-                const tLbl = document.getElementById("lbl-rate-binance-tarde");
-                const dLbl = document.getElementById("lbl-rate-binance-diario");
-                const diffLbl = document.getElementById("lbl-rate-diferencial-pct");
+                const bcvStr = d.tasa_bcv_actual ? `Bs. ${Number(d.tasa_bcv_actual).toFixed(2)}` : "-";
+                const eurStr = d.tasa_bcv_euro ? `Bs. ${Number(d.tasa_bcv_euro).toFixed(2)}` : "-";
+                const vigStr = d.tasa_binance_vigente ? `Bs. ${Number(d.tasa_binance_vigente).toFixed(2)}` : "-";
+                const mStr = d.tasa_binance_manana ? `Bs. ${Number(d.tasa_binance_manana).toFixed(2)}` : "N/A";
+                const tStr = d.tasa_binance_tarde ? `Bs. ${Number(d.tasa_binance_tarde).toFixed(2)}` : "N/A";
+                const dStr = d.tasa_binance_diario ? `Bs. ${Number(d.tasa_binance_diario).toFixed(2)}` : "N/A";
+                const diffStr = d.diferencial_bcv_binance_pct != null ? `${Number(d.diferencial_bcv_binance_pct).toFixed(2)}%` : "-";
 
-                if (bcvLbl) bcvLbl.textContent = d.tasa_bcv_actual ? `Bs. ${d.tasa_bcv_actual.toFixed(2)}` : "-";
-                if (vigLbl) vigLbl.textContent = d.tasa_binance_vigente ? `Bs. ${d.tasa_binance_vigente.toFixed(2)}` : "-";
+                const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+                setTxt("lbl-rate-bcv-actual", bcvStr);
+                setTxt("lbl-rate-binance-vigente", vigStr);
+                setTxt("lbl-rate-binance-manana", mStr);
+                setTxt("lbl-rate-binance-tarde", tStr);
+                setTxt("lbl-rate-binance-diario", dStr);
+                setTxt("lbl-rate-diferencial-pct", diffStr);
+
+                setTxt("inicio-rate-bcv-actual", bcvStr);
+                setTxt("inicio-rate-bcv-euro", eurStr);
+                setTxt("inicio-rate-binance-vigente", vigStr);
+                setTxt("inicio-rate-binance-manana", mStr);
+                setTxt("inicio-rate-binance-tarde", tStr);
+                setTxt("inicio-rate-binance-diario", dStr);
+                setTxt("inicio-rate-diferencial-pct", diffStr);
+                if (d.ultima_actualizacion) {
+                    setTxt("inicio-rate-actualizado", `· Act. ${String(d.ultima_actualizacion).slice(0, 16).replace("T", " ")}`);
+                }
+
                 const topBcv = document.getElementById("topbar-bcv");
                 const topBin = document.getElementById("topbar-binance");
-                if (topBcv && d.tasa_bcv_actual) topBcv.textContent = `Bs. ${d.tasa_bcv_actual.toFixed(2)}`;
-                if (topBin && d.tasa_binance_vigente) topBin.textContent = `Bs. ${d.tasa_binance_vigente.toFixed(2)}`;
-                if (mLbl) mLbl.textContent = d.tasa_binance_manana ? `Bs. ${d.tasa_binance_manana.toFixed(2)}` : "N/A";
-                if (tLbl) tLbl.textContent = d.tasa_binance_tarde ? `Bs. ${d.tasa_binance_tarde.toFixed(2)}` : "N/A";
-                if (dLbl) dLbl.textContent = d.tasa_binance_diario ? `Bs. ${d.tasa_binance_diario.toFixed(2)}` : "N/A";
-                if (diffLbl) diffLbl.textContent = `${d.diferencial_bcv_binance_pct.toFixed(2)}%`;
+                if (topBcv && d.tasa_bcv_actual) topBcv.textContent = bcvStr;
+                if (topBin && d.tasa_binance_vigente) topBin.textContent = vigStr;
             }
         } catch (err) {
             console.error("Error loading tasas promedios:", err);
         }
     }
+    window.loadTasasPromedios = loadTasasPromedios;
 
     // Helper for interactive toggle switch
     async function toggleRuleActive(tabla, reglaId, newActive) {
@@ -4815,7 +4863,46 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // "Cerrados a favor de la empresa" tienen su propia bandeja (ver
         // sección debajo) -- no se muestran en la tabla principal.
-        let filtered = cobranzaUnificadaData.filter(i => i.estado !== "cerrado_empresa");
+        const universoCob = cobranzaUnificadaData.filter(i => i.estado !== "cerrado_empresa");
+        const _pagosUnicosSet = (arr) => new Set(arr.map(x => x.pago_id)).size;
+        const _setCobKpi = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
+        _setCobKpi("cob-kpi-total", _pagosUnicosSet(universoCob));
+        _setCobKpi("cob-kpi-pendientes", _pagosUnicosSet(universoCob.filter(x => x.estado === "pendiente")));
+        _setCobKpi("cob-kpi-vinculados", _pagosUnicosSet(universoCob.filter(x => x.estado === "vinculado_local")));
+        _setCobKpi("cob-kpi-conciliados", _pagosUnicosSet(universoCob.filter(x => x.estado === "conciliado_odoo")));
+        _setCobKpi("cob-kpi-recibidos", _pagosUnicosSet(universoCob.filter(x => x.recibido)));
+        _setCobKpi("cob-kpi-duplicados", _pagosUnicosSet(universoCob.filter(x => x.posible_duplicado)));
+
+        document.querySelectorAll(".cob-kpi").forEach(card => {
+            if (card.dataset.wired) return;
+            card.dataset.wired = "1";
+            const handler = () => {
+                const estK = card.getAttribute("data-cob-estado");
+                const dupK = card.getAttribute("data-cob-duplicado");
+                const recK = card.getAttribute("data-cob-recibido");
+                const selE = document.getElementById("cobranza-estado-filter");
+                const chkD = document.getElementById("cobranza-solo-duplicados");
+                if (estK && selE) {
+                    selE.value = estK;
+                    if (chkD) chkD.checked = false;
+                } else if (dupK && chkD) {
+                    if (selE) selE.value = "*";
+                    chkD.checked = true;
+                } else if (recK && selE) {
+                    selE.value = "*";
+                    if (chkD) chkD.checked = false;
+                }
+                window._cobSoloRecibidoKpi = Boolean(recK);
+                renderCobranzaUnificado();
+            };
+            card.addEventListener("click", handler);
+            card.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
+            });
+        });
+
+        let filtered = universoCob;
+        if (window._cobSoloRecibidoKpi) filtered = filtered.filter(i => i.recibido);
         if (selVend !== "*") filtered = filtered.filter(i => (i.vendedor || "Sin Vendedor") === selVend);
         if (selEstado !== "*") filtered = filtered.filter(i => i.estado === selEstado);
         if (selMoneda !== "*") filtered = filtered.filter(i => i.moneda_pago === selMoneda);
@@ -4878,8 +4965,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const origPill = item.origen_sistema === "cxc"
                 ? ' <span class="badge-origen-cxc" title="Registrado vía CxC / Bot">CxC</span>'
                 : ' <span class="badge-origen-odoo" title="Creado directo en Odoo">Odoo</span>';
+            const numOdooLbl = item.numero_pago_odoo || item.odoo_numero_espejo || "";
+            const enlaceOdoo = item.odoo_url
+                ? `<a href="${item.odoo_url}" target="_blank" rel="noopener" title="Abrir pago #${item.pago_id} en Odoo" style="color:#0284c7; text-decoration:underline;">${numOdooLbl || ('#' + item.pago_id)}</a>`
+                : (numOdooLbl ? `<span>${numOdooLbl}</span>` : '');
             const pagoCell = `<strong>${item.pago_id}</strong>${origPill}`
-                + (item.numero_pago_odoo ? `<br><small style="color:#64748b;">${item.numero_pago_odoo}</small>` : '')
+                + (enlaceOdoo ? `<br><small style="color:#64748b;">Odoo: ${enlaceOdoo}</small>` : '')
                 + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} documentos -- no está duplicado">cubre ${total} ${grupo.every(g => g.so_id) ? 'órdenes' : 'documentos'}</small>` : '');
 
             const montoCell = item.moneda_pago === "VES"
@@ -4910,7 +5001,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         + `<br><small style="color:#64748b;">sin orden</small></div>`
                     : `<span style="color:#94a3b8; font-size:0.8rem;">Sin orden</span>`).join('');
 
-            const vendedorCell = `<small>${item.vendedor || 'Sin Vendedor'}</small>`;
+            const regNom = item.registrado_por_nombre || item.vendedor || 'Sin Vendedor';
+            const recPorNom = item.aprobado_o_recibido_por_nombre || item.recibido_por || '';
+            const vendedorCell = `<small><strong>Reg:</strong> ${regNom}</small>`
+                + (recPorNom ? `<br><small style="color:#0369a1;"><strong>Rec:</strong> ${recPorNom}</small>` : '');
 
             const alertas = [];
             if (grupo.some(g => g.posible_duplicado)) alertas.push(`<span title="Mismo cliente/monto/moneda/método/fecha que: ${(item.duplicado_de || []).join(', ')}" style="font-size:0.68rem; color:#b91c1c; font-weight:700;">⚠️ Posible duplicado</span>`);
@@ -5041,17 +5135,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div style="font-size:0.95rem; font-weight:600; color:#0f172a;">${fmt(equiv)}</div>
             </div>`;
 
+        const numOdooModal = base.numero_pago_odoo || base.odoo_numero_espejo || '';
+        const odooModalVal = base.odoo_url
+            ? `<a href="${base.odoo_url}" target="_blank" rel="noopener" style="color:#0284c7;">${numOdooModal || ('Pago #' + base.pago_id)} (#${base.pago_id}) ↗</a>`
+            : (numOdooModal || '-');
+
         let html = `<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:0.5rem 1rem; margin-bottom:1rem;">
             ${campo('🆔', 'Pago ID', base.pago_id)}
-            ${campo('🧾', 'N° Pago Odoo', base.numero_pago_odoo)}
+            ${campo('🧾', 'N° / Enlace Odoo', odooModalVal)}
             ${campo('📅', 'Fecha', base.pago_fecha)}
             ${campo('👤', 'Cliente', base.cliente_nombre)}
-            ${campo('🧑‍💼', 'Vendedor', base.vendedor)}
+            ${campo('🧑‍💼', 'Registró / Vendedor', base.registrado_por_nombre || base.vendedor)}
+            ${campo('🤝', 'Aprobó / Recibió', base.aprobado_o_recibido_por_nombre || base.confirmado_por || base.recibido_por || '-')}
             ${campo('💳', 'Método de Pago', base.metodo_pago)}
             ${campo('💰', 'Monto Original', (base.moneda_pago === 'VES' ? 'Bs. ' + Number(base.monto_pago_original).toLocaleString('es-VE', {minimumFractionDigits:2}) : fmt(base.monto_pago_original)))}
             ${campo('📌', 'Estado', base.estado)}
             ${campo('📥', 'Origen', base.origen)}
-            ${campo('✅', 'Confirmado Por', base.confirmado_por)}
             ${campo('🧾', 'Recibido', base.recibido ? `Sí (${base.numero_recibido || ''}, ${base.fecha_recibido || ''}, ${base.recibido_por || ''})` : 'No')}
         </div>`;
 
@@ -6105,6 +6204,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await _bancosGet("/api/bancos/conciliacion?" + q.toString());
             _bancosConc = data.items;
             _renderBancosConciliacion(data.resumen);
+            if (typeof window.loadConciliacionGastos === "function") {
+                window.loadConciliacionGastos();
+            }
         } catch (err) {
             body.innerHTML = `<tr><td colspan="7" class="table-empty">❌ ${_bancosEsc(err.message)}</td></tr>`;
         }
@@ -6135,6 +6237,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const r = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(r.detail || `Error ${res.status}`);
             await loadBancosConciliacion();
+            if (typeof window.loadConciliacionGastos === "function") window.loadConciliacionGastos();
             out.textContent = `Propuestas: ${r.nuevas} nuevas, ${r.actualizadas} actualizadas, ${r.ya_decididas} ya decididas (no se tocan). ` + out.textContent;
         } catch (err) {
             out.textContent = "❌ " + err.message;
@@ -7749,14 +7852,16 @@ document.addEventListener("DOMContentLoaded", () => {
         _programarEvaluacionMotor();
     }
 
-    function abrirNuevoDocumento(tipo = "cotizacion") {
+    function abrirNuevoDocumento(_tipoInicial = "cotizacion") {
+        // Regla Fase 5B: todo documento comercial nace como Cotización y se convierte a Pedido.
+        const tipo = "cotizacion";
         _cargarCatalogoInicialDocs();
         _docsDescuentosSel = new Set();
         document.getElementById("doc-f-id").value = "";
         document.getElementById("doc-f-partner-id").value = "";
-        document.getElementById("doc-f-tipo-contacto").value = tipo === "pedido" ? "cliente" : "prospecto";
+        document.getElementById("doc-f-tipo-contacto").value = "prospecto";
         document.getElementById("doc-f-tipo").value = tipo;
-        document.getElementById("doc-f-tipo").disabled = false;
+        document.getElementById("doc-f-tipo").disabled = true;
         document.getElementById("doc-f-moneda").value = "VES";
         document.getElementById("doc-buscar-contacto").value = "";
         document.getElementById("doc-f-cliente").value = "";
@@ -7775,7 +7880,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("doc-btn-preview").style.display = "none";
         document.getElementById("doc-btn-convertir").style.display = "none";
         document.getElementById("doc-editor-acciones").style.display = "flex";
-        document.getElementById("doc-editor-titulo").textContent = tipo === "cotizacion" ? "➕ Nueva Cotización" : "🛒 Nuevo Pedido";
+        document.getElementById("doc-editor-titulo").textContent = "➕ Nueva Cotización (convertible a Pedido)";
         document.getElementById("doc-editor-subtitulo").textContent = `Lista por defecto: ${_docsListaDefecto.nombre} · Catálogo real y motor de descuentos CxC`;
         _docsLineasEdit = [];
         _renderSelectorDescuentos(false);
@@ -7795,12 +7900,14 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) throw new Error(d.detail || d.error || `Error ${res.status}`);
             if (typeof d.puede_aprobar === "boolean") _docsPuedeAprobar = d.puede_aprobar;
             const enviado = d.estado === "ENVIADO_ODOO";
+            const vmSync = (d.validacion_motor && d.validacion_motor.sync_odoo) ? d.validacion_motor.sync_odoo : {};
+            const bloqueado = enviado || Boolean(d.confirmado_odoo) || Boolean(d.solo_lectura) || Boolean(vmSync.confirmado_odoo);
             _docsDescuentosSel = new Set((d.descuentos || []).map((x) => x.codigo).filter(Boolean));
             document.getElementById("doc-f-id").value = String(d.id);
             document.getElementById("doc-f-partner-id").value = d.partner_odoo_id ? String(d.partner_odoo_id) : "";
             document.getElementById("doc-f-tipo-contacto").value = d.tipo_contacto || "prospecto";
             document.getElementById("doc-f-tipo").value = d.tipo || "cotizacion";
-            document.getElementById("doc-f-tipo").disabled = enviado;
+            document.getElementById("doc-f-tipo").disabled = bloqueado;
             document.getElementById("doc-f-moneda").value = d.moneda_lista || "VES";
             document.getElementById("doc-buscar-contacto").value = "";
             document.getElementById("doc-f-cliente").value = d.cliente_nombre || "";
@@ -7816,9 +7923,10 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("doc-f-observaciones").value = d.observaciones || "";
 
             let msgHtml = "";
-            if (enviado) {
-                const prefAuto = d.auto_enviado ? "⚡ Auto-enviado automáticamente a Odoo" : "✅ Enviado a Odoo";
-                msgHtml = _docAlertaHtml("ok", `${prefAuto} como ${d.odoo_order_name || ("#" + d.odoo_order_id)} (precios de lista normales + descuentos en chatter).`);
+            if (bloqueado) {
+                const prefAuto = d.auto_enviado ? "⚡ Auto-enviado a Odoo" : "🔒 Confirmado en Odoo (solo lectura)";
+                const notaSync = vmSync.ajustado_desde_odoo ? " · Ajustado automáticamente con cambios desde Odoo." : "";
+                msgHtml = _docAlertaHtml("ok", `${prefAuto} como ${d.odoo_order_name || ("#" + (d.odoo_order_id || ""))} (no editable en CxC; descuentos en chatter).${notaSync}`);
             } else if (d.estado === "PENDIENTE_APROBACION") {
                 const mots = Array.isArray(d.motivos_retencion) && d.motivos_retencion.length
                     ? ` Motivos de retención: ${d.motivos_retencion.join(" · ")}`
@@ -7840,11 +7948,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             const btnConv = document.getElementById("doc-btn-convertir");
             if (btnConv) {
-                btnConv.style.display = (!enviado && d.tipo === "cotizacion" && d.estado !== "RECHAZADO") ? "inline-block" : "none";
+                btnConv.style.display = (!bloqueado && d.tipo === "cotizacion" && d.estado !== "RECHAZADO") ? "inline-block" : "none";
             }
 
-            document.getElementById("doc-editor-acciones").style.display = enviado ? "none" : "flex";
-            document.getElementById("doc-editor-titulo").textContent = `${enviado ? "👁" : "✏️"} ${d.numero} · ${d.cliente_nombre}`;
+            document.getElementById("doc-editor-acciones").style.display = bloqueado ? "none" : "flex";
+            document.getElementById("doc-editor-titulo").textContent = `${bloqueado ? "🔒" : "✏️"} ${d.numero} · ${d.cliente_nombre}`;
             document.getElementById("doc-editor-subtitulo").textContent = `Lista: ${d.lista_precios_nombre || d.moneda_lista} · Origen: ${d.origen === "bot" ? "Bot Telegram" : "Web CxC"} · Actualizado: ${_capFechaHora(d.actualizado_en)}`;
             _docsLineasEdit = (d.lineas || []).map((ln) => ({
                 producto_id: ln.producto_id || "",
@@ -7856,9 +7964,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 precio_unitario: Number(ln.precio_unitario) || 0,
                 descuento_pct: Number(ln.descuento_pct) || 0,
             }));
-            _renderSelectorDescuentos(enviado);
+            _renderSelectorDescuentos(bloqueado);
             _actualizarEtiquetasTipoDoc();
-            _renderLineasEditor(enviado);
+            _renderLineasEditor(bloqueado);
             const card = document.getElementById("doc-editor-card");
             card.style.display = "block";
             card.scrollIntoView({ behavior: "smooth", block: "start" });

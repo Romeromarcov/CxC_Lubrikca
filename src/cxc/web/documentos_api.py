@@ -43,6 +43,11 @@ from cxc.documentos.servicio import (
     DocumentoYaEnviado,
     ServicioDocumentos,
 )
+from cxc.documentos.sync_odoo import (
+    ESTADOS_ODOO_CONFIRMADOS,
+    orden_confirmada_en_odoo,
+    sincronizar_documentos_desde_odoo,
+)
 from cxc.odoo.directorio import filtrar_contactos
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
 from cxc.permisos import tiene
@@ -526,6 +531,35 @@ def _estado_unificado_odoo(estado_orden: str) -> str:
     return ENVIADO_ODOO
 
 
+def _sincronizar_desde_espejo_seguro(servicio: ServicioDocumentos, repo_cxc: Any) -> dict[str, int]:
+    from cxc.web.app import get_pricelist_mapeo
+
+    try:
+        mapeo = get_pricelist_mapeo(repo_cxc)
+    except Exception:
+        mapeo = {}
+    try:
+        return sincronizar_documentos_desde_odoo(
+            repo_cxc,
+            servicio._repo,
+            pricelist_mapeo=mapeo,
+        )
+    except Exception as exc:
+        logger.debug("Sync espejo -> documentos omitido: %s", exc)
+        return {"revisados": 0, "ajustados": 0, "confirmados": 0, "cancelados": 0}
+
+
+@router.post("/api/ventas/sincronizar-odoo")
+def sincronizar_ventas_desde_odoo_api(
+    servicio: ServicioDocsDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _usuario_doc(cxc_session, *PERMISOS_VER_DOCS)
+    repo_cxc, _ = _repo_y_engine(servicio)
+    res = _sincronizar_desde_espejo_seguro(servicio, repo_cxc)
+    return {"ok": True, **res}
+
+
 @router.get("/api/ventas/unificadas")
 def listar_ventas_unificadas(
     servicio: ServicioDocsDep,
@@ -536,6 +570,8 @@ def listar_ventas_unificadas(
     limit: int = 150,
     cxc_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
+    from cxc.web.app import get_pricelist_mapeo
+
     user = _usuario_doc(cxc_session, *PERMISOS_VER_DOCS)
     orig_filtro = (origen or "todos").strip().lower()
     if orig_filtro not in ("todos", "cxc", "odoo"):
@@ -544,8 +580,17 @@ def listar_ventas_unificadas(
     estado_filtro = (estado or "").strip().upper()
     q_filtro = (q or "").strip().lower()
 
-    docs_cxc, _, _ = servicio.listar(limit=500, offset=0)
     repo_cxc, _ = _repo_y_engine(servicio)
+    _sincronizar_desde_espejo_seguro(servicio, repo_cxc)
+
+    docs_cxc, _, _ = servicio.listar(limit=500, offset=0)
+    ordenes_all = list(repo_cxc.all_ordenes())
+    ordenes_por_so = {str(o.so_id or "").strip().upper(): o for o in ordenes_all if o.so_id}
+
+    try:
+        pricelists_map = get_pricelist_mapeo(repo_cxc)
+    except Exception:
+        pricelists_map = {}
 
     clientes_map = {str(c.cliente_id): c for c in repo_cxc.all_clientes()}
     vinculados_so: set[str] = {
@@ -557,17 +602,56 @@ def listar_ventas_unificadas(
     filas: list[dict[str, Any]] = []
     for d in docs_cxc:
         item = d.a_dict(incluir_lineas=True)
+        so_key = (d.odoo_order_name or "").strip().upper()
+        ord_esp = ordenes_por_so.get(so_key)
+        confirmado = orden_confirmada_en_odoo(ord_esp, d) or d.estado == ENVIADO_ODOO
+        vm = d.validacion_motor if isinstance(d.validacion_motor, dict) else {}
+        raw_sync = vm.get("sync_odoo")
+        sync_meta: dict[str, Any] = raw_sync if isinstance(raw_sync, dict) else {}
         item["origen_sistema"] = "cxc"
-        item["solo_lectura"] = False
+        item["estado_odoo"] = (
+            ord_esp.estado_orden
+            if ord_esp is not None
+            else str(sync_meta.get("estado_odoo") or ("sale" if d.estado == ENVIADO_ODOO else ""))
+        )
+        item["confirmado_odoo"] = bool(confirmado)
+        item["ajustado_desde_odoo"] = bool(sync_meta.get("ajustado_desde_odoo"))
+        item["solo_lectura"] = bool(confirmado)
         filas.append(item)
 
-    for o in repo_cxc.all_ordenes():
+    for o in ordenes_all:
         so_key = str(o.so_id or "").strip().upper()
         if not so_key or so_key in vinculados_so:
             continue
         cli = clientes_map.get(str(o.cliente_id))
         est_unif = _estado_unificado_odoo(o.estado_orden)
+        est_raw = (o.estado_orden or "sale").strip().lower()
         fecha_iso = o.fecha.isoformat()
+        try:
+            lineas_o = repo_cxc.lineas_de_orden(o.so_id)
+        except Exception:
+            lineas_o = []
+        tot_con_imp = round(float(o.monto_total or 0), 2)
+        if lineas_o:
+            sub_o = round(
+                sum(
+                    float(
+                        ln.subtotal
+                        if ln.subtotal and ln.subtotal > 0
+                        else ln.cantidad * ln.precio_unitario
+                    )
+                    for ln in lineas_o
+                ),
+                2,
+            )
+        else:
+            sub_o = round(tot_con_imp / 1.16, 2) if tot_con_imp > 0 else 0.0
+        iva_o = max(0.0, round(tot_con_imp - sub_o, 2))
+        pl_info = pricelists_map.get(str(o.lista_precios or ""), {})
+        pl_nombre = str(pl_info.get("name") or pl_info.get("nombre") or o.lista_precios or "—")
+        pl_mon = str(pl_info.get("moneda") or "USD").upper()
+        if pl_mon not in ("USD", "VES"):
+            pl_mon = "USD"
         filas.append(
             {
                 "id": None,
@@ -577,6 +661,8 @@ def listar_ventas_unificadas(
                 "tipo": PEDIDO,
                 "estado": est_unif,
                 "estado_odoo": o.estado_orden,
+                "confirmado_odoo": est_raw in ESTADOS_ODOO_CONFIRMADOS,
+                "ajustado_desde_odoo": False,
                 "origen": "odoo",
                 "origen_sistema": "odoo",
                 "solo_lectura": True,
@@ -588,17 +674,17 @@ def listar_ventas_unificadas(
                 "email": "",
                 "telefono": "",
                 "direccion": "",
-                "moneda_lista": "USD",
-                "lista_precios_id": "",
-                "lista_precios_nombre": o.lista_precios,
+                "moneda_lista": pl_mon,
+                "lista_precios_id": str(o.lista_precios or ""),
+                "lista_precios_nombre": pl_nombre,
                 "vendedor_email": o.vendedor_email,
-                "subtotal": float(o.monto_total),
+                "subtotal": sub_o,
                 "total_descuentos": 0.0,
-                "subtotal_neto": float(o.monto_total),
-                "monto_iva": 0.0,
-                "total_con_iva": float(o.monto_total),
+                "subtotal_neto": sub_o,
+                "monto_iva": iva_o,
+                "total_con_iva": tot_con_imp,
                 "total_litros": 0.0,
-                "n_lineas": 0,
+                "n_lineas": len(lineas_o),
                 "lineas_sin_catalogo": 0,
                 "descuentos": [],
                 "alertas_motor": [],
@@ -614,6 +700,9 @@ def listar_ventas_unificadas(
             }
         )
 
+    confirmados = [
+        x for x in filas if x["estado"] == ENVIADO_ODOO and x.get("estado_odoo", "sale") != "cancel"
+    ]
     resumen = {
         "total": len(filas),
         "origen_cxc": sum(1 for x in filas if x["origen_sistema"] == "cxc"),
@@ -621,13 +710,27 @@ def listar_ventas_unificadas(
         "cotizaciones_borrador": sum(
             1 for x in filas if x["tipo"] == COTIZACION and x["estado"] == BORRADOR
         ),
+        "total_cotizaciones": sum(
+            1 for x in filas if x["tipo"] == COTIZACION and x["estado"] == BORRADOR
+        ),
         "pedidos_pendientes_aprobacion": sum(
             1 for x in filas if x["estado"] == PENDIENTE_APROBACION
         ),
+        "pendientes_aprobacion": sum(1 for x in filas if x["estado"] == PENDIENTE_APROBACION),
         "pedidos_auto_enviados": sum(
             1 for x in filas if x["estado"] == ENVIADO_ODOO and x.get("auto_enviado")
         ),
-        "enviados_odoo": sum(1 for x in filas if x["estado"] == ENVIADO_ODOO),
+        "auto_enviados": sum(
+            1 for x in filas if x["estado"] == ENVIADO_ODOO and x.get("auto_enviado")
+        ),
+        "enviados_odoo": len(confirmados),
+        "total_confirmados": len(confirmados),
+        "subtotal_confirmado_usd": round(
+            sum(float(x.get("subtotal") or 0) for x in confirmados), 2
+        ),
+        "total_con_iva_confirmado_usd": round(
+            sum(float(x.get("total_con_iva") or x.get("subtotal") or 0) for x in confirmados), 2
+        ),
         "rechazados": sum(1 for x in filas if x["estado"] == RECHAZADO),
         "con_error": sum(1 for x in filas if x["estado"] == ERROR_ODOO),
     }
