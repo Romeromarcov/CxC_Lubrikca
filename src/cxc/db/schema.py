@@ -1249,3 +1249,61 @@ documentos_comerciales_lineas = Table(
     Column("descuento_pct", PCT, nullable=False, server_default="0"),
     Column("subtotal", MONEY, nullable=False, server_default="0"),
 )
+
+# --- Documentos Operativos: Pagos recibidos, Facturas prov., Pagos prov. y Gastos (nov-2026) --
+# Flujo homologado Bot <-> CxC (Validacion + Preview + Aprobacion) <-> Odoo: cada documento
+# pasa por validacion en vivo y preview antes de ser autorizado para crearse en borrador en Odoo.
+documentos_operativos = Table(
+    "documentos_operativos",
+    metadata,
+    Column("documento_id", Integer, primary_key=True, autoincrement=True),
+    Column("numero", String, nullable=False, unique=True),  # PAG-/FPR-/PPR-/GAS-00001
+    Column("token_preview", String(64), nullable=False, unique=True, index=True),
+    # pago | factura_proveedor | pago_proveedor | gasto
+    Column("tipo", String, nullable=False, index=True),
+    # BORRADOR | INCOMPLETO | PENDIENTE_APROBACION | ENVIADO_ODOO | RECHAZADO | ERROR
+    Column("estado", String, nullable=False, server_default="PENDIENTE_APROBACION", index=True),
+    Column("origen", String, nullable=False, server_default="web"),  # bot | web
+    Column("captura_id", Integer, nullable=True, index=True),
+    Column("partner_odoo_id", Integer, nullable=True),
+    Column("contraparte_nombre", String, nullable=False, server_default=""),
+    Column("rif", String, nullable=False, server_default=""),
+    Column("monto", MONEY, nullable=True),
+    Column("base_imponible", MONEY, nullable=True),
+    Column("iva", MONEY, nullable=True),
+    Column("moneda", String, nullable=False, server_default="VES"),
+    Column("metodo_pago", String, nullable=False, server_default=""),
+    Column("banco", String, nullable=False, server_default=""),
+    Column("diario_id", Integer, nullable=True),
+    Column("diario_nombre", String, nullable=False, server_default=""),
+    Column("cuenta_contable_id", Integer, nullable=True),
+    Column("cuenta_contable_codigo", String, nullable=False, server_default=""),
+    Column("cuenta_contable_nombre", String, nullable=False, server_default=""),
+    Column("referencia", String, nullable=False, server_default=""),
+    Column("numero_documento", String, nullable=False, server_default=""),
+    Column("numero_control", String, nullable=False, server_default=""),
+    Column("pedido_ref", String, nullable=False, server_default=""),
+    Column("factura_ref", String, nullable=False, server_default=""),
+    Column("orden_ref", String, nullable=False, server_default=""),
+    Column("categoria", String, nullable=False, server_default=""),
+    Column("concepto", Text, nullable=False, server_default=""),
+    Column("sin_factura", Boolean, nullable=False, server_default="false"),
+    Column("fecha_documento", Date, nullable=True),
+    Column("fecha_vencimiento", Date, nullable=True),
+    Column("proveedor_telefono", String, nullable=False, server_default=""),
+    Column("proveedor_email", String, nullable=False, server_default=""),
+    Column("proveedor_direccion", Text, nullable=False, server_default=""),
+    Column("notas", Text, nullable=False, server_default=""),
+    Column("validacion_json", Text, nullable=False, server_default="{}"),
+    Column("faltantes_json", Text, nullable=False, server_default="[]"),
+    Column("aprobado_por", String, nullable=False, server_default=""),
+    Column("aprobado_en", DateTime(timezone=False), nullable=True),
+    Column("rechazo_motivo", Text, nullable=False, server_default=""),
+    Column("odoo_model", String, nullable=False, server_default=""),
+    Column("odoo_res_id", Integer, nullable=True),
+    Column("odoo_ref", String, nullable=False, server_default=""),
+    Column("error_odoo", Text, nullable=False, server_default=""),
+    Column("creado_por", String, nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)

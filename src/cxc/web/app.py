@@ -190,6 +190,7 @@ from cxc.web.capturas_api import router as capturas_router
 from cxc.web.capturas_api import run_reintentos_capturas_en_background
 from cxc.web.directorio_api import router as directorio_router
 from cxc.web.documentos_api import router as documentos_router
+from cxc.web.operativos_api import router as operativos_router
 
 logger = logging.getLogger("cxc.web.app")
 
@@ -199,6 +200,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 app.include_router(capturas_router)  # capturas de Telegram (src/cxc/web/capturas_api.py)
 app.include_router(documentos_router)  # documentos comerciales y catálogo bots (documentos_api.py)
+app.include_router(operativos_router)  # pagos, compras y gastos operativos (operativos_api.py)
 # Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas y documentos: así las rutas
 # de ``/api/bots/capturas|catalogo|contactos`` ganan a ``/api/bots/{bot}``.
 app.include_router(bots_router)
@@ -1166,9 +1168,7 @@ def _sincronizar_aplicaciones_conciliadas(
             # cortar el resto del lote -- antes de esto la excepción salía del
             # ``for`` entero y las aplicaciones que venían después, en la misma
             # corrida, ni se procesaban. Ver TIPO_AUDITORIA_APLICACION_NO_ESCRITA.
-            logger.warning(
-                "Aplicación %s/%s no se pudo escribir: %s", pago_id, so_id, e_escritura
-            )
+            logger.warning("Aplicación %s/%s no se pudo escribir: %s", pago_id, so_id, e_escritura)
             errores.append({"pago_id": pago_id, "so_id": so_id, "motivo": str(e_escritura)})
             continue
         if previa is None:
@@ -1761,7 +1761,6 @@ def _guardar_auditoria_de_cambios(repo: Any, cambios: list[dict[str, Any]]) -> N
         logger.warning("Error guardando auditoría de re-vinculación por Odoo: %s", e_aud)
 
 
-
 def _alinear_con_el_reparto_de_odoo(
     repo: Any, aplicaciones: list[AplicacionConciliada]
 ) -> dict[str, int]:
@@ -2252,9 +2251,7 @@ class MetaRequest(BaseModel):
     fallback_industrial_ajuste_pct: float = 0.04
     # Ítem 6 (clasificación Comercial/Industrial, septiembre 2026): litros
     # de líneas industriales a partir de los cuales esa señal cuenta.
-    umbral_litros_clasificacion_industrial: float = Field(
-        default=18.92, ge=0, allow_inf_nan=False
-    )
+    umbral_litros_clasificacion_industrial: float = Field(default=18.92, ge=0, allow_inf_nan=False)
 
 
 class FilaMapeoRequest(BaseModel):
@@ -3115,9 +3112,7 @@ async def get_auditoria_consolidada(monto_minimo: float = 25.0, pct_minimo: floa
             d
             for d in aud.get("discrepancias", [])
             if d.get("tipo") != "Precio Inferior a Lista"
-            or _material(
-                float(d.get("diferencia_monto") or 0), float(d.get("esperado") or 0)
-            )
+            or _material(float(d.get("diferencia_monto") or 0), float(d.get("esperado") or 0))
         ]
         ventas_alerta = [
             it
@@ -4148,9 +4143,7 @@ async def api_admin_catalogo_permisos(cxc_session: str | None = Cookie(default=N
             {"rol": rol, "nombre": NOMBRES_ROLES.get(rol, rol), "base": accesos.efectivos(rol)}
             for rol in accesos.BASE_POR_ROL
         ],
-        "permisos": [
-            {**p, "editable": p["clave"] in accesos.EDITABLES} for p in accesos.CATALOGO
-        ],
+        "permisos": [{**p, "editable": p["clave"] in accesos.EDITABLES} for p in accesos.CATALOGO],
     }
 
 
@@ -4204,9 +4197,7 @@ async def api_admin_bitacora_accesos(
     cxc_session: str | None = Cookie(default=None),
 ):
     _admin_de_accesos(cxc_session)
-    return {
-        "cambios": accesos.bitacora(get_repo()._engine, email, max(1, min(limite, 1000)))
-    }
+    return {"cambios": accesos.bitacora(get_repo()._engine, email, max(1, min(limite, 1000)))}
 
 
 @app.post("/api/admin/cambiar-rol")
@@ -4546,9 +4537,7 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
                 equiv_usd_binance,
                 equiv_ves_bcv,
                 equiv_ves_binance,
-            ) = _congelar_equivalentes(
-                monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance
-            )
+            ) = _congelar_equivalentes(monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance)
         except ValueError as e_tasa:
             raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
 
@@ -4671,9 +4660,7 @@ async def put_editar_vinculacion(
                 equiv_usd_binance,
                 equiv_ves_bcv,
                 equiv_ves_binance,
-            ) = _congelar_equivalentes(
-                monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance
-            )
+            ) = _congelar_equivalentes(monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance)
         except ValueError as e_tasa:
             raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
 
@@ -5622,7 +5609,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         saldo_minimo_items = []  # Tarea 3: facturadas con saldo residual <= $1
         vendedores_set = set()
 
-
         today_date = date.today()
 
         # Setup engine objects for on-the-fly calculation when order is not in BandejaFacturacion
@@ -6176,7 +6162,6 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 today_date,
             )
             fecha_vencimiento = dt_venc.isoformat() if dt_venc else o.fecha.isoformat()
-
 
             conc = concs.get(o.so_id)
 
@@ -7524,9 +7509,7 @@ async def get_config_meta():
         if "fallback_industrial_ajuste_pct" not in meta:
             meta["fallback_industrial_ajuste_pct"] = str(_AJUSTE_INDUSTRIAL_PCT_DEFAULT)
         if "umbral_litros_clasificacion_industrial" not in meta:
-            meta["umbral_litros_clasificacion_industrial"] = str(
-                UMBRAL_LITROS_INDUSTRIAL_DEFAULT
-            )
+            meta["umbral_litros_clasificacion_industrial"] = str(UMBRAL_LITROS_INDUSTRIAL_DEFAULT)
         return meta
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
@@ -7543,9 +7526,7 @@ async def post_config_meta(req: MetaRequest):
         repo.set_config("marca_fallback", req.marca_fallback or "GLOBAL OIL")
         set_marca_fallback(req.marca_fallback)
         set_ajuste_industrial_pct(Decimal(str(req.fallback_industrial_ajuste_pct)), repo)
-        set_umbral_litros_industrial(
-            Decimal(str(req.umbral_litros_clasificacion_industrial)), repo
-        )
+        set_umbral_litros_industrial(Decimal(str(req.umbral_litros_clasificacion_industrial)), repo)
 
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
@@ -10400,9 +10381,7 @@ def _vincular_masivo_sync(
         # solo pago sin tasa abortaba el lote entero, o sea el paso Auto-FIFO
         # del demonio o el endpoint masivo con cero procesados.
         try:
-            tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(
-                hora_pago_confirmada, tasas_rows
-            )
+            tasa_bcv_del_dia, tasa_binance = get_rate_for_datetime(hora_pago_confirmada, tasas_rows)
         except TasaNoDisponible as e_tasa:
             logger.warning(
                 "Vinculacion masiva: pago %s con orden %s se saltea, %s", pago_id, so_id, e_tasa
@@ -10420,9 +10399,7 @@ def _vincular_masivo_sync(
                 equiv_usd_binance,
                 equiv_ves_bcv,
                 equiv_ves_binance,
-            ) = _congelar_equivalentes(
-                monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance
-            )
+            ) = _congelar_equivalentes(monto_dec, _moneda_de(pago.moneda), tasa_bcv, tasa_binance)
         except ValueError as e_tasa:
             # Se saltea ESTA fila y sigue el lote: congelar un equivalente con una
             # tasa en cero seria peor que no vincular, y abortar el lote entero por
@@ -17287,8 +17264,7 @@ async def get_config_clasificacion_clientes():
                     "cliente_id": c.cliente_id,
                     "nombre": c.nombre,
                     "es_industrial": (
-                        str(m.get("es_industrial", "false")).strip().lower()
-                        in ("true", "1", "yes")
+                        str(m.get("es_industrial", "false")).strip().lower() in ("true", "1", "yes")
                         if m
                         else False
                     ),
@@ -18103,6 +18079,7 @@ def _get_reporte_diario_sync(
 # archivos no ve saldos consolidados ni movimientos. Nada de esto escribe en Odoo:
 # el CSV de líneas de extracto lo importa una
 # persona en el diario del banco.
+
 
 def _usuario_bancos(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
     """La sesión, si tiene AL MENOS UNO de los permisos (ver ``cxc.permisos``)."""

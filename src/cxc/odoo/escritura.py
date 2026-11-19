@@ -700,12 +700,14 @@ class EscritorOdoo:
         marca: str,
         narration: str,
         journal_id: int | None = None,
+        account_id: int | None = None,
+        nota_chatter: str | None = None,
     ) -> int:
         """``account.move`` ``in_invoice`` en BORRADOR (no se publica) con una línea.
 
         Por defecto va siempre al diario de compras en VES (salvo ``journal_id`` explícito).
         No inventa impuestos: la línea va con ``tax_ids`` vacío y el IVA y el número de control que
-        dio el bot quedan en ``narration`` para que contabilidad los asigne en Odoo.
+        dio el bot quedan en ``narration`` (y opcionalmente en el chatter) para contabilidad.
         """
         con_impuestos = self._validar_campos_factura()
         previo = self.factura_por_marca(marca)
@@ -713,6 +715,8 @@ class EscritorOdoo:
             return previo
         diario = journal_id if journal_id is not None else self.diario_compras_ves_id()
         linea: dict[str, Any] = {"name": concepto, "quantity": 1.0, "price_unit": float(monto)}
+        if account_id is not None and "account_id" in self.campos("account.move.line"):
+            linea["account_id"] = int(account_id)
         if con_impuestos:
             linea["tax_ids"] = [(6, 0, [])]
         vals = _vals(
@@ -728,4 +732,7 @@ class EscritorOdoo:
             narration=f"{marca} · {narration}",
             invoice_line_ids=[(0, 0, linea)],
         )
-        return self._crear("account.move", vals)
+        move_id = self._crear("account.move", vals)
+        if nota_chatter and "message_ids" in self.campos("account.move"):
+            self.nota_chatter("account.move", move_id, nota_chatter)
+        return move_id

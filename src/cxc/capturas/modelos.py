@@ -58,6 +58,9 @@ CAMPOS_PAGO = frozenset(
         "pedido_ref",
         "proveedor",
         "factura_ref",
+        "partner_odoo_id",
+        "diario_id",
+        "notas",
     }
 )
 
@@ -81,14 +84,22 @@ CAMPOS_FACTURA = frozenset(
         "proveedor_direccion",
         "proveedor_telefono",
         "proveedor_email",
+        "partner_odoo_id",
         # preparado para cuestionario futuro de selección de diario (por defecto va al diario VES)
         "diario_id",
         "diario_codigo",
+        "cuenta_contable_id",
     }
 )
 
 # Campos de un gasto (compra menor ya pagada) que se pueden corregir con /completar.
-CAMPOS_GASTO = CAMPOS_FACTURA | {"categoria"}
+CAMPOS_GASTO = CAMPOS_FACTURA | {
+    "categoria",
+    "metodo_pago",
+    "referencia",
+    "banco",
+    "sin_factura",
+}
 
 # Qué tipos se completan después de enviados y con qué campos.
 CAMPOS_COMPLETABLES: dict[str, frozenset[str]] = {

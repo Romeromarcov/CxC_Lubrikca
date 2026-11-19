@@ -121,6 +121,20 @@ ACCIONES: tuple[Permiso, ...] = (
         "descripcion": "Botón de generar recibo de cobro.",
     },
     {
+        "clave": "cobranza.aprobar_pagos",
+        "grupo": "Cobranza",
+        "nombre": "Autorizar pagos recibidos para Odoo",
+        "descripcion": "Aprobar o rechazar pagos de clientes capturados en CxC/Telegram "
+        "y enviarlos como borrador a Odoo.",
+    },
+    {
+        "clave": "compras.aprobar_documentos",
+        "grupo": "Compras y Gastos",
+        "nombre": "Autorizar facturas, pagos a proveedores y gastos",
+        "descripcion": "Aprobar o rechazar facturas de proveedor, pagos a proveedores y gastos "
+        "sin factura para enviarlos como borrador a Odoo.",
+    },
+    {
         "clave": "ventas.aprobar_pedidos",
         "grupo": "Ventas",
         "nombre": "Autorizar pedidos para envío a Odoo",
@@ -176,6 +190,8 @@ BASE_POR_ROL: dict[str, frozenset[str]] = {
     "gerente_ventas": _PAGINAS_SIN_BANCOS
     | {
         "cobranza.recibo",
+        "cobranza.aprobar_pagos",
+        "compras.aprobar_documentos",
         "ventas.aprobar_pedidos",
         "sistema.recalcular",
         "capturas.ver",
@@ -184,7 +200,15 @@ BASE_POR_ROL: dict[str, frozenset[str]] = {
         "bots.gestionar",
     },
     "tesoreria": _PAGINAS_SIN_BANCOS
-    | {"cobranza.recibo", "capturas.ver", "capturas.gestionar", "bots.ver", "bots.gestionar"},
+    | {
+        "cobranza.recibo",
+        "cobranza.aprobar_pagos",
+        "compras.aprobar_documentos",
+        "capturas.ver",
+        "capturas.gestionar",
+        "bots.ver",
+        "bots.gestionar",
+    },
     "auditor": _PAGINAS_SIN_BANCOS
     | {"bancos.ver", "auditoria.decidir", "capturas.ver", "bots.ver"},
     "ventas": _PAGINAS_SIN_BANCOS,
