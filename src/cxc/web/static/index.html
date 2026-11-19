@@ -2515,59 +2515,150 @@
             </div>
         </div>
 
-        <!-- PESTAÑA 8: CONTACTOS (Directorio Unificado Odoo + Bots) -->
+        <!-- PESTAÑA 8: CONTACTOS (Maestro Único Odoo + Bots + CxC + Anti-Duplicados) -->
         <div id="tab-contactos" class="tab-panel">
-            <div style="display:flex; flex-direction:column; gap:1.5rem;">
+            <div style="display:flex; flex-direction:column; gap:1.25rem;">
                 <section class="card" style="padding:1.5rem;">
-                    <div class="panel-header-row">
+                    <div class="panel-header-row" style="gap:0.75rem; flex-wrap:wrap;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">👥 Contactos en Odoo: Prospectos, Clientes y Proveedores</h2>
-                            <p style="color:#475569; margin:0;">Consulta directa (solo lectura) de <code>res.partner</code> en Odoo. Clasifica cada contacto según su rango comercial en <strong>Prospecto</strong> (sin compras ni ventas aún), <strong>Cliente</strong>, <strong>Proveedor</strong> o <strong>Cliente y Proveedor</strong>, destacando los borradores creados por Telegram.</p>
+                            <h2 style="margin:0 0 0.25rem 0;">👥 Maestro Único de Contactos (Odoo + Bots + CxC)</h2>
+                            <p style="color:#475569; margin:0; font-size:0.9rem;">Base centralizada para validar prospectos, clientes y proveedores antes de crear en Odoo, medir completitud de datos (incluyendo GPS) y detectar o fusionar duplicados.</p>
                         </div>
-                        <button type="button" class="btn-secondary" onclick="loadContactosOdoo(true)">↻ Recargar desde Odoo</button>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" id="btn-nuevo-contacto-maestro" class="btn-primary" onclick="abrirModalContactoMaestro(null)">➕ Nuevo Contacto</button>
+                            <button type="button" id="btn-sync-contactos-maestro" class="btn-secondary" onclick="sincronizarContactosMaestro()">🔄 Sincronizar con Odoo</button>
+                        </div>
                     </div>
 
-                    <div class="dashboard-kpi-row" id="odoo-contactos-kpis" style="margin:1rem 0;">
-                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="" role="button" tabindex="0"><h3>Total en Odoo</h3><p id="dir-n-total">—</p><span>Contactos activos</span></div>
-                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="prospecto" role="button" tabindex="0"><h3>Prospectos</h3><p id="dir-n-prospectos">—</p><span>Sin rango comercial aún</span></div>
-                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="cliente" role="button" tabindex="0"><h3>Clientes</h3><p id="dir-n-clientes">—</p><span>Con rango de cliente</span></div>
-                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="proveedor" role="button" tabindex="0"><h3>Proveedores</h3><p id="dir-n-proveedores">—</p><span>Con rango de proveedor</span></div>
-                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="ambos" role="button" tabindex="0"><h3>Cliente y proveedor</h3><p id="dir-n-ambos">—</p><span>Ambos rangos en Odoo</span></div>
-                        <div class="card kpi-card dir-kpi" data-dir-clasificacion="borrador_telegram" role="button" tabindex="0"><h3>Borrador Telegram</h3><p id="dir-n-borradores">—</p><span>Creados desde los bots</span></div>
+                    <div class="tab-navigation" role="tablist" aria-label="Vistas de Contactos" style="margin:1rem 0 0.75rem 0; flex-wrap:wrap;">
+                        <button type="button" class="tab-btn active" data-contactos-subtab="maestro" onclick="switchContactosSubtab('maestro')">📋 Directorio Unificado</button>
+                        <button type="button" class="tab-btn" data-contactos-subtab="duplicados" onclick="switchContactosSubtab('duplicados')">⚠️ Revisión de Duplicados <span id="contactos-duplicados-badge" class="badge" style="background:#fef3c7; color:#92400e; margin-left:0.25rem;">0</span></button>
+                        <button type="button" class="tab-btn" data-contactos-subtab="odoo-raw" onclick="switchContactosSubtab('odoo-raw')">🔍 Consulta Directa Odoo</button>
                     </div>
 
-                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
-                        <select id="dir-clasificacion" class="filter-select" aria-label="Clasificación de contacto">
-                            <option value="">Todas las clasificaciones</option>
-                            <option value="prospecto">Prospectos (sin compras/ventas)</option>
-                            <option value="cliente">Clientes (incluye ambos)</option>
-                            <option value="proveedor">Proveedores (incluye ambos)</option>
-                            <option value="ambos">Cliente y proveedor a la vez</option>
-                            <option value="borrador_telegram">Borradores creados por Telegram</option>
-                        </select>
-                        <input type="text" id="dir-buscar" class="filter-select" placeholder="Buscar por nombre, RIF, teléfono, correo o vendedor..." style="cursor:text; min-width:280px; flex:1;">
-                    </div>
-                    <p id="dir-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+                    <div id="contactos-maestro-aviso" style="display:none; margin-bottom:0.75rem; padding:0.6rem 0.85rem; border-radius:8px; font-size:0.85rem;"></div>
 
-                    <div class="table-wrapper large-table">
-                        <table class="cxc-table">
-                            <thead>
-                                <tr>
-                                    <th>ID Odoo</th>
-                                    <th>Nombre / Razón Social</th>
-                                    <th>RIF</th>
-                                    <th>Clasificación</th>
-                                    <th>Teléfono / Correo</th>
-                                    <th>Ciudad / Vendedor</th>
-                                    <th>Origen / Notas</th>
-                                </tr>
-                            </thead>
-                            <tbody id="dir-contactos-body">
-                                <tr><td colspan="7" class="table-empty">Selecciona esta pestaña para consultar los contactos en Odoo...</td></tr>
-                            </tbody>
-                        </table>
+                    <!-- SUBVISTA 1: DIRECTORIO UNIFICADO -->
+                    <div id="contactos-subtab-maestro">
+                        <div class="dashboard-kpi-row" id="contactos-maestro-kpis" style="margin:0.75rem 0 1rem 0;">
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="all" role="button" tabindex="0"><h3>Total Maestro</h3><p id="cm-n-total">—</p><span>Contactos activos</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="origen:odoo" role="button" tabindex="0"><h3>En Odoo</h3><p id="cm-n-odoo">—</p><span>Vinculados a res.partner</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="origen:bot" role="button" tabindex="0"><h3>Bots / CxC</h3><p id="cm-n-bots">—</p><span>Capturados por bots/web</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="rol:prospecto" role="button" tabindex="0"><h3>Prospectos</h3><p id="cm-n-prospectos">—</p><span>Sin pedido formal</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="rol:cliente" role="button" tabindex="0"><h3>Clientes</h3><p id="cm-n-clientes">—</p><span>Con rango comercial</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="rol:proveedor" role="button" tabindex="0"><h3>Proveedores</h3><p id="cm-n-proveedores">—</p><span>Cuentas por pagar</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="incompletos" role="button" tabindex="0"><h3>Incompletos</h3><p id="cm-n-incompletos">—</p><span>Completitud &lt; 80%</span></div>
+                            <div class="card kpi-card cm-kpi" data-cm-filtro="duplicados" role="button" tabindex="0"><h3>Posibles Duplicados</h3><p id="cm-n-duplicados">—</p><span>Requieren revisión</span></div>
+                        </div>
+
+                        <div style="display:flex; gap:0.65rem; align-items:center; flex-wrap:wrap; margin:0.75rem 0;">
+                            <input type="text" id="contacto-maestro-buscar" class="filter-select" placeholder="Buscar por nombre, RIF, teléfono, email, ciudad o #ID Odoo..." style="cursor:text; min-width:260px; flex:1;">
+                            <select id="contacto-maestro-origen" class="filter-select" aria-label="Origen">
+                                <option value="">Todos los orígenes</option>
+                                <option value="odoo">Odoo</option>
+                                <option value="bot">Bots Telegram</option>
+                                <option value="cxc">CxC Web</option>
+                            </select>
+                            <select id="contacto-maestro-rol" class="filter-select" aria-label="Rol">
+                                <option value="">Todos los roles</option>
+                                <option value="prospecto">Prospecto</option>
+                                <option value="cliente">Cliente</option>
+                                <option value="proveedor">Proveedor</option>
+                                <option value="ambos">Cliente y Proveedor</option>
+                            </select>
+                            <select id="contacto-maestro-estado" class="filter-select" aria-label="Estado de validación">
+                                <option value="">Todos los estados</option>
+                                <option value="PENDIENTE">Pendiente validación</option>
+                                <option value="VALIDADO">Validado en CxC</option>
+                                <option value="ENVIADO_ODOO">En Odoo</option>
+                            </select>
+                            <label style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.84rem; color:#334155; cursor:pointer;">
+                                <input type="checkbox" id="contacto-maestro-incompletos"> Solo incompletos
+                            </label>
+                        </div>
+
+                        <p id="contacto-maestro-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Origen</th>
+                                        <th>Contacto / RIF</th>
+                                        <th>Rol</th>
+                                        <th>Teléfono / Email / GPS</th>
+                                        <th>Completitud</th>
+                                        <th>Estado / Duplicados</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="contactos-maestro-body">
+                                    <tr><td colspan="7" class="table-empty">Cargando Maestro Único de Contactos...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="contactos-maestro-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
                     </div>
-                    <div id="dir-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
+
+                    <!-- SUBVISTA 2: REVISIÓN DE DUPLICADOS -->
+                    <div id="contactos-subtab-duplicados" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin:0.5rem 0 1rem 0;">
+                            <p style="margin:0; color:#475569; font-size:0.9rem;">Pares detectados por RIF idéntico, teléfono, correo o similitud de razón social (&ge; 86%). Fusiona el duplicado al contacto maestro conservando datos e historial.</p>
+                            <button type="button" class="btn-secondary" onclick="cargarColaDuplicados()">↻ Actualizar Cola</button>
+                        </div>
+                        <div id="contactos-duplicados-lista" style="display:flex; flex-direction:column; gap:0.85rem;">
+                            <p class="table-empty">Selecciona esta pestaña para analizar posibles duplicados...</p>
+                        </div>
+                    </div>
+
+                    <!-- SUBVISTA 3: CONSULTA DIRECTA ODOO (Solo lectura) -->
+                    <div id="contactos-subtab-odoo-raw" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+                            <p style="color:#475569; margin:0; font-size:0.88rem;">Consulta directa (solo lectura) de <code>res.partner</code> en Odoo.</p>
+                            <button type="button" class="btn-secondary" onclick="loadContactosOdoo(true)">↻ Recargar desde Odoo</button>
+                        </div>
+                        <div class="dashboard-kpi-row" id="odoo-contactos-kpis" style="margin:0.75rem 0;">
+                            <div class="card kpi-card dir-kpi" data-dir-clasificacion="" role="button" tabindex="0"><h3>Total en Odoo</h3><p id="dir-n-total">—</p><span>Contactos activos</span></div>
+                            <div class="card kpi-card dir-kpi" data-dir-clasificacion="prospecto" role="button" tabindex="0"><h3>Prospectos</h3><p id="dir-n-prospectos">—</p><span>Sin rango comercial aún</span></div>
+                            <div class="card kpi-card dir-kpi" data-dir-clasificacion="cliente" role="button" tabindex="0"><h3>Clientes</h3><p id="dir-n-clientes">—</p><span>Con rango de cliente</span></div>
+                            <div class="card kpi-card dir-kpi" data-dir-clasificacion="proveedor" role="button" tabindex="0"><h3>Proveedores</h3><p id="dir-n-proveedores">—</p><span>Con rango de proveedor</span></div>
+                            <div class="card kpi-card dir-kpi" data-dir-clasificacion="ambos" role="button" tabindex="0"><h3>Cliente y proveedor</h3><p id="dir-n-ambos">—</p><span>Ambos rangos en Odoo</span></div>
+                            <div class="card kpi-card dir-kpi" data-dir-clasificacion="borrador_telegram" role="button" tabindex="0"><h3>Borrador Telegram</h3><p id="dir-n-borradores">—</p><span>Creados desde los bots</span></div>
+                        </div>
+
+                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin:1rem 0;">
+                            <select id="dir-clasificacion" class="filter-select" aria-label="Clasificación de contacto">
+                                <option value="">Todas las clasificaciones</option>
+                                <option value="prospecto">Prospectos (sin compras/ventas)</option>
+                                <option value="cliente">Clientes (incluye ambos)</option>
+                                <option value="proveedor">Proveedores (incluye ambos)</option>
+                                <option value="ambos">Cliente y proveedor a la vez</option>
+                                <option value="borrador_telegram">Borradores creados por Telegram</option>
+                            </select>
+                            <input type="text" id="dir-buscar" class="filter-select" placeholder="Buscar por nombre, RIF, teléfono, correo o vendedor..." style="cursor:text; min-width:280px; flex:1;">
+                        </div>
+                        <p id="dir-resumen" style="color:#64748b; font-size:0.85rem; margin:0 0 0.5rem 0;"></p>
+
+                        <div class="table-wrapper large-table">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID Odoo</th>
+                                        <th>Nombre / Razón Social</th>
+                                        <th>RIF</th>
+                                        <th>Clasificación</th>
+                                        <th>Teléfono / Correo</th>
+                                        <th>Ciudad / Vendedor</th>
+                                        <th>Origen / Notas</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dir-contactos-body">
+                                    <tr><td colspan="7" class="table-empty">Selecciona esta pestaña para consultar los contactos en Odoo...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="dir-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
+                    </div>
                 </section>
             </div>
         </div>
@@ -4102,13 +4193,118 @@
             </div>
         </div>
 
-    <script src="/static/app.js?v=20261119_7"></script>
-    <script src="/static/js/shell.js?v=20261119_7"></script>
-    <script src="/static/js/pagos_unificados.js?v=20261119_7"></script>
-    <script src="/static/js/pagos_enviados.js?v=20261119_7"></script>
-    <script src="/static/js/config_tesoreria.js?v=20261119_7"></script>
-    <script src="/static/js/ventas_unificadas.js?v=20261119_7"></script>
-    <script src="/static/js/compras_unificadas.js?v=20261119_7"></script>
-    <script src="/static/js/reportes_propios.js?v=20261119_7"></script>
+        <!-- MODAL MAESTRO ÚNICO DE CONTACTOS (CREAR / EDITAR + ANTI-DUPLICADOS) -->
+        <div id="modal-contacto-maestro" class="modal-backdrop" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cm-modal-titulo">
+            <div class="modal-card" style="max-width:680px; width:95%;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.85rem;">
+                    <h3 id="cm-modal-titulo" style="margin:0;">👤 Contacto</h3>
+                    <button type="button" class="btn-secondary" onclick="cerrarModalContactoMaestro()" aria-label="Cerrar">✕</button>
+                </div>
+                <form id="cm-form" onsubmit="event.preventDefault(); guardarContactoMaestro(false);" style="display:flex; flex-direction:column; gap:0.75rem;">
+                    <input type="hidden" id="cm-f-id">
+                    <div id="contacto-dup-alerta" style="display:none; padding:0.75rem; border-radius:8px; background:#fffbeb; border:1px solid #f59e0b; font-size:0.84rem; color:#78350f;"></div>
+                    <div style="display:grid; grid-template-columns:2fr 1fr; gap:0.65rem;">
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">Nombre o Razón Social *</label>
+                            <input type="text" id="cm-f-nombre" class="filter-select" style="width:100%; cursor:text;" required placeholder="Ej: Inversiones Los Pinos C.A." oninput="programarChequeoDuplicados()">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">Rol Comercial *</label>
+                            <select id="cm-f-rol" class="filter-select" style="width:100%;" onchange="programarChequeoDuplicados()">
+                                <option value="prospecto">🟡 Prospecto (sin pedido)</option>
+                                <option value="cliente">🟢 Cliente</option>
+                                <option value="proveedor">🔵 Proveedor</option>
+                                <option value="ambos">🟣 Cliente y Proveedor</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.65rem;">
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">RIF / Cédula</label>
+                            <input type="text" id="cm-f-rif" class="filter-select" style="width:100%; cursor:text;" placeholder="J-12345678-9" oninput="programarChequeoDuplicados()">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">Teléfono *</label>
+                            <input type="text" id="cm-f-telefono" class="filter-select" style="width:100%; cursor:text;" placeholder="0414-1234567" oninput="programarChequeoDuplicados()">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">Correo Electrónico</label>
+                            <input type="email" id="cm-f-email" class="filter-select" style="width:100%; cursor:text;" placeholder="contacto@empresa.com" oninput="programarChequeoDuplicados()">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:2fr 1fr; gap:0.65rem;">
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">Dirección Fiscal / Entrega</label>
+                            <input type="text" id="cm-f-direccion" class="filter-select" style="width:100%; cursor:text;" placeholder="Av. Principal, Zona Industrial...">
+                        </div>
+                        <div>
+                            <label style="font-size:0.78rem; color:#475569; font-weight:600;">Ciudad</label>
+                            <input type="text" id="cm-f-ciudad" class="filter-select" style="width:100%; cursor:text;" placeholder="Valencia / Caracas">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.65rem; background:#f8fafc; padding:0.65rem; border-radius:8px; border:1px solid #e2e8f0;">
+                        <div>
+                            <label style="font-size:0.75rem; color:#475569; font-weight:600;">📍 Latitud GPS</label>
+                            <input type="number" step="0.0000001" id="cm-f-lat" class="filter-select" style="width:100%; cursor:text;" placeholder="10.162023">
+                        </div>
+                        <div>
+                            <label style="font-size:0.75rem; color:#475569; font-weight:600;">📍 Longitud GPS</label>
+                            <input type="number" step="0.0000001" id="cm-f-lon" class="filter-select" style="width:100%; cursor:text;" placeholder="-68.007652">
+                        </div>
+                        <div>
+                            <label style="font-size:0.75rem; color:#475569; font-weight:600;">Plus Code</label>
+                            <input type="text" id="cm-f-pluscode" class="filter-select" style="width:100%; cursor:text;" placeholder="772J5X6V+2W">
+                        </div>
+                    </div>
+                    <div>
+                        <label style="font-size:0.78rem; color:#475569; font-weight:600;">Notas / Observaciones</label>
+                        <textarea id="cm-f-notas" rows="2" class="filter-select" style="width:100%; cursor:text;" placeholder="Horario de recepción, persona de contacto, etc."></textarea>
+                    </div>
+                    <div id="cm-modal-status" style="font-size:0.84rem; font-weight:600;"></div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; border-top:1px solid #e2e8f0; padding-top:0.75rem;">
+                        <label id="cm-wrap-forzar" style="display:none; align-items:center; gap:0.35rem; font-size:0.82rem; color:#92400e;">
+                            <input type="checkbox" id="cm-f-forzar"> Confirmar creación ignorando alerta de posible duplicado
+                        </label>
+                        <div style="display:flex; gap:0.5rem; margin-left:auto;">
+                            <button type="button" class="btn-secondary" onclick="cerrarModalContactoMaestro()">Cancelar</button>
+                            <button type="submit" id="cm-btn-guardar" class="btn-primary">💾 Guardar en Maestro</button>
+                            <button type="button" id="cm-btn-guardar-odoo" class="btn-primary" style="background:#16a34a;" onclick="guardarContactoMaestro(true)">✅ Guardar y Enviar a Odoo</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- MODAL FUSIONAR DUPLICADO -->
+        <div id="modal-fusionar-contacto" class="modal-backdrop" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="cm-fus-titulo">
+            <div class="modal-card" style="max-width:520px; width:95%;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                    <h3 id="cm-fus-titulo" style="margin:0;">🔀 Fusionar Contacto Duplicado</h3>
+                    <button type="button" class="btn-secondary" onclick="cerrarModalFusionarContacto()" aria-label="Cerrar">✕</button>
+                </div>
+                <input type="hidden" id="cm-fus-duplicado-id">
+                <div id="cm-fus-info" style="font-size:0.88rem; color:#334155; background:#f8fafc; padding:0.75rem; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:0.75rem;"></div>
+                <div style="margin-bottom:0.75rem;">
+                    <label style="font-size:0.8rem; font-weight:600; color:#475569;">Contacto Maestro Destino (ID o selección sugerida):</label>
+                    <select id="cm-fus-sugerido" class="filter-select" style="width:100%; margin:0.35rem 0;" onchange="if(this.value) document.getElementById('cm-fus-maestro-id').value = this.value;"></select>
+                    <input type="number" id="cm-fus-maestro-id" class="filter-select" style="width:100%; cursor:text;" placeholder="ID maestro destino (ej: 42)" min="1">
+                </div>
+                <div id="cm-fus-status" style="font-size:0.84rem; font-weight:600; margin-bottom:0.5rem;"></div>
+                <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+                    <button type="button" class="btn-secondary" onclick="cerrarModalFusionarContacto()">Cancelar</button>
+                    <button type="button" id="cm-fus-confirmar" class="btn-primary" style="background:#7c3aed;" onclick="confirmarFusionContacto()">🔀 Confirmar Fusión</button>
+                </div>
+            </div>
+        </div>
+
+    <script src="/static/app.js?v=20261119_8"></script>
+    <script src="/static/js/shell.js?v=20261119_8"></script>
+    <script src="/static/js/pagos_unificados.js?v=20261119_8"></script>
+    <script src="/static/js/pagos_enviados.js?v=20261119_8"></script>
+    <script src="/static/js/config_tesoreria.js?v=20261119_8"></script>
+    <script src="/static/js/ventas_unificadas.js?v=20261119_8"></script>
+    <script src="/static/js/compras_unificadas.js?v=20261119_8"></script>
+    <script src="/static/js/reportes_propios.js?v=20261119_8"></script>
+    <script src="/static/js/contactos_maestro.js?v=20261119_8"></script>
 </body>
 </html>

@@ -1465,3 +1465,41 @@ siembra_bitacora = Table(
     Column("avisos_json", Text, nullable=False, server_default="[]"),
     Column("error", Text, nullable=False, server_default=""),
 )
+
+# --- Fase 6: Maestro Único de Contactos (Odoo + Bots + CxC) y Anti-Duplicados ---
+contactos_maestro = Table(
+    "contactos_maestro",
+    metadata,
+    Column("contacto_id", Integer, primary_key=True, autoincrement=True),
+    Column("odoo_partner_id", Integer, unique=True, nullable=True, index=True),
+    Column("origen", String, nullable=False, server_default="cxc", index=True),  # odoo | bot | cxc
+    # prospecto | cliente | proveedor | ambos
+    Column("rol", String, nullable=False, server_default="prospecto", index=True),
+    Column("nombre", String, nullable=False, server_default=""),
+    Column("nombre_normalizado", String, nullable=False, server_default="", index=True),
+    Column("rif", String, nullable=False, server_default=""),
+    Column("rif_normalizado", String, nullable=False, server_default="", index=True),
+    Column("telefono", String, nullable=False, server_default=""),
+    Column("telefono_normalizado", String, nullable=False, server_default="", index=True),
+    Column("email", String, nullable=False, server_default=""),
+    Column("direccion", Text, nullable=False, server_default=""),
+    Column("ciudad", String, nullable=False, server_default=""),
+    Column("latitud", Numeric(10, 7), nullable=True),
+    Column("longitud", Numeric(10, 7), nullable=True),
+    Column("plus_code", String, nullable=False, server_default=""),
+    Column("vendedor_email", String, nullable=False, server_default=""),
+    # PENDIENTE | VALIDADO | ENVIADO_ODOO | DUPLICADO | DESCARTADO
+    Column("estado_validacion", String, nullable=False, server_default="PENDIENTE", index=True),
+    Column("completitud_pct", Integer, nullable=False, server_default="0"),
+    Column("campos_faltantes_json", Text, nullable=False, server_default="[]"),
+    Column("duplicado_de_id", Integer, nullable=True, index=True),
+    Column("posibles_duplicados_json", Text, nullable=False, server_default="[]"),
+    Column("es_borrador_telegram", Boolean, nullable=False, server_default="false"),
+    Column("captura_id", Integer, nullable=True, index=True),
+    Column("creado_por", String, nullable=False, server_default="sistema"),
+    Column("validado_por", String, nullable=False, server_default=""),
+    Column("notas", Text, nullable=False, server_default=""),
+    Column("activo", Boolean, nullable=False, server_default="true", index=True),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
