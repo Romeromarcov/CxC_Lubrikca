@@ -209,9 +209,7 @@ CUENTAS_FALSAS: list[dict[str, Any]] = [
 ]
 
 
-def _execute_falso(
-    model: str, method: str, args: list[Any], kwargs: dict[str, Any]
-) -> Any:
+def _execute_falso(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
     if method == "fields_get":
         if model == "res.partner":
             return {k: {"string": k} for k in (*PARTNERS_FALSOS[0].keys(), "active")}
@@ -396,12 +394,16 @@ def test_api_plan_cuentas_y_simulador_concepto() -> None:
 
 def test_index_html_incluye_secciones_contactos_y_plan_cuentas() -> None:
     with patch("cxc.web.app.get_current_user_from_cookie", return_value=TESORERIA):
-        r = client.get("/capturas")
-        assert r.status_code == 200
-        html = r.text
-        assert 'data-capturas-subpage="contactos"' in html
-        assert 'data-capturas-subpage="cuentas"' in html
-        assert 'id="dir-contactos-body"' in html
+        r_con = client.get("/contactos")
+        assert r_con.status_code == 200
+        assert 'id="tab-contactos"' in r_con.text
+        assert 'id="dir-contactos-body"' in r_con.text
+
+        r_cmp = client.get("/compras")
+        assert r_cmp.status_code == 200
+        html = r_cmp.text
+        assert 'id="tab-compras"' in html
+        assert 'data-compras-subpage="cuentas"' in html
         assert 'id="cta-propuestas-body"' in html
         assert 'id="cta-catalogo-body"' in html
 
@@ -430,4 +432,3 @@ def test_api_refresh_y_errores_502_503(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException) as exc:
         get_lector_odoo()
     assert exc.value.status_code == 503
-

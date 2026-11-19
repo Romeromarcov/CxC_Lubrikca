@@ -40,27 +40,43 @@ class Permiso(TypedDict):
 
 
 # Páginas, en el orden del menú. El primer permiso de la lista efectiva es la página a la
-# que se redirige al entrar, por eso "dashboard" va primero y nunca se quita.
+# que se redirige al entrar, por eso "inicio" va primero y nunca se quita.
 PAGINAS: tuple[tuple[str, str], ...] = (
-    ("dashboard", "Inicio"),
-    ("facturacion", "Facturación"),
-    ("conciliaciones", "Conciliaciones"),
-    ("cobranza", "Cobranza"),
-    ("ventas", "Ventas"),
-    ("reporte", "Reporte CxC"),
+    ("inicio", "Inicio"),
     ("auditoria", "Auditoría"),
+    ("pagos", "Pagos"),
+    ("ventas", "Ventas"),
+    ("compras", "Compras"),
+    ("reportes", "Reportes"),
+    ("facturacion", "Facturación"),
     ("inventario", "Inventario"),
+    ("contactos", "Contactos"),
     ("configuracion", "Configuración"),
-    ("bancos", "Bancos"),
-    ("capturas", "Capturas Telegram"),
-    ("bots", "Bots de Telegram"),
 )
-SIEMPRE = frozenset({"dashboard"})
+SIEMPRE = frozenset({"inicio"})
 
-# Las páginas "bancos", "capturas" y "bots" no se marcan a mano: se abren si la persona tiene
-# cualquier permiso de su grupo. Así no puede quedar alguien con la página abierta y nada
-# que ver en ella.
-_PAGINA_DERIVADA = {"bancos": "bancos.", "capturas": "capturas.", "bots": "bots."}
+# Las antiguas páginas "bancos", "capturas" y "bots" ahora son submódulos dentro de
+# Pagos, Auditoría y Configuración, abiertos por sus permisos de acción.
+_PAGINA_DERIVADA: dict[str, str] = {}
+
+_ALIAS_PAGINAS_LEGADO: dict[str, str] = {
+    "dashboard": "inicio",
+    "cobranza": "pagos",
+    "conciliaciones": "pagos",
+    "reporte": "reportes",
+}
+_ALIAS_GRUPOS_LEGADO: dict[str, str] = {
+    "bancos": "bancos.",
+    "capturas": "capturas.",
+    "bots": "bots.",
+}
+_MODULO_POR_PREFIJO_ACCION: tuple[tuple[str, str], ...] = (
+    ("bancos.", "pagos"),
+    ("cobranza.", "pagos"),
+    ("compras.", "compras"),
+    ("bots.", "configuracion"),
+    ("capturas.", "auditoria"),
+)
 
 ACCIONES: tuple[Permiso, ...] = (
     {
@@ -180,15 +196,15 @@ NOMBRES_ROLES: dict[str, str] = {
     "ventas": "Ventas y Comercial",
 }
 
-# Páginas que se abren por sí solas (Bancos y Capturas se abren con sus acciones).
-_PAGINAS_SIN_BANCOS = frozenset(c for c, _ in PAGINAS if c not in _PAGINA_DERIVADA)
+# Páginas abiertas por defecto (Compras se reserva a roles operativos y auditoría).
+_PAGINAS_COMUNES = frozenset(c for c, _ in PAGINAS if c != "compras")
 
-# Base de cada rol: reproduce exactamente lo que cada rol podía hacer antes de que
-# existieran los ajustes (páginas de ``ROLES_PERMISOS`` y los ``if rol in (...)`` de la API).
+# Base de cada rol: conserva el alcance previo mapeado a los 9 módulos + /inicio.
 BASE_POR_ROL: dict[str, frozenset[str]] = {
     "admin": CLAVES,
-    "gerente_ventas": _PAGINAS_SIN_BANCOS
+    "gerente_ventas": _PAGINAS_COMUNES
     | {
+        "compras",
         "cobranza.recibo",
         "cobranza.aprobar_pagos",
         "compras.aprobar_documentos",
@@ -199,8 +215,9 @@ BASE_POR_ROL: dict[str, frozenset[str]] = {
         "bots.ver",
         "bots.gestionar",
     },
-    "tesoreria": _PAGINAS_SIN_BANCOS
+    "tesoreria": _PAGINAS_COMUNES
     | {
+        "compras",
         "cobranza.recibo",
         "cobranza.aprobar_pagos",
         "compras.aprobar_documentos",
@@ -209,9 +226,9 @@ BASE_POR_ROL: dict[str, frozenset[str]] = {
         "bots.ver",
         "bots.gestionar",
     },
-    "auditor": _PAGINAS_SIN_BANCOS
-    | {"bancos.ver", "auditoria.decidir", "capturas.ver", "bots.ver"},
-    "ventas": _PAGINAS_SIN_BANCOS,
+    "auditor": _PAGINAS_COMUNES
+    | {"compras", "bancos.ver", "auditoria.decidir", "capturas.ver", "bots.ver"},
+    "ventas": _PAGINAS_COMUNES,
 }
 
 _ORDEN = {p["clave"]: i for i, p in enumerate(CATALOGO)}
@@ -219,6 +236,16 @@ _ORDEN = {p["clave"]: i for i, p in enumerate(CATALOGO)}
 
 class AccesoInvalido(ValueError):
     """El cambio pedido no se puede aplicar (rol desconocido, permiso inexistente...)."""
+
+
+def _normalizar_ajustes_legado(ajustes: Mapping[str, bool] | None) -> dict[str, bool]:
+    if not ajustes:
+        return {}
+    out = {k: v for k, v in ajustes.items() if k not in _ALIAS_PAGINAS_LEGADO}
+    for clave, concedido in ajustes.items():
+        if clave in _ALIAS_PAGINAS_LEGADO:
+            out.setdefault(_ALIAS_PAGINAS_LEGADO[clave], concedido)
+    return out
 
 
 def efectivos(rol: str, ajustes: Mapping[str, bool] | None = None) -> list[str]:
@@ -230,7 +257,7 @@ def efectivos(rol: str, ajustes: Mapping[str, bool] | None = None) -> list[str]:
     if rol == ROL_ADMIN:
         return sorted(CLAVES, key=_ORDEN.__getitem__)
     base = set(BASE_POR_ROL.get(rol, frozenset()))
-    for clave, concedido in (ajustes or {}).items():
+    for clave, concedido in _normalizar_ajustes_legado(ajustes).items():
         if clave not in EDITABLES:
             continue
         if concedido:
@@ -238,6 +265,9 @@ def efectivos(rol: str, ajustes: Mapping[str, bool] | None = None) -> list[str]:
         else:
             base.discard(clave)
     base |= SIEMPRE
+    for prefijo, modulo in _MODULO_POR_PREFIJO_ACCION:
+        if any(c.startswith(prefijo) for c in base):
+            base.add(modulo)
     for pagina, prefijo in _PAGINA_DERIVADA.items():
         if any(c.startswith(prefijo) for c in base):
             base.add(pagina)
@@ -248,7 +278,7 @@ def efectivos(rol: str, ajustes: Mapping[str, bool] | None = None) -> list[str]:
 
 def ajustes_para(rol: str, deseados: Iterable[str]) -> dict[str, bool]:
     """La diferencia entre lo que se quiere y la base del rol: lo único que se guarda."""
-    pedidos = set(deseados)
+    pedidos = {_ALIAS_PAGINAS_LEGADO.get(c, c) for c in deseados}
     desconocidos = pedidos - CLAVES
     if desconocidos:
         raise AccesoInvalido(f"Permisos inexistentes: {', '.join(sorted(desconocidos))}")
@@ -262,12 +292,18 @@ def ajustes_para(rol: str, deseados: Iterable[str]) -> dict[str, bool]:
 
 
 def tiene(usuario: Mapping[str, Any] | None, permiso: str) -> bool:
-    """Si la sesión tiene un permiso. Administrador, todo."""
+    """Si la sesión tiene un permiso. Administrador, todo. Soporta alias legados."""
     if not usuario:
         return False
     if usuario.get("rol") == ROL_ADMIN:
         return True
-    return permiso in (usuario.get("permisos") or [])
+    perms = set(usuario.get("permisos") or [])
+    if permiso in perms:
+        return True
+    if permiso in _ALIAS_PAGINAS_LEGADO and _ALIAS_PAGINAS_LEGADO[permiso] in perms:
+        return True
+    prefijo = _ALIAS_GRUPOS_LEGADO.get(permiso)
+    return bool(prefijo and any(c.startswith(prefijo) for c in perms))
 
 
 # ------------------------------------------------------------------- persistencia

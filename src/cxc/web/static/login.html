@@ -293,7 +293,7 @@
                     const data = await res.json();
                     showAlert('✅ Sesión iniciada. Redirigiendo...', false);
                     setTimeout(() => {
-                        window.location.href = data.redirect || '/dashboard';
+                        window.location.href = data.redirect || '/inicio';
                     }, 500);
                 } else {
                     const err = await res.json();
@@ -328,7 +328,7 @@
                     const data = await res.json();
                     showAlert('✅ Contraseña creada exitosamente. Redirigiendo...', false);
                     setTimeout(() => {
-                        window.location.href = data.redirect || '/dashboard';
+                        window.location.href = data.redirect || '/inicio';
                     }, 800);
                 } else {
                     const err = await res.json();

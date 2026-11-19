@@ -145,16 +145,25 @@ def test_csv_odoo(sin_base):
 
 def test_pagina_bancos_solo_para_admin_y_auditor():
     from cxc.auth import ROLES_PERMISOS
+    from cxc.permisos import tiene
 
-    con_bancos = {rol for rol, paginas in ROLES_PERMISOS.items() if "bancos" in paginas}
+    con_bancos = {
+        rol
+        for rol, permisos in ROLES_PERMISOS.items()
+        if tiene({"rol": rol, "permisos": permisos}, "bancos")
+    }
     assert con_bancos == {"admin", "auditor"}
 
 
 @pytest.mark.parametrize("usuario,esperado", [(AUDITOR, 200), (None, 307)])
 def test_ruta_bancos_sirve_la_spa(usuario, esperado):
-    usuario = None if usuario is None else {**usuario, "permisos": ["bancos"]}
     with _como(usuario):
-        r = client.get("/bancos", follow_redirects=False)
+        r_legado = client.get("/bancos", follow_redirects=False)
+        assert r_legado.status_code == 302
+        assert r_legado.headers["location"] == "/pagos?tab=conciliacion"
+
+        r = client.get("/pagos", follow_redirects=False)
     assert r.status_code == esperado
     if esperado == 200:
-        assert 'id="tab-bancos"' in r.text
+        assert 'id="tab-pagos"' in r.text
+        assert 'id="bancos-saldos-panel"' in r.text

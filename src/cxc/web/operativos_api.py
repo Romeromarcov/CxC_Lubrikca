@@ -37,14 +37,18 @@ router = APIRouter()
 PERMISO_APROBAR_PAGOS = "cobranza.aprobar_pagos"
 PERMISO_APROBAR_COMPRAS = "compras.aprobar_documentos"
 PERMISOS_VER_OPERATIVOS = (
+    "pagos",
     "cobranza",
+    "compras",
     PERMISO_APROBAR_PAGOS,
     PERMISO_APROBAR_COMPRAS,
     "capturas.ver",
     "capturas.gestionar",
 )
 PERMISOS_GESTIONAR_OPERATIVOS = (
+    "pagos",
     "cobranza",
+    "compras",
     PERMISO_APROBAR_PAGOS,
     PERMISO_APROBAR_COMPRAS,
     "capturas.gestionar",
@@ -236,8 +240,11 @@ def listar_operativos(
         raise HTTPException(
             status_code=422, detail=f"estado debe ser uno de {', '.join(ESTADOS_OPERATIVOS)}"
         )
-    if grupo and grupo not in ("cobranza", "compras"):
-        raise HTTPException(status_code=422, detail="grupo debe ser cobranza o compras")
+    if grupo and grupo not in ("cobranza", "compras", "pagos_enviados", "compras_solo"):
+        raise HTTPException(
+            status_code=422,
+            detail="grupo debe ser cobranza, compras, pagos_enviados o compras_solo",
+        )
     items, total, resumen = servicio.listar(
         tipo=tipo,
         grupo=grupo,

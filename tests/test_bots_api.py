@@ -161,8 +161,9 @@ def test_el_reparto_de_permisos_por_rol() -> None:
 
     assert tiene(TESORERIA, "bots.ver") and tiene(TESORERIA, "bots.gestionar")
     assert tiene(AUDITOR, "bots.ver") and not tiene(AUDITOR, "bots.gestionar")
-    assert not tiene(VENTAS, "bots.ver") and "bots" not in VENTAS["permisos"]
-    assert "bots" in TESORERIA["permisos"] and "bots" in AUDITOR["permisos"]
+    assert not tiene(VENTAS, "bots.ver") and not tiene(VENTAS, "bots")
+    assert tiene(TESORERIA, "bots") and tiene(AUDITOR, "bots")
+    assert "configuracion" in TESORERIA["permisos"] and "configuracion" in AUDITOR["permisos"]
 
 
 # ── listado, detalle, edición ────────────────────────────────────────────────

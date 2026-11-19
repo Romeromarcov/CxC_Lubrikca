@@ -345,12 +345,16 @@ def test_reintentar_exige_gestionar(entorno: Any) -> None:
 
 
 def test_pagina_capturas_segun_permisos() -> None:
+    r_legado = client.get("/capturas", follow_redirects=False)
+    assert r_legado.status_code == 302 and r_legado.headers["location"] == "/compras?tab=facturas"
+
     with _como(TESORERIA):
-        assert client.get("/capturas", follow_redirects=False).status_code == 200
+        assert client.get("/compras", follow_redirects=False).status_code == 200
     with _como(ADMIN):
-        assert client.get("/capturas", follow_redirects=False).status_code == 200
+        assert client.get("/compras", follow_redirects=False).status_code == 200
     with _como(VENTAS):
-        assert client.get("/capturas", follow_redirects=False).status_code in (302, 307)
+        r_v = client.get("/compras", follow_redirects=False)
+        assert r_v.status_code in (302, 307) and r_v.headers["location"] == "/inicio"
     with _como(None):
-        r = client.get("/capturas", follow_redirects=False)
+        r = client.get("/compras", follow_redirects=False)
         assert r.status_code in (302, 307) and r.headers["location"] == "/login"
