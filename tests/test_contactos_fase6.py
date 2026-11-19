@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
@@ -519,7 +518,9 @@ def test_repo_contactos_sql_sqlite_y_postgres_ci() -> None:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         return
-    eng_pg = create_engine(db_url)
+    from cxc.db.engine import make_engine
+
+    eng_pg = make_engine(db_url)
     repo_pg = RepoContactosSQL(eng_pg)
     svc_pg = ServicioContactos(repo_pg)
     rif_test = "J-99900066-1"
@@ -536,7 +537,6 @@ def test_repo_contactos_sql_sqlite_y_postgres_ci() -> None:
                 "rol": "proveedor",
                 "rif": rif_test,
                 "telefono": "0412-9996611",
-                "actualizado_en": datetime.now(),
             },
             origen="cxc",
             actor="pytest_f6",
