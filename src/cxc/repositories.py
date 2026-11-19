@@ -140,10 +140,18 @@ class Repository(ABC):
     # forzar a todo backend a soportarlo -- hoy solo PostgresRepository lo
     # implementa; Sheets se está retirando como backend, no vale la pena
     # construirle esta tabla nueva.
-    def upsert_facturas(self, filas: list[Factura]) -> None:
+    def upsert_pagos_proveedores_odoo(self, filas: list[dict[str, Any]]) -> None:
         raise NotImplementedError(
-            "upsert_facturas solo está implementado en PostgresRepository."
+            "upsert_pagos_proveedores_odoo solo está implementado en PostgresRepository."
         )
+
+    def all_pagos_proveedores_odoo(self) -> list[dict[str, Any]]:
+        raise NotImplementedError(
+            "all_pagos_proveedores_odoo solo está implementado en PostgresRepository."
+        )
+
+    def upsert_facturas(self, filas: list[Factura]) -> None:
+        raise NotImplementedError("upsert_facturas solo está implementado en PostgresRepository.")
 
     def all_facturas(self) -> list[Factura]:
         raise NotImplementedError("all_facturas solo está implementado en PostgresRepository.")
@@ -162,17 +170,13 @@ class Repository(ABC):
         )
 
     def upsert_entregas(self, filas: list[Entrega]) -> None:
-        raise NotImplementedError(
-            "upsert_entregas solo está implementado en PostgresRepository."
-        )
+        raise NotImplementedError("upsert_entregas solo está implementado en PostgresRepository.")
 
     def all_entregas(self) -> list[Entrega]:
         raise NotImplementedError("all_entregas solo está implementado en PostgresRepository.")
 
     def upsert_catalogo(self, filas: list[Producto]) -> None:
-        raise NotImplementedError(
-            "upsert_catalogo solo está implementado en PostgresRepository."
-        )
+        raise NotImplementedError("upsert_catalogo solo está implementado en PostgresRepository.")
 
     def all_catalogo(self) -> list[Producto]:
         raise NotImplementedError("all_catalogo solo está implementado en PostgresRepository.")
@@ -590,6 +594,7 @@ class InMemoryRepository(Repository):
         self._tasas_historicas_auditoria: list[dict[str, str]] = []
         self._pagos_huerfanos_cerrados: dict[str, dict[str, str]] = {}
         self._pagos_tasa_binance_override: dict[str, dict[str, str]] = {}
+        self._pagos_proveedores_odoo: dict[str, dict[str, Any]] = {}
         self._descuentos_sistema_aprobados: dict[str, dict[str, str]] = {}
         self._reglas_dias_credito_volumen: dict[str, dict[str, str]] = {}
         self._vendedores: dict[str, dict[str, str]] = {}
@@ -827,9 +832,7 @@ class InMemoryRepository(Repository):
     def descuentos_diferencial_cambiario(self) -> list[DescuentoDiferencialCambiario]:
         return list(self._descuentos_diferencial)
 
-    def append_descuento_diferencial_cambiario(
-        self, regla: DescuentoDiferencialCambiario
-    ) -> None:
+    def append_descuento_diferencial_cambiario(self, regla: DescuentoDiferencialCambiario) -> None:
         self._descuentos_diferencial.append(regla)
 
     def descuentos_producto(self) -> list[DescuentoProducto]:
@@ -976,6 +979,14 @@ class InMemoryRepository(Repository):
 
     def upsert_pago_tasa_binance_override(self, row: dict[str, str]) -> None:
         self._pagos_tasa_binance_override[row["pago_id"]] = dict(row)
+
+    def upsert_pagos_proveedores_odoo(self, filas: list[dict[str, Any]]) -> None:
+        for r in filas:
+            pid = str(r["pago_id"])
+            self._pagos_proveedores_odoo[pid] = dict(r)
+
+    def all_pagos_proveedores_odoo(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self._pagos_proveedores_odoo.values()]
 
     def all_descuentos_sistema_aprobados(self) -> list[dict[str, str]]:
         return [dict(r) for r in self._descuentos_sistema_aprobados.values()]

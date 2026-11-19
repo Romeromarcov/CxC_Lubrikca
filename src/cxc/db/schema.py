@@ -233,6 +233,8 @@ pagos = Table(
     Column("numero_recibido", String, nullable=True),
     Column("fecha_recibido", DateTime(timezone=False), nullable=True),
     Column("recibido_por", String, nullable=True),
+    Column("numero_odoo", String, nullable=False, server_default=""),
+    Column("referencia", String, nullable=False, server_default=""),
 )
 
 # --- 3.5 MetodosPago (catálogo) ----------------------------------------------
@@ -1250,6 +1252,52 @@ documentos_comerciales_lineas = Table(
     Column("subtotal", MONEY, nullable=False, server_default="0"),
 )
 
+# --- Cuentas Zelle de Terceros / Proveedores (Fase 2, nov-2026) -----------------
+# Cuentas de Zelle pertenecientes a terceros (proveedores) donde clientes pagan
+# y en Odoo generan asiento contable (Debito CxP Proveedor / Credito CxC Cliente)
+# sin tocar los diarios bancarios de la empresa.
+cuentas_terceros = Table(
+    "cuentas_terceros",
+    metadata,
+    Column("cuenta_id", Integer, primary_key=True, autoincrement=True),
+    Column("alias", String, nullable=False, unique=True),
+    Column("titular", String, nullable=False, server_default=""),
+    Column("correo_telefono", String, nullable=False, server_default=""),
+    Column("proveedor_odoo_id", Integer, nullable=False, index=True),
+    Column("proveedor_nombre", String, nullable=False, server_default=""),
+    Column("diario_odoo_id", Integer, nullable=True),
+    Column("diario_odoo_nombre", String, nullable=False, server_default=""),
+    Column("cuenta_cxp_override_id", Integer, nullable=True),
+    Column("cuenta_cxc_override_id", Integer, nullable=True),
+    Column("moneda", String, nullable=False, server_default="USD"),
+    Column("notas", Text, nullable=False, server_default=""),
+    Column("activo", Boolean, nullable=False, server_default="true"),
+    Column("creado_por", String, nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Espejo de Pagos Salientes a Proveedores en Odoo (account.payment outbound) -
+pagos_proveedores_odoo = Table(
+    "pagos_proveedores_odoo",
+    metadata,
+    Column("pago_id", String, primary_key=True),
+    Column("numero_odoo", String, nullable=False, server_default=""),
+    Column("partner_odoo_id", Integer, nullable=True, index=True),
+    Column("proveedor_nombre", String, nullable=False, server_default=""),
+    Column("rif", String, nullable=False, server_default=""),
+    Column("monto", MONEY, nullable=False),
+    Column("moneda", String, nullable=False, server_default="USD"),
+    Column("diario_id", Integer, nullable=True),
+    Column("diario_nombre", String, nullable=False, server_default=""),
+    Column("referencia", String, nullable=False, server_default=""),
+    Column("fecha_pago", Date, nullable=False, index=True),
+    Column("estado_odoo", String, nullable=False, server_default="posted"),
+    Column("reconciliado", Boolean, nullable=False, server_default="false"),
+    Column("move_id", Integer, nullable=True),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
 # --- Documentos Operativos: Pagos recibidos, Facturas prov., Pagos prov. y Gastos (nov-2026) --
 # Flujo homologado Bot <-> CxC (Validacion + Preview + Aprobacion) <-> Odoo: cada documento
 # pasa por validacion en vivo y preview antes de ser autorizado para crearse en borrador en Odoo.
@@ -1261,7 +1309,8 @@ documentos_operativos = Table(
     Column("token_preview", String(64), nullable=False, unique=True, index=True),
     # pago | factura_proveedor | pago_proveedor | gasto
     Column("tipo", String, nullable=False, index=True),
-    # BORRADOR | INCOMPLETO | PENDIENTE_APROBACION | ENVIADO_ODOO | RECHAZADO | ERROR
+    # BORRADOR | INCOMPLETO | PENDIENTE_APROBACION | CONFIRMADO_CXC |
+    # ENVIADO_ODOO | RECHAZADO | ERROR
     Column("estado", String, nullable=False, server_default="PENDIENTE_APROBACION", index=True),
     Column("origen", String, nullable=False, server_default="web"),  # bot | web
     Column("captura_id", Integer, nullable=True, index=True),
@@ -1303,6 +1352,20 @@ documentos_operativos = Table(
     Column("odoo_res_id", Integer, nullable=True),
     Column("odoo_ref", String, nullable=False, server_default=""),
     Column("error_odoo", Text, nullable=False, server_default=""),
+    Column("es_zelle_tercero", Boolean, nullable=False, server_default="false"),
+    Column(
+        "cuenta_tercero_id",
+        Integer,
+        ForeignKey("cuentas_terceros.cuenta_id"),
+        nullable=True,
+        index=True,
+    ),
+    Column("beneficiario_tercero", String, nullable=False, server_default=""),
+    Column("confirmado_cxc", Boolean, nullable=False, server_default="false"),
+    Column("confirmado_cxc_por", String, nullable=False, server_default=""),
+    Column("confirmado_cxc_en", DateTime(timezone=False), nullable=True),
+    Column("numero_recibo", String, nullable=False, server_default="", index=True),
+    Column("recibo_emitido_en", DateTime(timezone=False), nullable=True),
     Column("creado_por", String, nullable=False, server_default="sistema"),
     Column("creado_en", DateTime(timezone=False), nullable=False),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),

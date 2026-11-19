@@ -285,6 +285,69 @@ class PostgresRepository(Repository):
         with self._engine.begin() as conn:
             _upsert(conn, t.pagos, [_pago_to_row(p) for p in filas], ["pago_id"])
 
+    def upsert_pagos_proveedores_odoo(self, filas: list[dict[str, Any]]) -> None:
+        if not filas:
+            return
+        norm: list[dict[str, Any]] = []
+        ahora = datetime.now()
+        for f in filas:
+            fecha_p = f.get("fecha_pago")
+            if isinstance(fecha_p, datetime):
+                fecha_p = fecha_p.date()
+            elif isinstance(fecha_p, str):
+                fecha_p = date.fromisoformat(fecha_p[:10])
+            norm.append(
+                {
+                    "pago_id": str(f["pago_id"]),
+                    "numero_odoo": str(f.get("numero_odoo") or ""),
+                    "partner_odoo_id": f.get("partner_odoo_id"),
+                    "proveedor_nombre": str(f.get("proveedor_nombre") or ""),
+                    "rif": str(f.get("rif") or ""),
+                    "monto": Decimal(str(f.get("monto") or 0)),
+                    "moneda": str(f.get("moneda") or "USD"),
+                    "diario_id": f.get("diario_id"),
+                    "diario_nombre": str(f.get("diario_nombre") or ""),
+                    "referencia": str(f.get("referencia") or ""),
+                    "fecha_pago": fecha_p or ahora.date(),
+                    "estado_odoo": str(f.get("estado_odoo") or "posted"),
+                    "reconciliado": bool(f.get("reconciliado")),
+                    "move_id": f.get("move_id"),
+                    "actualizado_en": f.get("actualizado_en") or ahora,
+                }
+            )
+        with self._engine.begin() as conn:
+            _upsert(conn, t.pagos_proveedores_odoo, norm, ["pago_id"])
+
+    def all_pagos_proveedores_odoo(self) -> list[dict[str, Any]]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(t.pagos_proveedores_odoo).order_by(
+                    t.pagos_proveedores_odoo.c.fecha_pago.desc(),
+                    t.pagos_proveedores_odoo.c.pago_id.desc(),
+                )
+            ).all()
+        return [
+            {
+                "pago_id": str(r.pago_id),
+                "numero_odoo": str(r.numero_odoo or ""),
+                "partner_odoo_id": (
+                    int(r.partner_odoo_id) if r.partner_odoo_id is not None else None
+                ),
+                "proveedor_nombre": str(r.proveedor_nombre or ""),
+                "rif": str(r.rif or ""),
+                "monto": float(r.monto) if r.monto is not None else 0.0,
+                "moneda": str(r.moneda or "USD"),
+                "diario_id": int(r.diario_id) if r.diario_id is not None else None,
+                "diario_nombre": str(r.diario_nombre or ""),
+                "referencia": str(r.referencia or ""),
+                "fecha_pago": r.fecha_pago.isoformat() if r.fecha_pago else "",
+                "estado_odoo": str(r.estado_odoo or "posted"),
+                "reconciliado": bool(r.reconciliado),
+                "move_id": int(r.move_id) if r.move_id is not None else None,
+            }
+            for r in rows
+        ]
+
     def upsert_facturas(self, filas: list[Factura]) -> None:
         with self._engine.begin() as conn:
             _upsert(conn, t.facturas, [_factura_to_row(f) for f in filas], ["factura_id"])
@@ -405,9 +468,7 @@ class PostgresRepository(Repository):
 
     def lineas_de_orden(self, so_id: str) -> list[LineaOrden]:
         with self._engine.connect() as conn:
-            rows = conn.execute(
-                select(t.lineas_orden).where(t.lineas_orden.c.so_id == so_id)
-            ).all()
+            rows = conn.execute(select(t.lineas_orden).where(t.lineas_orden.c.so_id == so_id)).all()
         return [_row_to_linea(r) for r in rows]
 
     def all_lineas(self) -> list[LineaOrden]:
@@ -446,9 +507,7 @@ class PostgresRepository(Repository):
                     recibido_por=recibido_por,
                 )
             )
-            rows = conn.execute(
-                select(t.pagos).where(t.pagos.c.pago_id.in_(pago_ids))
-            ).all()
+            rows = conn.execute(select(t.pagos).where(t.pagos.c.pago_id.in_(pago_ids))).all()
         return [_row_to_pago_full(r) for r in rows]
 
     def get_metodo_pago(self, metodo_id: str) -> MetodoPago | None:
@@ -477,9 +536,7 @@ class PostgresRepository(Repository):
 
     def all_serie_tasas(self) -> list[SerieTasa]:
         with self._engine.connect() as conn:
-            rows = conn.execute(
-                select(t.serie_tasas).order_by(t.serie_tasas.c.timestamp)
-            ).all()
+            rows = conn.execute(select(t.serie_tasas).order_by(t.serie_tasas.c.timestamp)).all()
         return [_row_to_serie(r) for r in rows]
 
     def vinculaciones_de_orden(self, so_id: str) -> list[Vinculacion]:
@@ -627,9 +684,7 @@ class PostgresRepository(Repository):
             return list(_DIFERENCIAL_DEFAULTS)
         return [_row_to_diferencial(r) for r in rows]
 
-    def append_descuento_diferencial_cambiario(
-        self, regla: DescuentoDiferencialCambiario
-    ) -> None:
+    def append_descuento_diferencial_cambiario(self, regla: DescuentoDiferencialCambiario) -> None:
         with self._engine.begin() as conn:
             _upsert(conn, t.descuentos_diferencial_cambiario, [_dataclass_row(regla)], ["regla_id"])
 
@@ -794,9 +849,7 @@ class PostgresRepository(Repository):
         """Revierte la marca: el descuento vuelve a contar como comprometido."""
         with self._engine.begin() as conn:
             conn.execute(
-                t.descuentos_no_otorgados.delete().where(
-                    t.descuentos_no_otorgados.c.so_id == so_id
-                )
+                t.descuentos_no_otorgados.delete().where(t.descuentos_no_otorgados.c.so_id == so_id)
             )
 
     def all_discrepancias_aceptadas(self) -> list[dict[str, str]]:
@@ -832,9 +885,7 @@ class PostgresRepository(Repository):
                         "detalle": row.get("detalle", ""),
                         "motivo_aceptacion": row.get("motivo_aceptacion", ""),
                         "aprobado_por": row.get("aprobado_por", ""),
-                        "timestamp_aprobacion": datetime.fromisoformat(
-                            row["timestamp_aprobacion"]
-                        )
+                        "timestamp_aprobacion": datetime.fromisoformat(row["timestamp_aprobacion"])
                         if row.get("timestamp_aprobacion")
                         else datetime.now(),
                     }
@@ -998,8 +1049,7 @@ class PostgresRepository(Repository):
                         "tasa_bcv_euro": row.get("tasa_bcv_euro") or None,
                         "tasa_binance_promedio_diario": row.get("tasa_binance_promedio_diario")
                         or None,
-                        "diferencial_bcv_binance_pct": row.get("diferencial_bcv_binance_pct")
-                        or "",
+                        "diferencial_bcv_binance_pct": row.get("diferencial_bcv_binance_pct") or "",
                         "fuente": row.get("fuente") or "",
                         "notas": row.get("notas") or "",
                     }
@@ -1091,9 +1141,7 @@ class PostgresRepository(Repository):
                         "monto": Decimal(str(row.get("monto") or "0")),
                         "motivo": row.get("motivo") or "",
                         "aprobado_por": row.get("aprobado_por") or "",
-                        "timestamp_aprobacion": datetime.fromisoformat(
-                            row["timestamp_aprobacion"]
-                        ),
+                        "timestamp_aprobacion": datetime.fromisoformat(row["timestamp_aprobacion"]),
                         "activo": str(row.get("activo", "true")).strip().lower()
                         not in ("false", "0", "no"),
                     }
@@ -1297,9 +1345,7 @@ class PostgresRepository(Repository):
         if not filas:
             return
         with self._engine.begin() as conn:
-            _upsert(
-                conn, t.bandeja_facturacion, [_bandeja_to_row(b) for b in filas], ["so_id"]
-            )
+            _upsert(conn, t.bandeja_facturacion, [_bandeja_to_row(b) for b in filas], ["so_id"])
             for b in filas:
                 conn.execute(
                     delete(t.descuento_aplicado).where(t.descuento_aplicado.c.so_id == b.so_id)
@@ -1317,9 +1363,7 @@ class PostgresRepository(Repository):
                                 "porcentaje": d.porcentaje,
                                 "base": d.base,
                                 "componentes": (
-                                    json.dumps(d.componentes, default=str)
-                                    if d.componentes
-                                    else ""
+                                    json.dumps(d.componentes, default=str) if d.componentes else ""
                                 ),
                             }
                             for d in b.descuentos_detalle
@@ -1652,6 +1696,8 @@ def _row_to_pago_full(r: Any) -> dict[str, str]:
         "numero_recibido": r.numero_recibido or "",
         "fecha_recibido": r.fecha_recibido.isoformat()[:19] if r.fecha_recibido else "",
         "recibido_por": r.recibido_por or "",
+        "numero_odoo": getattr(r, "numero_odoo", "") or "",
+        "referencia": getattr(r, "referencia", "") or "",
     }
 
 
@@ -1894,9 +1940,7 @@ def _row_to_feriado(r: Any) -> Feriado:
 
 
 def _row_to_exclusion(r: Any) -> ExclusionRegla:
-    return ExclusionRegla(
-        regla_tipo_a=r.regla_tipo_a, regla_tipo_b=r.regla_tipo_b, activo=r.activo
-    )
+    return ExclusionRegla(regla_tipo_a=r.regla_tipo_a, regla_tipo_b=r.regla_tipo_b, activo=r.activo)
 
 
 def _vinc_to_row(v: Vinculacion) -> dict[str, Any]:

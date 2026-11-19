@@ -23,7 +23,7 @@ import unicodedata
 import xmlrpc.client
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from cxc.capturas.modelos import clase_moneda, normalizar_rif, variantes_rif
@@ -154,6 +154,8 @@ class EscritorOdoo:
         self._tipos_id: dict[str, int] | None = None
         self._diario_compras_ves: int | None = None
         self._diario_compras_consultado: bool = False
+        self._moneda_compania: int | None = None
+        self._moneda_compania_consultada: bool = False
 
     # ── infraestructura ──────────────────────────────────────────────────────
 
@@ -734,5 +736,189 @@ class EscritorOdoo:
         )
         move_id = self._crear("account.move", vals)
         if nota_chatter and "message_ids" in self.campos("account.move"):
+            self.nota_chatter("account.move", move_id, nota_chatter)
+        return move_id
+
+    # ── asientos contables genéricos (Zelle 3ros y gastos sin factura) ───────
+
+    @staticmethod
+    def _m2o_id_val(val: Any) -> int | None:
+        if isinstance(val, list | tuple) and val:
+            return int(val[0])
+        if isinstance(val, int | str) and str(val).isdigit():
+            return int(val)
+        return None
+
+    def moneda_compania_id(self) -> int | None:
+        """Moneda base de la compañía en Odoo (VES en Lubrikca); cacheada."""
+        if self._moneda_compania_consultada:
+            return self._moneda_compania
+        self._moneda_compania_consultada = True
+        filas = self._call(
+            "res.company",
+            "search_read",
+            [[]],
+            {"fields": ["id", "currency_id"], "limit": 1},
+        )
+        if filas:
+            self._moneda_compania = self._m2o_id_val(filas[0].get("currency_id"))
+        return self._moneda_compania
+
+    def diarios_generales(self) -> list[dict[str, Any]]:
+        """Lista diarios contables activos de tipo ``general`` (operaciones varias)."""
+        filas = self._call(
+            "account.journal",
+            "search_read",
+            [[["type", "=", "general"], ["active", "=", True]]],
+            {"fields": ["id", "name", "code", "currency_id"], "limit": 30},
+        )
+        out: list[dict[str, Any]] = []
+        for f in filas or []:
+            cur = f.get("currency_id")
+            cur_name = str(cur[1]) if isinstance(cur, list | tuple) and len(cur) > 1 else ""
+            out.append(
+                {
+                    "id": int(f["id"]),
+                    "name": str(f.get("name") or ""),
+                    "code": str(f.get("code") or ""),
+                    "moneda": cur_name,
+                }
+            )
+        return out
+
+    def diario_general_por_defecto(self) -> int | None:
+        """Elige el diario ``general`` preferido (MISC/VAR/OP) o el primero activo."""
+        diarios = self.diarios_generales()
+        if not diarios:
+            return None
+        for d in diarios:
+            txt = f"{d['code']} {d['name']}".upper()
+            if any(tok in txt for tok in ("MISC", "VAR", "VARIAS", "GENERAL", "OP")):
+                return int(d["id"])
+        return int(diarios[0]["id"])
+
+    def leer_cuentas_partner(self, partner_id: int) -> dict[str, int | None]:
+        """Lee ``property_account_receivable_id`` y ``property_account_payable_id``."""
+        disponibles = self.campos("res.partner")
+        pedir = [
+            c
+            for c in ("property_account_receivable_id", "property_account_payable_id")
+            if c in disponibles
+        ]
+        if not pedir:
+            return {"receivable_id": None, "payable_id": None}
+        filas = self._call("res.partner", "read", [[partner_id]], {"fields": pedir})
+        row = filas[0] if filas else {}
+        return {
+            "receivable_id": self._m2o_id_val(row.get("property_account_receivable_id")),
+            "payable_id": self._m2o_id_val(row.get("property_account_payable_id")),
+        }
+
+    def asiento_por_marca(self, marca: str) -> int | None:
+        """Asiento contable (``entry``) ya creado por esta operación idempotente."""
+        ids = self._buscar(
+            "account.move",
+            [["move_type", "=", "entry"], ["narration", "ilike", f"{marca} · "]],
+            1,
+        )
+        return ids[0] if ids else None
+
+    def crear_asiento_contable(
+        self,
+        *,
+        journal_id: int,
+        fecha: str,
+        ref: str,
+        moneda_codigo: str,
+        lineas: list[dict[str, Any]],
+        marca: str,
+        narration: str,
+        tasa_compania: Decimal | None = None,
+        nota_chatter: str | None = None,
+    ) -> int:
+        """Crea un ``account.move`` (``move_type='entry'``) en BORRADOR balanceado.
+
+        Cada elemento de ``lineas`` debe traer ``account_id``, ``partner_id`` (opcional),
+        ``name``, ``debito`` (Decimal/num >= 0) y ``credito`` (Decimal/num >= 0).
+        Nunca publica el asiento (solo borrador para revisión contable en Odoo).
+        """
+        if len(lineas) < 2:
+            raise OdooEscrituraError("Un asiento contable requiere al menos 2 líneas balanceadas.")
+
+        q2 = Decimal("0.01")
+        debs = [Decimal(str(ln.get("debito") or 0)).quantize(q2, ROUND_HALF_UP) for ln in lineas]
+        creds = [Decimal(str(ln.get("credito") or 0)).quantize(q2, ROUND_HALF_UP) for ln in lineas]
+        tot_deb = sum(debs, Decimal("0"))
+        tot_cred = sum(creds, Decimal("0"))
+        if tot_deb <= 0 or tot_deb != tot_cred:
+            raise OdooEscrituraError(
+                f"Asiento descuadrado: débitos ({tot_deb}) != créditos ({tot_cred})."
+            )
+
+        previo = self.asiento_por_marca(marca)
+        if previo is not None:
+            return previo
+
+        move_campos = self.campos("account.move")
+        line_campos = self.campos("account.move.line")
+        cur_id = self.moneda_id(moneda_codigo) if moneda_codigo else None
+        comp_cur_id = self.moneda_compania_id()
+        es_extranjera = (
+            cur_id is not None and comp_cur_id is not None and int(cur_id) != int(comp_cur_id)
+        )
+        tasa = (
+            Decimal(str(tasa_compania))
+            if (tasa_compania is not None and Decimal(str(tasa_compania)) > 0)
+            else None
+        )
+
+        # Precalcular importes en moneda de compañía si hay moneda extranjera + tasa explícita
+        debs_comp = [
+            (d * tasa).quantize(q2, ROUND_HALF_UP) if (es_extranjera and tasa) else d for d in debs
+        ]
+        creds_comp = [
+            (c * tasa).quantize(q2, ROUND_HALF_UP) if (es_extranjera and tasa) else c for c in creds
+        ]
+        diff_comp = sum(debs_comp, Decimal("0")) - sum(creds_comp, Decimal("0"))
+        if diff_comp != Decimal("0"):
+            for i in range(len(creds_comp) - 1, -1, -1):
+                if creds_comp[i] > 0:
+                    creds_comp[i] += diff_comp
+                    break
+
+        line_ids: list[tuple[int, int, dict[str, Any]]] = []
+        for idx, ln in enumerate(lineas):
+            deb, cred = debs[idx], creds[idx]
+            val_ln: dict[str, Any] = {
+                "account_id": int(ln["account_id"]),
+                "name": str(ln.get("name") or ref)[:200],
+            }
+            if ln.get("partner_id") is not None:
+                val_ln["partner_id"] = int(ln["partner_id"])
+            if cur_id is not None and (not line_campos or "currency_id" in line_campos):
+                val_ln["currency_id"] = int(cur_id)
+            if (not line_campos or "amount_currency" in line_campos) and cur_id is not None:
+                val_ln["amount_currency"] = float(deb - cred)
+            if (not es_extranjera) or (tasa is not None):
+                val_ln["debit"] = float(debs_comp[idx])
+                val_ln["credit"] = float(creds_comp[idx])
+            line_ids.append((0, 0, val_ln))
+
+        vals = _vals(
+            move_type="entry",
+            journal_id=int(journal_id)
+            if (not move_campos or "journal_id" in move_campos)
+            else None,
+            date=fecha if (not move_campos or "date" in move_campos) else None,
+            ref=ref.strip() if (not move_campos or "ref" in move_campos) else None,
+            narration=(
+                f"{marca} · {narration}"
+                if (not move_campos or "narration" in move_campos)
+                else None
+            ),
+            line_ids=line_ids,
+        )
+        move_id = self._crear("account.move", vals)
+        if nota_chatter and "message_ids" in move_campos:
             self.nota_chatter("account.move", move_id, nota_chatter)
         return move_id

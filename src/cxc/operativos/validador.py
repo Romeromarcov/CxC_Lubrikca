@@ -31,6 +31,7 @@ from .modelos import (
     extraer_campos_canonicos,
     validar_campos_operativo,
 )
+from .terceros import CuentaTercero, detectar_cuenta_tercero
 
 
 def listar_diarios_bancarios(diarios_extra: dict[str, int] | None = None) -> list[dict[str, Any]]:
@@ -332,14 +333,46 @@ def validar_documento_operativo(
     contactos_odoo: Sequence[ContactoOdoo] = (),
     cuentas_odoo: Sequence[CuentaContable] = (),
     diarios_extra: dict[str, int] | None = None,
+    cuentas_terceros: Sequence[CuentaTercero] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Normaliza ``raw_datos`` y ejecuta validación completa para Bot y Web CxC.
 
     Devuelve ``(datos_normalizados, validacion)``.
     """
     datos = extraer_campos_canonicos(tipo, raw_datos)
-    faltantes = validar_campos_operativo(tipo, datos)
     alertas: list[str] = []
+
+    cuenta_zt: CuentaTercero | None = None
+    if tipo == TIPO_PAGO:
+        cuenta_zt = detectar_cuenta_tercero(datos, cuentas_terceros)
+        if cuenta_zt is not None:
+            datos["es_zelle_tercero"] = True
+            datos["cuenta_tercero_id"] = cuenta_zt.cuenta_id
+            if not datos.get("beneficiario_tercero"):
+                datos["beneficiario_tercero"] = (
+                    cuenta_zt.titular or cuenta_zt.correo_telefono or cuenta_zt.alias
+                )
+            if not datos.get("moneda"):
+                datos["moneda"] = cuenta_zt.moneda or "USD"
+            if not datos.get("metodo_pago"):
+                datos["metodo_pago"] = "zelle"
+            datos["diario_id"] = None
+            datos["diario_nombre"] = ""
+            if not cuenta_zt.activo:
+                alertas.append(
+                    f"La cuenta de tercero «{cuenta_zt.alias}» está inactiva; selecciona otra."
+                )
+            if str(datos.get("moneda") or "").upper() != "USD":
+                mon_rec = datos.get("moneda")
+                alertas.append(f"Zelle a terceros normalmente va en USD (recibido: {mon_rec}).")
+        elif datos.get("es_zelle_tercero"):
+            datos["diario_id"] = None
+            datos["diario_nombre"] = ""
+            alertas.append(
+                "Zelle a cuenta de Tercero activo: selecciona la cuenta configurada del proveedor."
+            )
+
+    faltantes = validar_campos_operativo(tipo, datos)
 
     contraparte, candidatos = _buscar_contraparte(tipo, datos, contactos_odoo)
     creara_proveedor = False
@@ -381,22 +414,29 @@ def validar_documento_operativo(
 
     diario_sug: dict[str, Any] | None = None
     if tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR):
-        diario_sug = resolver_diario_opcional(datos, diarios_extra)
-        if diario_sug is None:
-            alertas.append(
-                "Banco / diario no resuelto automáticamente: selecciona el diario bancario "
-                "o caja antes de aprobar."
-            )
-        if es_efectivo(datos.get("metodo_pago")):
+        if tipo == TIPO_PAGO and datos.get("es_zelle_tercero"):
+            prov_lbl = cuenta_zt.proveedor_nombre if cuenta_zt else "proveedor configurado"
             regla_odoo = (
-                "Efectivo: en Odoo se enviará con campo «memo» vacío "
-                "y detalle completo en el chatter."
+                "Zelle de Terceros: NO toca diarios bancarios propios; creará en Odoo "
+                f"un asiento contable borrador (Débito CxP {prov_lbl} / Crédito CxC Cliente)."
             )
         else:
-            regla_odoo = (
-                "Transferencia / digital: en Odoo el campo «memo» llevará SOLO la referencia "
-                "y el detalle completo irá al chatter."
-            )
+            diario_sug = resolver_diario_opcional(datos, diarios_extra)
+            if diario_sug is None:
+                alertas.append(
+                    "Banco / diario no resuelto automáticamente: selecciona el diario bancario "
+                    "o caja antes de aprobar."
+                )
+            if es_efectivo(datos.get("metodo_pago")):
+                regla_odoo = (
+                    "Efectivo: se confirma primero en CxC (emite recibo) y en Odoo se enviará "
+                    "con campo «memo» vacío y detalle completo en el chatter."
+                )
+            else:
+                regla_odoo = (
+                    "Transferencia / digital: en Odoo el campo «memo» llevará SOLO la referencia "
+                    "y el detalle completo irá al chatter."
+                )
     else:
         if tipo == TIPO_GASTO and datos.get("sin_factura"):
             regla_odoo = (
@@ -483,6 +523,10 @@ def validar_documento_operativo(
         "equivalente_usd": equiv_usd,
         "ordenes_abiertas": ordenes_abiertas,
         "posibles_duplicados": duplicados,
+        "zelle_tercero": cuenta_zt.a_dict() if cuenta_zt else None,
+        "cuentas_terceros": [c.a_dict() for c in cuentas_terceros if c.activo]
+        if tipo == TIPO_PAGO
+        else [],
         "regla_odoo": regla_odoo,
     }
     return datos, validacion

@@ -683,32 +683,43 @@
                 <section class="card" style="padding:1.5rem;">
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1rem;">
                         <div>
-                            <h2 style="margin:0 0 0.25rem 0;">⏳ Pagos Recibidos de Clientes por Aprobar (Bot ↔ CxC ↔ Odoo)</h2>
-                            <p style="color:#475569; margin:0;">Revisa los pagos capturados desde el bot de Cobranzas o registrados en CxC, verifica alertas de duplicado/banco y órdenes abiertas del cliente, abre su Preview y autoriza el envío en borrador a Odoo (memo limpio y detalle en chatter).</p>
+                            <h2 style="margin:0 0 0.25rem 0;">📥 Pagos Recibidos Unificados (Bot ↔ CxC ↔ Odoo)</h2>
+                            <p style="color:#475569; margin:0;">Vista unificada de pagos nacidos en Bot/CxC y pagos confirmados directo en Odoo. Confirma primero en CxC (emite recibo <code>REC-</code>), revisa alertas o Zelle de terceros y autoriza el borrador hacia Odoo.</p>
                         </div>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                             <button type="button" class="btn-primary" onclick="abrirModalNuevoOperativo('pago')">➕ Nuevo Pago Recibido</button>
-                            <button type="button" class="btn-secondary" onclick="loadOperativosCobranza()">↻ Actualizar</button>
+                            <button type="button" class="btn-secondary" style="background:#ede9fe; color:#5b21b6; border-color:#c4b5fd;" onclick="abrirModalNuevoZelleTercero()">💵 Nuevo Zelle a Tercero</button>
+                            <button type="button" class="btn-secondary" onclick="loadPagosRecibidosUnificados()">↻ Actualizar</button>
                         </div>
                     </div>
 
                     <div class="dashboard-kpi-row" style="margin:0 0 1rem 0;">
-                        <div class="card kpi-card op-cob-kpi" data-op-estado="PENDIENTE_APROBACION" role="button" tabindex="0"><h3>Pendientes aprobación</h3><p id="op-cob-n-PENDIENTE_APROBACION">—</p><span>Listos para autorizar</span></div>
+                        <div class="card kpi-card op-cob-kpi" data-op-estado="PENDIENTE_APROBACION" role="button" tabindex="0"><h3>Pendientes</h3><p id="op-cob-n-PENDIENTE_APROBACION">—</p><span>Por confirmar</span></div>
+                        <div class="card kpi-card op-cob-kpi" data-op-estado="CONFIRMADO_CXC" role="button" tabindex="0"><h3>Confirmados CxC</h3><p id="op-cob-n-CONFIRMADO_CXC">—</p><span>Con recibo REC-</span></div>
                         <div class="card kpi-card op-cob-kpi" data-op-estado="INCOMPLETO" role="button" tabindex="0"><h3>Incompletos</h3><p id="op-cob-n-INCOMPLETO">—</p><span>Faltan datos</span></div>
-                        <div class="card kpi-card op-cob-kpi" data-op-estado="ENVIADO_ODOO" role="button" tabindex="0"><h3>Enviados a Odoo</h3><p id="op-cob-n-ENVIADO_ODOO">—</p><span>Borrador account.payment</span></div>
-                        <div class="card kpi-card op-cob-kpi" data-op-estado="RECHAZADO" role="button" tabindex="0"><h3>Rechazados</h3><p id="op-cob-n-RECHAZADO">—</p><span>No enviados a Odoo</span></div>
+                        <div class="card kpi-card op-cob-kpi" data-op-estado="ENVIADO_ODOO" role="button" tabindex="0"><h3>En Odoo</h3><p id="op-cob-n-ENVIADO_ODOO">—</p><span>CxC + Odoo</span></div>
+                        <div class="card kpi-card op-cob-kpi" data-op-origen="zelle_tercero" role="button" tabindex="0"><h3>Zelle 3ros</h3><p id="op-cob-n-ZELLE_TERCERO">—</p><span>Asiento CxP/CxC</span></div>
+                        <div class="card kpi-card op-cob-kpi" data-op-estado="RECHAZADO" role="button" tabindex="0"><h3>Rechazados</h3><p id="op-cob-n-RECHAZADO">—</p><span>No enviados</span></div>
                     </div>
 
                     <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.85rem;">
+                        <select id="op-cob-origen" class="filter-select" aria-label="Origen pago recibido">
+                            <option value="todos">🌐 Todos los orígenes (CxC + Odoo)</option>
+                            <option value="cxc">💻 Nacidos en Bot / CxC</option>
+                            <option value="odoo">🟣 Nacidos en Odoo</option>
+                            <option value="zelle_tercero">💵 Solo Zelle de Terceros</option>
+                        </select>
                         <select id="op-cob-estado" class="filter-select" aria-label="Estado pago recibido">
                             <option value="">Todos los estados</option>
                             <option value="PENDIENTE_APROBACION">⏳ Pendiente por aprobación</option>
+                            <option value="CONFIRMADO_CXC">✔️ Confirmado en CxC (Recibo)</option>
                             <option value="INCOMPLETO">⚠️ Incompleto</option>
-                            <option value="ENVIADO_ODOO">✅ Enviado a Odoo</option>
+                            <option value="ENVIADO_ODOO">✅ Enviado a Odoo (CxC)</option>
+                            <option value="CONFIRMADO_ODOO">🟣 Confirmado en Odoo</option>
                             <option value="ERROR">⚠️ Con error</option>
                             <option value="RECHAZADO">❌ Rechazado</option>
                         </select>
-                        <input type="text" id="op-cob-buscar" class="filter-select" placeholder="🔍 Buscar por PAG-..., cliente, RIF o referencia" style="cursor:text; min-width:260px; flex:1;">
+                        <input type="text" id="op-cob-buscar" class="filter-select" placeholder="🔍 Buscar por PAG-..., REC-..., cliente, RIF o referencia" style="cursor:text; min-width:260px; flex:1;">
                     </div>
                     <p id="op-cob-resumen" style="color:#64748b; font-size:0.84rem; margin:0 0 0.5rem 0;"></p>
 
@@ -716,11 +727,11 @@
                         <table class="cxc-table">
                             <thead>
                                 <tr>
-                                    <th>Documento</th>
+                                    <th>Documento / Origen</th>
                                     <th>Fecha</th>
                                     <th>Cliente</th>
                                     <th>Monto</th>
-                                    <th>Banco / Diario</th>
+                                    <th>Banco / Destino</th>
                                     <th>Referencia / Método</th>
                                     <th>Pedido</th>
                                     <th>Estado / Alertas</th>
@@ -728,7 +739,7 @@
                                 </tr>
                             </thead>
                             <tbody id="op-pagos-table-body">
-                                <tr><td colspan="9" class="table-empty">Cargando pagos por aprobar...</td></tr>
+                                <tr><td colspan="9" class="table-empty">Cargando pagos recibidos...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -741,7 +752,7 @@
                     <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
                         <div>
                             <h2 style="margin:0 0 0.25rem 0;">📤 Pagos Enviados a Proveedores (Bot ↔ CxC ↔ Odoo)</h2>
-                            <p style="color:#475569; margin:0;">Registra, revisa alertas de duplicado/diario y autoriza pagos salientes a proveedores antes de enviarlos como borrador a Odoo.</p>
+                            <p style="color:#475569; margin:0;">Vista unificada de pagos salientes nacidos en CxC y pagos confirmados en Odoo. Confirma primero en CxC (comprobante <code>EGR-</code>) antes de despachar borrador a Odoo.</p>
                         </div>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                             <button type="button" class="btn-primary" onclick="abrirModalNuevoOperativo('pago_proveedor')">➕ Nuevo Pago a Proveedor</button>
@@ -750,22 +761,30 @@
                     </div>
 
                     <div class="dashboard-kpi-row" style="margin:1rem 0;">
-                        <div class="card kpi-card op-env-kpi" data-op-estado="PENDIENTE_APROBACION" role="button" tabindex="0"><h3>Pendientes aprobación</h3><p id="op-env-n-PENDIENTE_APROBACION">—</p><span>Listos para autorizar</span></div>
+                        <div class="card kpi-card op-env-kpi" data-op-estado="PENDIENTE_APROBACION" role="button" tabindex="0"><h3>Pendientes aprobación</h3><p id="op-env-n-PENDIENTE_APROBACION">—</p><span>Listos para confirmar</span></div>
+                        <div class="card kpi-card op-env-kpi" data-op-estado="CONFIRMADO_CXC" role="button" tabindex="0"><h3>Confirmados CxC</h3><p id="op-env-n-CONFIRMADO_CXC">—</p><span>Con egreso EGR-</span></div>
                         <div class="card kpi-card op-env-kpi" data-op-estado="INCOMPLETO" role="button" tabindex="0"><h3>Incompletos</h3><p id="op-env-n-INCOMPLETO">—</p><span>Faltan datos</span></div>
-                        <div class="card kpi-card op-env-kpi" data-op-estado="ENVIADO_ODOO" role="button" tabindex="0"><h3>Enviados a Odoo</h3><p id="op-env-n-ENVIADO_ODOO">—</p><span>Borrador account.payment</span></div>
+                        <div class="card kpi-card op-env-kpi" data-op-estado="ENVIADO_ODOO" role="button" tabindex="0"><h3>En Odoo</h3><p id="op-env-n-ENVIADO_ODOO">—</p><span>CxC + Odoo</span></div>
                         <div class="card kpi-card op-env-kpi" data-op-estado="RECHAZADO" role="button" tabindex="0"><h3>Rechazados</h3><p id="op-env-n-RECHAZADO">—</p><span>No enviados a Odoo</span></div>
                     </div>
 
                     <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:0.85rem;">
+                        <select id="op-env-origen" class="filter-select" aria-label="Origen pago enviado">
+                            <option value="todos">🌐 Todos los orígenes (CxC + Odoo)</option>
+                            <option value="cxc">💻 Nacidos en Bot / CxC</option>
+                            <option value="odoo">🟣 Nacidos en Odoo</option>
+                        </select>
                         <select id="op-env-estado" class="filter-select" aria-label="Estado pago enviado">
                             <option value="">Todos los estados</option>
                             <option value="PENDIENTE_APROBACION">⏳ Pendiente por aprobación</option>
+                            <option value="CONFIRMADO_CXC">✔️ Confirmado en CxC (Egreso)</option>
                             <option value="INCOMPLETO">⚠️ Incompleto</option>
-                            <option value="ENVIADO_ODOO">✅ Enviado a Odoo</option>
+                            <option value="ENVIADO_ODOO">✅ Enviado a Odoo (CxC)</option>
+                            <option value="CONFIRMADO_ODOO">🟣 Confirmado en Odoo</option>
                             <option value="ERROR">⚠️ Con error</option>
                             <option value="RECHAZADO">❌ Rechazado</option>
                         </select>
-                        <input type="text" id="op-env-buscar" class="filter-select" placeholder="🔍 Buscar por PPR-..., proveedor, RIF o referencia" style="cursor:text; min-width:260px; flex:1;">
+                        <input type="text" id="op-env-buscar" class="filter-select" placeholder="🔍 Buscar por PPR-..., EGR-..., proveedor, RIF o referencia" style="cursor:text; min-width:260px; flex:1;">
                     </div>
                     <p id="op-env-resumen" style="color:#64748b; font-size:0.84rem; margin:0 0 0.5rem 0;"></p>
 
@@ -773,7 +792,7 @@
                         <table class="cxc-table">
                             <thead>
                                 <tr>
-                                    <th>Documento</th>
+                                    <th>Documento / Origen</th>
                                     <th>Fecha</th>
                                     <th>Proveedor</th>
                                     <th>Monto</th>
@@ -2205,6 +2224,7 @@
                 <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="listas">📋 Listas de Precio</button>
                 <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="otras">⚙️ Tasas y Feriados</button>
                 <button type="button" class="tab-btn config-subnav-btn" id="btn-cfg-sub-bots" data-config-subpage="bots">🤖 Bots de Telegram</button>
+                <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="tesoreria">🏦 Tesorería y Terceros</button>
                 <button type="button" class="tab-btn config-subnav-btn" data-config-subpage="motor">🔄 Motor</button>
             </div>
             <div class="config-grid">
@@ -3009,6 +3029,95 @@
                 </section>
             </div>
                 </div>
+
+                <!-- Subpágina: Tesorería y Cuentas Zelle de Terceros -->
+                <div class="config-subpage-full config-subpage-hidden" data-subpage="tesoreria" style="grid-column: 1 / -1; display:flex; flex-direction:column; gap:1.5rem;">
+                    <section class="card" style="padding:1.5rem;">
+                        <div class="panel-header-row" style="margin-bottom:1rem;">
+                            <div>
+                                <h2 style="margin:0 0 0.25rem 0;">🏦 Cuentas Zelle de Terceros (Proveedores)</h2>
+                                <p style="color:#475569; margin:0;">Configura las cuentas Zelle pertenecientes a proveedores donde los clientes pueden pagar sin pasar por nuestros bancos. Al aprobar, CxC genera en Odoo un asiento borrador: <strong>Débito CxP [Proveedor] / Crédito CxC [Cliente]</strong>.</p>
+                            </div>
+                            <button type="button" class="btn-secondary" onclick="loadConfigTesoreria()">↻ Actualizar</button>
+                        </div>
+                        <div class="table-wrapper" style="margin-bottom:1.25rem;">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Alias / Moneda</th>
+                                        <th>Titular / Correo o Teléfono</th>
+                                        <th>Proveedor Contrapartida Odoo</th>
+                                        <th>Diario Contable</th>
+                                        <th>Estado</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="zt-table-body">
+                                    <tr><td colspan="6" class="table-empty">Cargando cuentas de terceros...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <form id="zt-form" class="cxc-form" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1.15rem;">
+                            <h3 id="zt-form-titulo" style="margin:0 0 0.85rem 0;">➕ Nueva Cuenta Zelle de Tercero (Proveedor)</h3>
+                            <input type="hidden" id="zt-id">
+                            <input type="hidden" id="zt-prov-id">
+                            <input type="hidden" id="zt-prov-nombre">
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:0.75rem;">
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Alias identificativo *</label>
+                                    <input type="text" id="zt-alias" class="filter-select" style="width:100%; cursor:text;" placeholder="Ej. Zelle Importadora Norte" required>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Titular de la cuenta Zelle</label>
+                                    <input type="text" id="zt-titular" class="filter-select" style="width:100%; cursor:text;" placeholder="Nombre en el comprobante">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Correo o teléfono Zelle (auto-detección IA)</label>
+                                    <input type="text" id="zt-correo" class="filter-select" style="width:100%; cursor:text;" placeholder="pagos@proveedor.com / +1...">
+                                </div>
+                                <div style="position:relative;">
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Proveedor en Odoo (contrapartida CxP) *</label>
+                                    <input type="text" id="zt-prov-buscar" class="filter-select" style="width:100%; cursor:text;" placeholder="Buscar proveedor por nombre o RIF...">
+                                    <div id="zt-prov-resultados" style="display:none; position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #cbd5e1; border-radius:8px; max-height:200px; overflow-y:auto; z-index:40; box-shadow:0 8px 20px rgba(0,0,0,0.12);"></div>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Diario General Odoo (Asientos)</label>
+                                    <select id="zt-diario-id" class="filter-select" style="width:100%;">
+                                        <option value="">(Diario de Operaciones Varias por defecto)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Moneda</label>
+                                    <select id="zt-moneda" class="filter-select" style="width:100%;">
+                                        <option value="USD">USD</option>
+                                        <option value="VES">VES</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Override Cuenta CxP Proveedor (opcional)</label>
+                                    <select id="zt-cxp-override" class="filter-select" style="width:100%;">
+                                        <option value="">(Automática de la ficha del Proveedor)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Override Cuenta CxC Cliente (opcional)</label>
+                                    <select id="zt-cxc-override" class="filter-select" style="width:100%;">
+                                        <option value="">(Automática de la ficha del Cliente)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="margin-top:0.75rem;">
+                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Notas internas</label>
+                                <input type="text" id="zt-notas" class="filter-select" style="width:100%; cursor:text;" placeholder="Instrucciones para el equipo o contabilidad">
+                            </div>
+                            <div style="display:flex; gap:0.65rem; align-items:center; flex-wrap:wrap; margin-top:0.85rem;">
+                                <button type="submit" class="btn-primary">💾 Guardar Cuenta de Tercero</button>
+                                <button type="button" class="btn-secondary" id="zt-cancelar" style="display:none;">Cancelar edición</button>
+                                <span id="zt-status" style="font-size:0.85rem; font-weight:600;"></span>
+                            </div>
+                        </form>
+                    </section>
+                </div>
             </div>
         </div>
 
@@ -3376,6 +3485,24 @@
                         </div>
                     </div>
 
+                    <div id="op-wrap-zelle-tercero" style="display:none; flex-direction:column; gap:0.6rem; background:#f5f3ff; border:1px solid #ddd6fe; border-radius:10px; padding:0.75rem 0.9rem;">
+                        <label style="display:flex; align-items:center; gap:0.45rem; font-size:0.85rem; font-weight:700; color:#5b21b6; cursor:pointer;">
+                            <input type="checkbox" id="op-f-es-zelle-tercero"> 💵 Este cobro fue enviado por Zelle a cuenta de un Tercero / Proveedor (no entra a bancos propios)
+                        </label>
+                        <div id="op-sub-zelle-tercero" style="display:none; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:0.75rem;">
+                            <div>
+                                <label style="font-size:0.78rem; color:#4c1d95; font-weight:600;">Cuenta Zelle de Tercero (Proveedor) *</label>
+                                <select id="op-f-cuenta-tercero" class="filter-select" style="width:100%;">
+                                    <option value="">Selecciona la cuenta del tercero…</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:0.78rem; color:#4c1d95; font-weight:600;">Titular / Correo en el comprobante</label>
+                                <input type="text" id="op-f-beneficiario-tercero" class="filter-select" style="width:100%; cursor:text;" placeholder="Beneficiario recibido en Zelle">
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="op-grp-compra" style="display:none; flex-direction:column; gap:0.75rem;">
                         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0.75rem;">
                             <div>
@@ -3440,8 +3567,10 @@
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                             <button type="submit" id="op-btn-guardar" class="btn-primary">💾 Guardar cambios</button>
                             <a id="op-btn-preview" href="#" target="_blank" rel="noopener" class="btn-secondary" style="display:none; text-decoration:none; padding:0.5rem 0.9rem;">🔗 Abrir Preview</a>
+                            <a id="op-btn-recibo" href="#" target="_blank" rel="noopener" class="btn-secondary" style="display:none; text-decoration:none; padding:0.5rem 0.9rem; background:#eff6ff; color:#1d4ed8;">🧾 Ver Recibo</a>
                         </div>
                         <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" id="op-btn-confirmar-cxc" class="btn-primary" style="display:none; background:#0284c7;" onclick="confirmarOperativoModal(false)">✔️ Confirmar en CxC (Recibo)</button>
                             <button type="button" id="op-btn-rechazar" class="btn-secondary" style="display:none; color:#991b1b;" onclick="rechazarOperativoModal()">❌ Rechazar</button>
                             <button type="button" id="op-btn-aprobar" class="btn-primary" style="display:none; background:#16a34a;" onclick="aprobarOperativoModal()">✅ Autorizar y Enviar a Odoo</button>
                         </div>
@@ -3450,8 +3579,10 @@
             </div>
         </div>
 
-    <script src="/static/app.js?v=20261119_2"></script>
-    <script src="/static/js/shell.js?v=20261119_2"></script>
-    <script src="/static/js/pagos_enviados.js?v=20261119_2"></script>
+    <script src="/static/app.js?v=20261119_3"></script>
+    <script src="/static/js/shell.js?v=20261119_3"></script>
+    <script src="/static/js/pagos_unificados.js?v=20261119_3"></script>
+    <script src="/static/js/pagos_enviados.js?v=20261119_3"></script>
+    <script src="/static/js/config_tesoreria.js?v=20261119_3"></script>
 </body>
 </html>
