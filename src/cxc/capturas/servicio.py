@@ -337,10 +337,22 @@ class ServicioCapturas:
         faltan = validar(c.kind, c.payload)
         if faltan:
             return self._repo.actualizar(captura_id, estado=INCOMPLETO, incompleto=faltan)
-        if c.kind == COTIZACION or (c.kind == PEDIDO and c.payload.get("requiere_aprobacion_cxc")):
-            # Las cotizaciones y los pedidos sujetos a aprobación quedan en CxC (Ventas) y solo
+        if (
+            c.kind == COTIZACION
+            or (c.kind == PEDIDO and c.payload.get("requiere_aprobacion_cxc"))
+            or (
+                c.kind in (PAGO, PAGO_PROVEEDOR, FACTURA_PROVEEDOR, GASTO)
+                and c.payload.get("requiere_aprobacion_cxc")
+            )
+        ):
+            # Las cotizaciones y los pedidos/operativos sujetos a aprobación quedan en CxC y solo
             # se envían a Odoo cuando una persona autorizada los aprueba en el panel de CxC.
-            modo_cxc = "pendiente_aprobacion_cxc" if c.kind == PEDIDO else "documento_cxc"
+            es_operativo = c.kind in (PAGO, PAGO_PROVEEDOR, FACTURA_PROVEEDOR, GASTO)
+            modo_cxc = (
+                "pendiente_aprobacion_cxc"
+                if (c.kind == PEDIDO or es_operativo)
+                else "documento_cxc"
+            )
             self._repo.evento(captura_id, "registrada_en_cxc", c.kind)
             return self._repo.actualizar(
                 captura_id,
@@ -348,7 +360,12 @@ class ServicioCapturas:
                 odoo_ref="",
                 incompleto=[],
                 error="",
-                resultado={**c.resultado, "modo": modo_cxc, "transitorio": False},
+                resultado={
+                    **c.resultado,
+                    "modo": modo_cxc,
+                    "es_operativo": es_operativo,
+                    "transitorio": False,
+                },
             )
         try:
             escritor = self._fabrica()

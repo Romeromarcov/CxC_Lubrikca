@@ -310,6 +310,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadBandeja === "function") loadBandeja();
             } else if (path === "cobranza") {
                 if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
+                if (typeof loadOperativosCobranza === "function") loadOperativosCobranza();
             } else if (path === "ventas") {
                 if (typeof loadVentas === "function") loadVentas();
             } else if (path === "reporte") {
@@ -324,6 +325,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (typeof loadBancos === "function") loadBancos();
             } else if (path === "capturas") {
                 if (typeof loadCapturas === "function") loadCapturas();
+                if (typeof loadOperativosCompras === "function") loadOperativosCompras();
             } else if (path === "bots") {
                 if (typeof loadBots === "function") loadBots();
             } else if (path === "configuracion") {
@@ -6890,6 +6892,8 @@ document.addEventListener("DOMContentLoaded", () => {
             loadContactosOdoo(false);
         } else if (subpage === "cuentas" && !_ctaCargadoUnaVez) {
             loadPlanCuentasOdoo(false);
+        } else if (subpage === "aprobacion" && typeof loadOperativosCompras === "function") {
+            loadOperativosCompras();
         }
     }
 
@@ -8075,6 +8079,583 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             if (boxProd && !e.target.closest("#doc-buscar-producto") && !e.target.closest("#doc-resultados-producto")) {
                 boxProd.style.display = "none";
+            }
+        });
+    })();
+
+    // =========================================================================
+    // DOCUMENTOS OPERATIVOS: Pagos Recibidos, Facturas de Proveedor,
+    // Pagos a Proveedor y Gastos sin Factura (Bot <-> CxC <-> Odoo).
+    // =========================================================================
+    let _opCatalogos = { diarios_bancarios: [], diarios_compras: [], cuentas_contables: [] };
+    let _opCatalogosCargados = false;
+    let _opPuedeAprobarPagos = false;
+    let _opPuedeAprobarCompras = false;
+    let _opValidTimer = null;
+
+    function applyCobranzaSubpage(subpage) {
+        document.querySelectorAll("#tab-cobranza [data-cobranza-panel]").forEach((panel) => {
+            panel.classList.toggle(
+                "config-subpage-hidden",
+                panel.getAttribute("data-cobranza-panel") !== subpage
+            );
+        });
+        document.querySelectorAll(".cobranza-subnav-btn").forEach((btn) => {
+            btn.classList.toggle("active", btn.getAttribute("data-cobranza-subpage") === subpage);
+        });
+        if (subpage === "aprobacion") loadOperativosCobranza();
+    }
+
+    function _opEstadoBadge(d) {
+        if (d.estado === "ENVIADO_ODOO") {
+            return `<span class="semaphore verde">✅ En Odoo (${_capEsc(d.odoo_ref || "")})</span>`;
+        }
+        if (d.estado === "PENDIENTE_APROBACION") {
+            return `<span class="semaphore amarillo">⏳ Pendiente aprobación</span>`;
+        }
+        if (d.estado === "INCOMPLETO" || d.estado === "BORRADOR") {
+            return `<span class="semaphore amarillo">⚠️ Incompleto</span>`;
+        }
+        if (d.estado === "RECHAZADO") {
+            return `<span class="semaphore rojo">❌ Rechazado</span>`;
+        }
+        return `<span class="semaphore rojo">⚠️ Error Odoo</span>`;
+    }
+
+    function _opTipoBadge(tipo) {
+        const mapa = {
+            pago: ["💵 Pago recibido", "abierta"],
+            factura_proveedor: ["🧾 Factura prov.", "cierre"],
+            pago_proveedor: ["💸 Pago a prov.", "cierre"],
+            gasto: ["🛒 Gasto menor", "abierta"],
+        };
+        const [txt, cls] = mapa[tipo] || [tipo, ""];
+        return `<span class="state-badge ${cls}">${_capEsc(txt)}</span>`;
+    }
+
+    function _opAlertasHtml(d) {
+        const partes = [];
+        if ((d.faltantes || []).length) {
+            partes.push(`<div class="cap-sub" style="color:#b45309;">Falta: ${d.faltantes.map(_capEsc).join(", ")}</div>`);
+        }
+        if ((d.alertas || []).length) {
+            partes.push(`<div class="cap-sub" style="color:#92400e;">⚠️ ${d.alertas.length} alerta(s): ${_capEsc(d.alertas[0])}</div>`);
+        }
+        if (d.error_odoo) {
+            partes.push(`<div class="cap-sub" style="color:#dc2626;">${_capEsc(d.error_odoo)}</div>`);
+        }
+        if (d.aprobado_por) {
+            partes.push(`<div class="cap-sub">Por: ${_capEsc(d.aprobado_por)}</div>`);
+        }
+        return partes.join("");
+    }
+
+    async function _opCargarCatalogos(forzar = false) {
+        if (_opCatalogosCargados && !forzar) return _opCatalogos;
+        try {
+            const res = await fetch("/api/operativos/catalogos");
+            if (res.ok) {
+                _opCatalogos = await res.json();
+                _opCatalogosCargados = true;
+            }
+        } catch (_e) { /* silencioso */ }
+        return _opCatalogos;
+    }
+
+    function _opPoblarSelectCatalogos(tipo, diarioSel, cuentaSel) {
+        const selD = document.getElementById("op-f-diario");
+        const selC = document.getElementById("op-f-cuenta");
+        if (selD) {
+            const diarios = _opCatalogos.diarios_bancarios || [];
+            selD.innerHTML = `<option value="">(Detección automática)</option>` + diarios.map((d) =>
+                `<option value="${d.id}">${_capEsc(d.nombre)} (${_capEsc(d.moneda || d.codigo)})</option>`
+            ).join("");
+            if (diarioSel != null && diarioSel !== "") selD.value = String(diarioSel);
+        }
+        if (selC) {
+            const cuentas = _opCatalogos.cuentas_contables || [];
+            selC.innerHTML = `<option value="">(Por defecto del producto / proveedor en Odoo)</option>` + cuentas.map((c) =>
+                `<option value="${c.id}">${_capEsc(c.etiqueta || ((c.code || "") + " " + c.name))}</option>`
+            ).join("");
+            if (cuentaSel != null && cuentaSel !== "") selC.value = String(cuentaSel);
+        }
+        _opActualizarCamposVisibles(tipo);
+    }
+
+    function _opActualizarCamposVisibles(tipo) {
+        const esPago = tipo === "pago" || tipo === "pago_proveedor";
+        document.querySelectorAll(".op-grp-pago").forEach((el) => {
+            if (!el.style.gridTemplateColumns) el.style.display = esPago ? "block" : "none";
+            else el.style.display = esPago ? "grid" : "none";
+        });
+        document.querySelectorAll(".op-grp-compra").forEach((el) => {
+            el.style.display = esPago ? "none" : "flex";
+        });
+        const wPed = document.getElementById("op-wrap-pedido-ref");
+        const wFac = document.getElementById("op-wrap-factura-ref");
+        if (wPed) wPed.style.display = tipo === "pago" ? "block" : "none";
+        if (wFac) wFac.style.display = tipo === "pago_proveedor" ? "block" : "none";
+        const wSf = document.getElementById("op-wrap-sin-factura");
+        if (wSf) wSf.style.display = tipo === "gasto" ? "flex" : "none";
+        const lblC = document.getElementById("op-lbl-contraparte");
+        if (lblC) lblC.textContent = tipo === "pago" ? "Cliente" : (tipo === "gasto" ? "Comercio / Proveedor" : "Proveedor");
+    }
+
+    async function loadOperativosCobranza() {
+        const tbody = document.getElementById("op-pagos-table-body");
+        const estado = (document.getElementById("op-cob-estado") || {}).value || "";
+        const q = ((document.getElementById("op-cob-buscar") || {}).value || "").trim();
+        const qs = new URLSearchParams({ grupo: "cobranza", limit: "100" });
+        if (estado) qs.set("estado", estado);
+        if (q) qs.set("q", q);
+        try {
+            const res = await fetch(`/api/operativos?${qs}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            _opPuedeAprobarPagos = Boolean(data.puede_aprobar_pagos);
+            const r = data.resumen || {};
+            const badge = document.getElementById("badge-op-pagos-pend");
+            if (badge) badge.textContent = String(r.pendientes_aprobacion || 0);
+            for (const [idEl, val] of [
+                ["op-cob-n-PENDIENTE_APROBACION", r.pendientes_aprobacion || 0],
+                ["op-cob-n-INCOMPLETO", r.incompletos || 0],
+                ["op-cob-n-ENVIADO_ODOO", r.enviados_odoo || 0],
+                ["op-cob-n-RECHAZADO", r.rechazados || 0],
+            ]) {
+                const el = document.getElementById(idEl);
+                if (el) el.textContent = String(val);
+            }
+            const resEl = document.getElementById("op-cob-resumen");
+            if (resEl) resEl.textContent = `${data.total || 0} pago(s) encontrado(s)`;
+            if (!tbody) return;
+            const items = data.items || [];
+            if (!items.length) {
+                tbody.innerHTML = `<tr><td colspan="9" class="table-empty">No hay pagos recibidos en espera o con estos filtros.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = items.map((d) => {
+                const eq = d.validacion && d.validacion.equivalente_usd && d.validacion.equivalente_usd.usd_bcv != null
+                    ? `<div class="cap-sub">≈ $${Number(d.validacion.equivalente_usd.usd_bcv).toFixed(2)} BCV</div>` : "";
+                const refTxt = d.es_efectivo ? `<span style="color:#0369a1; font-weight:600;">Efectivo (memo vacío)</span>` : _capEsc(d.referencia || "—");
+                const btnPrev = d.preview_path ? `<a href="${_capEsc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; text-decoration:none;">🔗 Preview</a>` : "";
+                const btnApr = (d.puede_aprobar && _opPuedeAprobarPagos)
+                    ? `<button type="button" class="btn-primary" style="padding:0.32rem 0.6rem; font-size:0.78rem; background:#16a34a;" onclick="aprobarOperativo(${d.id})">✅ Autorizar</button>` : "";
+                const btnRec = (d.puede_rechazar && _opPuedeAprobarPagos)
+                    ? `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; color:#991b1b;" onclick="rechazarOperativo(${d.id})">✖</button>` : "";
+                return `<tr>
+                    <td><strong>${_capEsc(d.numero)}</strong><div class="cap-sub">${d.origen === "bot" ? "📲 Bot" : "💻 Web"}</div></td>
+                    <td>${_capEsc(d.fecha_documento || "—")}</td>
+                    <td><strong>${_capEsc(d.contraparte_nombre || "Sin cliente")}</strong><div class="cap-sub">${_capEsc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Sin vincular"))}</div></td>
+                    <td><strong>${d.monto != null ? _capMonto(d.monto) : "—"} ${_capEsc(d.moneda)}</strong>${eq}</td>
+                    <td>${_capEsc(d.diario_nombre || d.banco || "Por definir")}</td>
+                    <td>${refTxt}<div class="cap-sub">${_capEsc(d.metodo_pago || "")}</div></td>
+                    <td>${_capEsc(d.pedido_ref || "—")}</td>
+                    <td>${_opEstadoBadge(d)}${_opAlertasHtml(d)}</td>
+                    <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">
+                        ${btnPrev}
+                        <button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem;" onclick="editarOperativoPorId(${d.id})">${d.puede_editar ? "✏️ Editar" : "👁 Ver"}</button>
+                        ${btnApr}${btnRec}
+                    </td>
+                </tr>`;
+            }).join("");
+        } catch (err) {
+            if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+        }
+    }
+    window.loadOperativosCobranza = loadOperativosCobranza;
+
+    async function loadOperativosCompras() {
+        const tbody = document.getElementById("op-compras-table-body");
+        const tipo = (document.getElementById("op-cmp-tipo") || {}).value || "";
+        const estado = (document.getElementById("op-cmp-estado") || {}).value || "";
+        const q = ((document.getElementById("op-cmp-buscar") || {}).value || "").trim();
+        const qs = new URLSearchParams({ grupo: "compras", limit: "100" });
+        if (tipo) qs.set("tipo", tipo);
+        if (estado) qs.set("estado", estado);
+        if (q) qs.set("q", q);
+        try {
+            const res = await fetch(`/api/operativos?${qs}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            _opPuedeAprobarCompras = Boolean(data.puede_aprobar_compras);
+            const r = data.resumen || {};
+            const badge = document.getElementById("badge-op-compras-pend");
+            if (badge) badge.textContent = String(r.pendientes_aprobacion || 0);
+            for (const [idEl, val] of [
+                ["op-cmp-n-PENDIENTE_APROBACION", r.pendientes_aprobacion || 0],
+                ["op-cmp-n-INCOMPLETO", r.incompletos || 0],
+                ["op-cmp-n-ENVIADO_ODOO", r.enviados_odoo || 0],
+                ["op-cmp-n-RECHAZADO", r.rechazados || 0],
+            ]) {
+                const el = document.getElementById(idEl);
+                if (el) el.textContent = String(val);
+            }
+            const resEl = document.getElementById("op-cmp-resumen");
+            if (resEl) resEl.textContent = `${data.total || 0} documento(s) de compras/gastos`;
+            if (!tbody) return;
+            const items = data.items || [];
+            if (!items.length) {
+                tbody.innerHTML = `<tr><td colspan="9" class="table-empty">No hay facturas de proveedor, pagos a proveedores ni gastos con estos filtros.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = items.map((d) => {
+                const docRef = d.tipo === "pago_proveedor"
+                    ? (d.es_efectivo ? "Efectivo (memo vacío)" : (d.referencia || "—"))
+                    : (d.numero_documento || (d.sin_factura ? "Sin factura (S/N)" : "—"));
+                const subRef = d.tipo === "pago_proveedor"
+                    ? (d.factura_ref ? `Fac: ${d.factura_ref}` : d.metodo_pago)
+                    : (d.numero_control ? `Ctrl: ${d.numero_control}` : d.categoria);
+                const diarioCta = d.tipo === "pago_proveedor"
+                    ? _capEsc(d.diario_nombre || d.banco || "Por definir")
+                    : `${_capEsc(d.diario_nombre || "Diario Compras VES")}${d.cuenta_contable_codigo ? `<div class="cap-sub">${_capEsc(d.cuenta_contable_codigo)} · ${_capEsc(d.cuenta_contable_nombre)}</div>` : ""}`;
+                const btnPrev = d.preview_path ? `<a href="${_capEsc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; text-decoration:none;">🔗 Preview</a>` : "";
+                const btnApr = (d.puede_aprobar && _opPuedeAprobarCompras)
+                    ? `<button type="button" class="btn-primary" style="padding:0.32rem 0.6rem; font-size:0.78rem; background:#16a34a;" onclick="aprobarOperativo(${d.id})">✅ Autorizar</button>` : "";
+                const btnRec = (d.puede_rechazar && _opPuedeAprobarCompras)
+                    ? `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; color:#991b1b;" onclick="rechazarOperativo(${d.id})">✖</button>` : "";
+                return `<tr>
+                    <td><strong>${_capEsc(d.numero)}</strong><div class="cap-sub">${d.origen === "bot" ? "📲 Bot" : "💻 Web"}</div></td>
+                    <td>${_opTipoBadge(d.tipo)}</td>
+                    <td>${_capEsc(d.fecha_documento || "—")}</td>
+                    <td><strong>${_capEsc(d.contraparte_nombre || "Sin proveedor")}</strong><div class="cap-sub">${_capEsc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Se creará al aprobar"))}</div></td>
+                    <td><strong>${_capEsc(docRef)}</strong>${subRef ? `<div class="cap-sub">${_capEsc(subRef)}</div>` : ""}</td>
+                    <td><strong>${d.monto != null ? _capMonto(d.monto) : "—"} ${_capEsc(d.moneda)}</strong></td>
+                    <td>${diarioCta}</td>
+                    <td>${_opEstadoBadge(d)}${_opAlertasHtml(d)}</td>
+                    <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">
+                        ${btnPrev}
+                        <button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem;" onclick="editarOperativoPorId(${d.id})">${d.puede_editar ? "✏️ Editar" : "👁 Ver"}</button>
+                        ${btnApr}${btnRec}
+                    </td>
+                </tr>`;
+            }).join("");
+        } catch (err) {
+            if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="table-empty">❌ ${_capEsc(err.message)}</td></tr>`;
+        }
+    }
+    window.loadOperativosCompras = loadOperativosCompras;
+
+    function _opRecolectarFormulario() {
+        const tipo = document.getElementById("op-f-tipo").value;
+        const pid = document.getElementById("op-f-partner-id").value;
+        const jid = document.getElementById("op-f-diario").value;
+        const cid = document.getElementById("op-f-cuenta").value;
+        return {
+            tipo,
+            partner_odoo_id: pid ? Number(pid) : null,
+            contraparte_nombre: document.getElementById("op-f-contraparte").value.trim(),
+            rif: document.getElementById("op-f-rif").value.trim(),
+            monto: document.getElementById("op-f-monto").value || null,
+            moneda: document.getElementById("op-f-moneda").value,
+            fecha_documento: document.getElementById("op-f-fecha").value || null,
+            metodo_pago: document.getElementById("op-f-metodo").value.trim(),
+            referencia: document.getElementById("op-f-referencia").value.trim(),
+            banco: document.getElementById("op-f-banco").value.trim(),
+            diario_id: jid ? Number(jid) : null,
+            pedido_ref: document.getElementById("op-f-pedido-ref").value.trim(),
+            factura_ref: document.getElementById("op-f-factura-ref").value.trim(),
+            numero_documento: document.getElementById("op-f-num-doc").value.trim(),
+            numero_control: document.getElementById("op-f-num-control").value.trim(),
+            base_imponible: document.getElementById("op-f-base").value || null,
+            iva: document.getElementById("op-f-iva").value || null,
+            fecha_vencimiento: document.getElementById("op-f-vencimiento").value || null,
+            categoria: document.getElementById("op-f-categoria").value,
+            cuenta_contable_id: cid ? Number(cid) : null,
+            concepto: document.getElementById("op-f-concepto").value.trim(),
+            sin_factura: document.getElementById("op-f-sin-factura").checked,
+            notas: document.getElementById("op-f-notas").value.trim(),
+        };
+    }
+
+    function _opRenderAlertasValidacion(val) {
+        const box = document.getElementById("op-modal-alertas");
+        if (!box || !val) return;
+        const alertas = val.alertas || [];
+        const falt = val.faltantes || [];
+        const partes = [];
+        if (falt.length) {
+            partes.push(`<div style="border-left:4px solid #e11d48; background:#fff1f2; padding:0.5rem 0.85rem; border-radius:6px; color:#9f1239; font-size:0.84rem; margin-bottom:0.4rem;"><strong>Faltan datos:</strong> ${falt.map(_capEsc).join(", ")}</div>`);
+        }
+        if (alertas.length) {
+            partes.push(`<div style="border-left:4px solid #f59e0b; background:#fffbeb; padding:0.5rem 0.85rem; border-radius:6px; color:#92400e; font-size:0.84rem; margin-bottom:0.4rem;"><strong>⚠️ Validaciones CxC:</strong><ul style="margin:0.25rem 0 0 1rem; padding:0;">${alertas.map((a) => `<li>${_capEsc(a)}</li>`).join("")}</ul></div>`);
+        }
+        if (val.regla_odoo) {
+            partes.push(`<div style="border-left:4px solid #2563eb; background:#eff6ff; padding:0.45rem 0.85rem; border-radius:6px; color:#1e3a8a; font-size:0.82rem;"><strong>Regla Odoo:</strong> ${_capEsc(val.regla_odoo)}</div>`);
+        }
+        box.innerHTML = partes.join("");
+    }
+
+    function _opProgramarValidacion() {
+        clearTimeout(_opValidTimer);
+        _opValidTimer = setTimeout(async () => {
+            const payload = _opRecolectarFormulario();
+            const idVal = document.getElementById("op-f-id").value;
+            try {
+                const res = await fetch("/api/operativos/validar", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        tipo: payload.tipo,
+                        excluir_id: idVal ? Number(idVal) : null,
+                        datos: payload,
+                    }),
+                });
+                const val = await res.json().catch(() => null);
+                if (res.ok && val) _opRenderAlertasValidacion(val);
+            } catch (_e) { /* silencioso */ }
+        }, 260);
+    }
+
+    window.cerrarModalOperativo = function() {
+        const m = document.getElementById("modal-operativo");
+        if (m) m.style.display = "none";
+    };
+
+    function _opLlenarFormulario(d) {
+        const tipo = d.tipo || "pago";
+        document.getElementById("op-f-id").value = d.id ? String(d.id) : "";
+        document.getElementById("op-f-tipo").value = tipo;
+        document.getElementById("op-f-tipo").disabled = Boolean(d.id);
+        document.getElementById("op-f-partner-id").value = d.partner_odoo_id != null ? String(d.partner_odoo_id) : "";
+        document.getElementById("op-f-buscar-contacto").value = "";
+        document.getElementById("op-f-contraparte").value = d.contraparte_nombre || "";
+        document.getElementById("op-f-rif").value = d.rif || "";
+        document.getElementById("op-f-monto").value = d.monto != null ? String(d.monto) : "";
+        document.getElementById("op-f-moneda").value = d.moneda || "VES";
+        document.getElementById("op-f-fecha").value = d.fecha_documento || new Date().toISOString().slice(0, 10);
+        document.getElementById("op-f-metodo").value = d.metodo_pago || "";
+        document.getElementById("op-f-referencia").value = d.referencia || "";
+        document.getElementById("op-f-banco").value = d.banco || "";
+        document.getElementById("op-f-pedido-ref").value = d.pedido_ref || "";
+        document.getElementById("op-f-factura-ref").value = d.factura_ref || "";
+        document.getElementById("op-f-num-doc").value = d.numero_documento || "";
+        document.getElementById("op-f-num-control").value = d.numero_control || "";
+        document.getElementById("op-f-base").value = d.base_imponible != null ? String(d.base_imponible) : "";
+        document.getElementById("op-f-iva").value = d.iva != null ? String(d.iva) : "";
+        document.getElementById("op-f-vencimiento").value = d.fecha_vencimiento || "";
+        document.getElementById("op-f-categoria").value = d.categoria || "";
+        document.getElementById("op-f-concepto").value = d.concepto || "";
+        document.getElementById("op-f-sin-factura").checked = Boolean(d.sin_factura);
+        document.getElementById("op-f-notas").value = d.notas || "";
+        _opPoblarSelectCatalogos(tipo, d.diario_id, d.cuenta_contable_id);
+        _opRenderAlertasValidacion(d.validacion || { faltantes: d.faltantes || [], alertas: d.alertas || [] });
+
+        const tit = document.getElementById("op-modal-titulo");
+        const sub = document.getElementById("op-modal-sub");
+        if (tit) tit.textContent = d.id ? `${d.numero} · ${d.tipo_etiqueta || tipo}` : "Nuevo Documento Operativo";
+        if (sub) sub.textContent = d.id ? `Estado: ${d.estado} · Origen: ${d.origen}` : "Validación en vivo contra CxC y Odoo antes de aprobar";
+
+        const btnPrev = document.getElementById("op-btn-preview");
+        if (btnPrev) {
+            if (d.preview_path) { btnPrev.href = d.preview_path; btnPrev.style.display = "inline-block"; }
+            else btnPrev.style.display = "none";
+        }
+        const editable = !d.id || d.puede_editar;
+        document.getElementById("op-btn-guardar").style.display = editable ? "inline-block" : "none";
+        const puedeApr = Boolean(d.id && d.puede_aprobar && (d.tipo === "pago" ? _opPuedeAprobarPagos : _opPuedeAprobarCompras));
+        const puedeRec = Boolean(d.id && d.puede_rechazar && (d.tipo === "pago" ? _opPuedeAprobarPagos : _opPuedeAprobarCompras));
+        document.getElementById("op-btn-aprobar").style.display = puedeApr ? "inline-block" : "none";
+        document.getElementById("op-btn-rechazar").style.display = puedeRec ? "inline-block" : "none";
+        document.getElementById("op-modal-status").textContent = "";
+    }
+
+    window.abrirModalNuevoOperativo = async function(tipo = "pago") {
+        await _opCargarCatalogos(false);
+        _opLlenarFormulario({ tipo, moneda: "VES" });
+        document.getElementById("modal-operativo").style.display = "flex";
+    };
+
+    window.editarOperativoPorId = async function(id) {
+        await _opCargarCatalogos(false);
+        try {
+            const res = await fetch(`/api/operativos/${encodeURIComponent(id)}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+            _opLlenarFormulario(data);
+            document.getElementById("modal-operativo").style.display = "flex";
+        } catch (err) {
+            alert("❌ " + err.message);
+        }
+    };
+
+    async function _opRefrescarTablas() {
+        await Promise.all([loadOperativosCobranza(), loadOperativosCompras()]);
+    }
+
+    window.aprobarOperativo = async function(id) {
+        if (!confirm("¿Autorizar este documento y enviarlo como borrador a Odoo?")) return;
+        try {
+            const res = await fetch(`/api/operativos/${encodeURIComponent(id)}/aprobar`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+            alert(`✅ ${data.numero} enviado a Odoo (${data.odoo_ref}).`);
+            await _opRefrescarTablas();
+        } catch (err) {
+            alert("⚠️ " + err.message);
+        }
+    };
+
+    window.rechazarOperativo = async function(id) {
+        const motivo = prompt("Motivo de rechazo (opcional):", "") || "";
+        if (motivo === null) return;
+        try {
+            const res = await fetch(`/api/operativos/${encodeURIComponent(id)}/rechazar`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ motivo }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+            await _opRefrescarTablas();
+        } catch (err) {
+            alert("⚠️ " + err.message);
+        }
+    };
+
+    window.aprobarOperativoModal = async function() {
+        const id = document.getElementById("op-f-id").value;
+        if (!id) return;
+        const st = document.getElementById("op-modal-status");
+        st.style.color = "#1e40af";
+        st.textContent = "Enviando a Odoo...";
+        try {
+            const res = await fetch(`/api/operativos/${encodeURIComponent(id)}/aprobar`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+            _opLlenarFormulario(data);
+            st.style.color = "#15803d";
+            st.textContent = `✅ Autorizado y creado en Odoo (${data.odoo_ref}).`;
+            await _opRefrescarTablas();
+        } catch (err) {
+            st.style.color = "#b91c1c";
+            st.textContent = "⚠️ " + err.message;
+        }
+    };
+
+    window.rechazarOperativoModal = async function() {
+        const id = document.getElementById("op-f-id").value;
+        if (!id) return;
+        const motivo = prompt("Motivo del rechazo:", "") || "";
+        const st = document.getElementById("op-modal-status");
+        try {
+            const res = await fetch(`/api/operativos/${encodeURIComponent(id)}/rechazar`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ motivo }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+            _opLlenarFormulario(data);
+            st.style.color = "#991b1b";
+            st.textContent = "❌ Documento marcado como rechazado.";
+            await _opRefrescarTablas();
+        } catch (err) {
+            st.style.color = "#b91c1c";
+            st.textContent = "⚠️ " + err.message;
+        }
+    };
+
+    (function _initOperativosUI() {
+        document.querySelectorAll(".cobranza-subnav-btn").forEach((btn) => {
+            btn.addEventListener("click", () => applyCobranzaSubpage(btn.getAttribute("data-cobranza-subpage")));
+        });
+        document.getElementById("op-cob-estado")?.addEventListener("change", loadOperativosCobranza);
+        let tCob = null;
+        document.getElementById("op-cob-buscar")?.addEventListener("input", () => {
+            clearTimeout(tCob);
+            tCob = setTimeout(loadOperativosCobranza, 280);
+        });
+        document.querySelectorAll(".op-cob-kpi").forEach((k) => {
+            k.addEventListener("click", () => {
+                const s = document.getElementById("op-cob-estado");
+                if (s) { s.value = k.dataset.opEstado || ""; loadOperativosCobranza(); }
+            });
+        });
+
+        document.getElementById("op-cmp-tipo")?.addEventListener("change", loadOperativosCompras);
+        document.getElementById("op-cmp-estado")?.addEventListener("change", loadOperativosCompras);
+        let tCmp = null;
+        document.getElementById("op-cmp-buscar")?.addEventListener("input", () => {
+            clearTimeout(tCmp);
+            tCmp = setTimeout(loadOperativosCompras, 280);
+        });
+        document.querySelectorAll(".op-cmp-kpi").forEach((k) => {
+            k.addEventListener("click", () => {
+                const s = document.getElementById("op-cmp-estado");
+                if (s) { s.value = k.dataset.opEstado || ""; loadOperativosCompras(); }
+            });
+        });
+
+        const fTipo = document.getElementById("op-f-tipo");
+        fTipo?.addEventListener("change", () => {
+            _opActualizarCamposVisibles(fTipo.value);
+            _opProgramarValidacion();
+        });
+        ["op-f-contraparte", "op-f-rif", "op-f-monto", "op-f-moneda", "op-f-metodo",
+         "op-f-referencia", "op-f-banco", "op-f-diario", "op-f-num-doc", "op-f-base",
+         "op-f-iva", "op-f-categoria", "op-f-concepto", "op-f-sin-factura"].forEach((idEl) => {
+            document.getElementById(idEl)?.addEventListener("input", _opProgramarValidacion);
+            document.getElementById(idEl)?.addEventListener("change", _opProgramarValidacion);
+        });
+
+        const inpC = document.getElementById("op-f-buscar-contacto");
+        const boxC = document.getElementById("op-resultados-contacto");
+        let tBus = null;
+        if (inpC && boxC) {
+            inpC.addEventListener("input", () => {
+                clearTimeout(tBus);
+                const q = inpC.value.trim();
+                if (!q) { boxC.style.display = "none"; return; }
+                tBus = setTimeout(async () => {
+                    try {
+                        const r = await fetch(`/api/odoo/contactos?q=${encodeURIComponent(q)}&limit=8`);
+                        const data = await r.json().catch(() => ({}));
+                        const items = data.items || [];
+                        boxC.innerHTML = items.length
+                            ? items.map((c, i) => `<div data-op-pick="${i}" style="padding:0.45rem 0.75rem; cursor:pointer; border-bottom:1px solid #f1f5f9; font-size:0.84rem;">
+                                <strong>${_capEsc(c.nombre)}</strong> <span style="color:#64748b;">(${_capEsc(c.clasificacion_etiqueta || c.clasificacion)}${c.rif ? " · " + _capEsc(c.rif) : ""})</span></div>`).join("")
+                            : `<div style="padding:0.5rem 0.75rem; color:#64748b; font-size:0.82rem;">Sin coincidencias en Odoo</div>`;
+                        boxC._items = items;
+                        boxC.style.display = "block";
+                    } catch (_e) { boxC.style.display = "none"; }
+                }, 220);
+            });
+            boxC.addEventListener("click", (e) => {
+                const row = e.target.closest("[data-op-pick]");
+                if (!row || !boxC._items) return;
+                const c = boxC._items[Number(row.dataset.opPick)];
+                if (!c) return;
+                document.getElementById("op-f-partner-id").value = String(c.id);
+                document.getElementById("op-f-contraparte").value = c.nombre || "";
+                document.getElementById("op-f-rif").value = c.rif || "";
+                inpC.value = c.nombre || "";
+                boxC.style.display = "none";
+                _opProgramarValidacion();
+            });
+        }
+
+        document.getElementById("op-modal-form")?.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const st = document.getElementById("op-modal-status");
+            const idVal = document.getElementById("op-f-id").value;
+            const body = _opRecolectarFormulario();
+            st.style.color = "#1e40af";
+            st.textContent = "Guardando...";
+            try {
+                const res = await fetch(idVal ? `/api/operativos/${encodeURIComponent(idVal)}` : "/api/operativos", {
+                    method: idVal ? "PUT" : "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+                _opLlenarFormulario(data);
+                st.style.color = "#15803d";
+                st.textContent = `✅ Guardado (${data.numero}).`;
+                await _opRefrescarTablas();
+            } catch (err) {
+                st.style.color = "#b91c1c";
+                st.textContent = "⚠️ " + err.message;
             }
         });
     })();

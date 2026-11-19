@@ -47,10 +47,13 @@ logger = logging.getLogger("cxc.capturas.api")
 router = APIRouter()
 
 _RUTA_BOT_POST = re.compile(
-    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido)$"
+    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido|operativos/validar)$"
 )
-_RUTA_BOT_GET = re.compile(r"^/api/bots/(?:catalogo|contactos|descuentos/catalogo)$")
+_RUTA_BOT_GET = re.compile(
+    r"^/api/bots/(?:catalogo|contactos|descuentos/catalogo|operativos/catalogos)$"
+)
 _KINDS_SINCRONOS = frozenset({"contacto", "contacto_editar", "cotizacion", "pedido"})
+_KINDS_OPERATIVOS = frozenset({"pago", "pago_proveedor", "factura_proveedor", "gasto"})
 PERMISOS_VER = ("capturas.ver", "capturas.gestionar")
 INTERVALO_REINTENTO_SEGUNDOS = 120
 
@@ -261,6 +264,49 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
         return {}
 
 
+def _sincronizar_operativo_desde_captura(captura: Any) -> dict[str, Any]:
+    """Crea/actualiza un Documento Operativo en CxC para flujo Preview + Aprobación."""
+    if captura.kind not in _KINDS_OPERATIVOS or not captura.payload.get("requiere_aprobacion_cxc"):
+        return {}
+    try:
+        from cxc.web.app import app as _app
+        from cxc.web.operativos_api import get_servicio_operativos
+
+        fabrica_ops = _app.dependency_overrides.get(
+            get_servicio_operativos, get_servicio_operativos
+        )
+        svc_op = fabrica_ops()
+        p = captura.payload
+        actor = str(captura.fuente.get("vendedor_email") or "bot")
+        doc = svc_op.crear(
+            {"tipo": captura.kind, **p},
+            origen="bot",
+            captura_id=captura.captura_id,
+            actor=actor,
+        )
+        d = doc.a_dict()
+        return {
+            "es_operativo": True,
+            "documento_id": doc.documento_id,
+            "documento_numero": doc.numero,
+            "documento_tipo": doc.tipo,
+            "documento_estado": doc.estado,
+            "token_preview": doc.token_preview,
+            "preview_path": d["preview_path"],
+            "alertas": d["alertas"],
+            "faltantes": d["faltantes"],
+            "diario_nombre": doc.diario_nombre,
+            "cuenta_sugerida": (
+                f"{doc.cuenta_contable_codigo} · {doc.cuenta_contable_nombre}".strip(" ·")
+                if (doc.cuenta_contable_codigo or doc.cuenta_contable_nombre)
+                else ""
+            ),
+            "contraparte_resuelta": d["validacion"].get("contraparte_resuelta"),
+        }
+    except Exception:
+        return {}
+
+
 @router.post("/api/bots/capturas", dependencies=[Depends(exigir_bot_key)])
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
@@ -280,6 +326,14 @@ def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio
         cuerpo = captura.a_dict()
         if extra_doc:
             cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_doc}
+        return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
+    if body.kind in _KINDS_OPERATIVOS and body.draft.get("requiere_aprobacion_cxc"):
+        if (creada or actualizada) and captura.estado == PENDIENTE:
+            captura = servicio.procesar(captura.captura_id)
+        extra_op = _sincronizar_operativo_desde_captura(captura)
+        cuerpo = captura.a_dict()
+        if extra_op:
+            cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_op}
         return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
     if (creada or actualizada) and captura.estado == PENDIENTE:
         tareas.add_task(servicio.procesar, captura.captura_id)  # a Odoo, sin hacer esperar al bot
@@ -307,6 +361,14 @@ def completar_captura(
         return _ocupado()
     except CapturaInvalida as e:
         return _invalida(e)
+    if captura.kind in _KINDS_OPERATIVOS and captura.payload.get("requiere_aprobacion_cxc"):
+        if captura.estado == PENDIENTE:
+            captura = servicio.procesar(captura.captura_id)
+        extra_op = _sincronizar_operativo_desde_captura(captura)
+        cuerpo = captura.a_dict()
+        if extra_op:
+            cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_op}
+        return JSONResponse(content=cuerpo)
     if captura.estado == PENDIENTE:
         tareas.add_task(servicio.procesar, captura.captura_id)
     return JSONResponse(content=captura.a_dict())

@@ -286,10 +286,11 @@ class OdooFalso:
                     "currency_id",
                     "invoice_line_ids",
                     "narration",
+                    "message_ids",
                 ],
                 {},
             ),
-            "account.move.line:fields_get": {"tax_ids": {}, "name": {}},
+            "account.move.line:fields_get": {"tax_ids": {}, "name": {}, "account_id": {}},
             "res.currency:search_read": [{"id": 1, "name": "USD"}, {"id": 2, "name": "VES"}],
             "account.journal:search_read": [
                 {"id": 99, "name": "Compras USD", "code": "BUSD", "currency_id": [1, "USD"]},
