@@ -357,6 +357,8 @@ class Pago:
     metodo_pago: str  # Ref -> MetodosPago.metodo_id
     fecha_pago: datetime
     vendedor_email: str
+    numero_odoo: str = ""
+    referencia: str = ""
 
 
 # --- 3.5 MetodosPago (catálogo) ---------------------------------------------

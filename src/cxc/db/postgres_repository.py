@@ -1733,6 +1733,8 @@ def _pago_to_row(p: Pago) -> dict[str, Any]:
         "metodo_pago": p.metodo_pago,
         "fecha_pago": p.fecha_pago,
         "vendedor_email": p.vendedor_email,
+        "numero_odoo": p.numero_odoo,
+        "referencia": p.referencia,
     }
 
 
@@ -1745,6 +1747,8 @@ def _row_to_pago(r: Any) -> Pago:
         metodo_pago=r.metodo_pago,
         fecha_pago=r.fecha_pago,
         vendedor_email=r.vendedor_email,
+        numero_odoo=getattr(r, "numero_odoo", "") or "",
+        referencia=getattr(r, "referencia", "") or "",
     )
 
 
