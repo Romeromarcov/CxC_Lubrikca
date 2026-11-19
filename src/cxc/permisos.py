@@ -76,6 +76,7 @@ _MODULO_POR_PREFIJO_ACCION: tuple[tuple[str, str], ...] = (
     ("compras.", "compras"),
     ("bots.", "configuracion"),
     ("capturas.", "auditoria"),
+    ("contactos.", "contactos"),
 )
 
 ACCIONES: tuple[Permiso, ...] = (
@@ -157,6 +158,14 @@ ACCIONES: tuple[Permiso, ...] = (
         "descripcion": "Aprobar pedidos pendientes en CxC y enviarlos como borrador a Odoo.",
     },
     {
+        "clave": "contactos.gestionar",
+        "grupo": "Contactos",
+        "nombre": "Gestionar y validar contactos",
+        "descripcion": (
+            "Crear, editar, fusionar duplicados y enviar contactos del maestro único a Odoo."
+        ),
+    },
+    {
         "clave": "sistema.recalcular",
         "grupo": "Sistema",
         "nombre": "Recalcular todo",
@@ -209,6 +218,7 @@ BASE_POR_ROL: dict[str, frozenset[str]] = {
         "cobranza.aprobar_pagos",
         "compras.aprobar_documentos",
         "ventas.aprobar_pedidos",
+        "contactos.gestionar",
         "sistema.recalcular",
         "capturas.ver",
         "capturas.gestionar",
@@ -221,6 +231,7 @@ BASE_POR_ROL: dict[str, frozenset[str]] = {
         "cobranza.recibo",
         "cobranza.aprobar_pagos",
         "compras.aprobar_documentos",
+        "contactos.gestionar",
         "capturas.ver",
         "capturas.gestionar",
         "bots.ver",

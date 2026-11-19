@@ -189,6 +189,7 @@ from cxc.web.bots_api import router as bots_router
 from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
 from cxc.web.capturas_api import router as capturas_router
 from cxc.web.capturas_api import run_reintentos_capturas_en_background
+from cxc.web.contactos_api import router as contactos_router
 from cxc.web.directorio_api import router as directorio_router
 from cxc.web.documentos_api import router as documentos_router
 from cxc.web.operativos_api import router as operativos_router
@@ -203,8 +204,9 @@ app = FastAPI(title="CxC Lubrikca Billing Dashboard")
 app.include_router(capturas_router)  # capturas de Telegram (src/cxc/web/capturas_api.py)
 app.include_router(documentos_router)  # documentos comerciales y catálogo bots (documentos_api.py)
 app.include_router(operativos_router)  # pagos, compras y gastos operativos (operativos_api.py)
-# Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas y documentos: así las rutas
-# de ``/api/bots/capturas|catalogo|contactos`` ganan a ``/api/bots/{bot}``.
+app.include_router(contactos_router)  # maestro único de contactos y anti-duplicados (Fase 6)
+# Panel de bots (src/cxc/web/bots_api.py). Va DESPUÉS de capturas, documentos y contactos: así las
+# rutas de ``/api/bots/capturas|catalogo|contactos`` ganan a ``/api/bots/{bot}``.
 app.include_router(bots_router)
 app.include_router(directorio_router)  # directorio y plan de cuentas Odoo (directorio_api.py)
 app.include_router(reportes_propios_router)  # reportes BD propia y siembra Odoo (Fase 5)
@@ -4035,6 +4037,7 @@ async def api_inicio_resumen():
     from cxc.db.schema import (
         bancos_propuestas,
         capturas_bot,
+        contactos_maestro,
         documentos_comerciales,
         documentos_operativos,
     )
@@ -4043,6 +4046,7 @@ async def api_inicio_resumen():
     estados_pend_op = ("PENDIENTE_APROBACION", "INCOMPLETO", "ERROR")
     if engine is None:
         pagos_rec = pagos_env = compras_pend = ventas_pend = capturas_alerta = conc_pend = 0
+        contactos_pend = contactos_dup = 0
     else:
         pagos_rec = _contar_en_tabla(
             engine,
@@ -4098,6 +4102,24 @@ async def api_inicio_resumen():
                 documentos_operativos.c.estado == "CONFIRMADO_CXC",
             ),
         )
+        contactos_pend = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(contactos_maestro)
+            .where(
+                contactos_maestro.c.activo.is_(True),
+                contactos_maestro.c.estado_validacion == "PENDIENTE",
+            ),
+        )
+        contactos_dup = _contar_en_tabla(
+            engine,
+            select(func.count())
+            .select_from(contactos_maestro)
+            .where(
+                contactos_maestro.c.activo.is_(True),
+                contactos_maestro.c.posibles_duplicados_json != "[]",
+            ),
+        )
 
     return {
         "contadores": {
@@ -4108,6 +4130,8 @@ async def api_inicio_resumen():
             "compras_pendientes": compras_pend,
             "ventas_pendientes": ventas_pend,
             "capturas_con_alerta": capturas_alerta,
+            "contactos_pendientes": contactos_pend,
+            "contactos_duplicados": contactos_dup,
         },
         "modulos": {
             "pagos": pagos_rec + pagos_env + conc_pend,
@@ -4129,6 +4153,7 @@ async def api_inicio_buscar(q: str = ""):
 
     from cxc.db.schema import (
         clientes,
+        contactos_maestro,
         documentos_comerciales,
         documentos_operativos,
         ordenes_venta,
@@ -4265,6 +4290,41 @@ async def api_inicio_buscar(q: str = ""):
                 "titulo": str(r["nombre"] or r["cliente_id"]),
                 "subtitulo": str(r["vendedor_email"] or f"ID {r['cliente_id']}"),
                 "estado": "Cliente",
+                "url": "/contactos",
+            }
+        )
+
+    for r in _filas_en_tabla(
+        engine,
+        select(
+            contactos_maestro.c.contacto_id,
+            contactos_maestro.c.nombre,
+            contactos_maestro.c.rif,
+            contactos_maestro.c.rol,
+            contactos_maestro.c.origen,
+            contactos_maestro.c.estado_validacion,
+        )
+        .where(
+            contactos_maestro.c.activo.is_(True),
+            or_(
+                contactos_maestro.c.nombre.ilike(patron),
+                contactos_maestro.c.rif.ilike(patron),
+                contactos_maestro.c.telefono.ilike(patron),
+            ),
+        )
+        .order_by(contactos_maestro.c.contacto_id.desc())
+        .limit(5),
+    ):
+        items.append(
+            {
+                "tipo": "Contacto Maestro",
+                "titulo": str(r["nombre"] or ""),
+                "subtitulo": " · ".join(
+                    p
+                    for p in (str(r["rif"] or ""), str(r["rol"] or ""), str(r["origen"] or ""))
+                    if p
+                ),
+                "estado": str(r["estado_validacion"] or ""),
                 "url": "/contactos",
             }
         )

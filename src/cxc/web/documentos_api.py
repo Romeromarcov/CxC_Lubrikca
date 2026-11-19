@@ -183,10 +183,37 @@ def bot_buscar_contactos(
         else [c for c in todos if c.clasificacion in ("prospecto", "cliente", "ambos")]
     )
     filtrados = filtrar_contactos(comerciales, clasificacion=clasificacion, q=q)
+    items_out: list[dict[str, Any]] = [
+        {**c.a_dict(), "origen": "bot" if c.es_borrador_telegram else "odoo"} for c in filtrados
+    ]
+    vistos_odoo: set[int] = {c.id for c in filtrados}
+
+    # Agrega contactos/prospectos nacidos en Bots/CxC aún sin partner en Odoo (Fase 6)
+    try:
+        from cxc.web.app import app as _app
+        from cxc.web.contactos_api import get_servicio_contactos
+
+        fabrica_c = _app.dependency_overrides.get(get_servicio_contactos, get_servicio_contactos)
+        svc_c = fabrica_c()
+        rol_filtro = "proveedor" if clasificacion == "proveedor" else None
+        locales, _, _ = svc_c.listar(rol=rol_filtro, q=q, limit=50, offset=0)
+        for lc in locales:
+            if lc.odoo_partner_id is not None and lc.odoo_partner_id in vistos_odoo:
+                continue
+            if (
+                clasificacion
+                and clasificacion != lc.rol
+                and not (clasificacion in ("cliente", "proveedor") and lc.rol == "ambos")
+            ):
+                continue
+            items_out.append(lc.a_dict())
+    except Exception:
+        pass
+
     lim = max(1, min(limit, 30))
     return {
-        "total_filtrado": len(filtrados),
-        "items": [c.a_dict() for c in filtrados[:lim]],
+        "total_filtrado": len(items_out),
+        "items": items_out[:lim],
     }
 
 

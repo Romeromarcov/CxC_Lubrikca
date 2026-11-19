@@ -47,7 +47,7 @@ logger = logging.getLogger("cxc.capturas.api")
 router = APIRouter()
 
 _RUTA_BOT_POST = re.compile(
-    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido|operativos/validar)$"
+    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido|operativos/validar|contactos(?:/verificar)?)$"
 )
 _RUTA_BOT_GET = re.compile(
     r"^/api/bots/(?:catalogo|contactos|descuentos/catalogo|operativos/catalogos)$"
@@ -332,6 +332,34 @@ def _sincronizar_operativo_desde_captura(captura: Any) -> dict[str, Any]:
         return {}
 
 
+def _sincronizar_contacto_desde_captura(captura: Any) -> dict[str, Any]:
+    """Registra o actualiza en ``contactos_maestro`` un contacto/proveedor enviado por bots."""
+    if captura.kind not in ("contacto", "contacto_editar", "proveedor"):
+        return {}
+    try:
+        from cxc.web.app import app as _app
+        from cxc.web.contactos_api import get_servicio_contactos
+
+        fabrica = _app.dependency_overrides.get(get_servicio_contactos, get_servicio_contactos)
+        svc = fabrica()
+        c = svc.registrar_desde_captura(
+            captura.kind,
+            captura.payload,
+            captura.resultado,
+            captura.fuente,
+            captura.captura_id,
+        )
+        if c is None:
+            return {}
+        return {
+            "contacto_maestro_id": c.contacto_id,
+            "completitud_pct": c.completitud_pct,
+            "posibles_duplicados": c.posibles_duplicados,
+        }
+    except Exception:
+        return {}
+
+
 @router.post("/api/bots/capturas", dependencies=[Depends(exigir_bot_key)])
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
@@ -348,9 +376,11 @@ def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio
         if (creada or actualizada) and captura.estado == PENDIENTE:
             captura = servicio.procesar(captura.captura_id)
         extra_doc = _sincronizar_documento_desde_captura(captura)
+        extra_contacto = _sincronizar_contacto_desde_captura(captura)
         cuerpo = captura.a_dict()
-        if extra_doc:
-            cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_doc}
+        extra_total = {**extra_doc, **extra_contacto}
+        if extra_total:
+            cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_total}
         return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
     if body.kind in _KINDS_OPERATIVOS and body.draft.get("requiere_aprobacion_cxc"):
         if (creada or actualizada) and captura.estado == PENDIENTE:
@@ -362,7 +392,11 @@ def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio
         return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
     if (creada or actualizada) and captura.estado == PENDIENTE:
         tareas.add_task(servicio.procesar, captura.captura_id)  # a Odoo, sin hacer esperar al bot
-    return JSONResponse(status_code=201 if creada else 200, content=captura.a_dict())
+    extra_contacto = _sincronizar_contacto_desde_captura(captura)
+    cuerpo = captura.a_dict()
+    if extra_contacto:
+        cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_contacto}
+    return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
 
 
 @router.post("/api/bots/capturas/{captura_id}/completar")

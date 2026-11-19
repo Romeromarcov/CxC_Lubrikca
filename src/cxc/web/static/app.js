@@ -450,7 +450,11 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (path === "inventario") {
                 if (typeof loadInventario === "function") loadInventario();
             } else if (path === "contactos") {
-                if (typeof loadContactosOdoo === "function") loadContactosOdoo(false);
+                if (typeof window.loadContactosMaestro === "function") {
+                    window.loadContactosMaestro(false);
+                } else if (typeof loadContactosOdoo === "function") {
+                    loadContactosOdoo(false);
+                }
             } else if (path === "configuracion") {
                 if (["descuentos", "usuarios", "listas", "otras", "bots", "motor", "tesoreria"].includes(tabParam)) {
                     applyConfigSubpage(tabParam);
