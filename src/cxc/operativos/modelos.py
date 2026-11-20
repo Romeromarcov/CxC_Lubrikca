@@ -375,6 +375,7 @@ class DocumentoOperativo:
     numero_recibo: str = ""
     recibo_emitido_en: datetime | None = None
     lote_caja_chica_id: int | None = None
+    lote_recibo_id: int | None = None
     cuenta_contrapartida_id: int | None = None
     conciliado_banco_huella: str = ""
 
@@ -446,6 +447,10 @@ class DocumentoOperativo:
                 self.recibo_emitido_en.isoformat() if self.recibo_emitido_en else None
             ),
             "lote_caja_chica_id": self.lote_caja_chica_id,
+            "lote_recibo_id": self.lote_recibo_id,
+            "recibo_lote_path": (
+                f"/recibo-lote/{self.lote_recibo_id}" if self.lote_recibo_id else ""
+            ),
             "cuenta_contrapartida_id": self.cuenta_contrapartida_id,
             "conciliado_banco_huella": self.conciliado_banco_huella,
             "asiento_contable": (

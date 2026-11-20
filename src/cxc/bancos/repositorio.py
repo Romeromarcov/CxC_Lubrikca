@@ -385,9 +385,7 @@ def decidir(
     p = bancos_propuestas
     with engine.begin() as conn:
         fila = (
-            conn.execute(select(p).where(p.c.huella == huella).with_for_update())
-            .mappings()
-            .first()
+            conn.execute(select(p).where(p.c.huella == huella).with_for_update()).mappings().first()
         )
         if fila is None:
             raise KeyError(f"no hay propuesta para el movimiento {huella}")
@@ -416,17 +414,37 @@ def decidir(
                 ),
                 "",
             )
-            cambios = {"estado": CORREGIDA, "tipo": PAGO, "pago_id": pago_id,
-                       "pago_nombre": nombre, "cuenta": ""}
+            cambios = {
+                "estado": CORREGIDA,
+                "tipo": PAGO,
+                "pago_id": pago_id,
+                "pago_nombre": nombre,
+                "cuenta": "",
+            }
         else:
-            cambios = {"estado": CORREGIDA, "tipo": CUENTA, "pago_id": None, "pago_nombre": "",
-                       "cuenta": cuenta}
+            cambios = {
+                "estado": CORREGIDA,
+                "tipo": CUENTA,
+                "pago_id": None,
+                "pago_nombre": "",
+                "cuenta": cuenta,
+            }
         ahora = datetime.now()
         reabre = accion == "reabrir"
         cambios["decidida_por"] = "" if reabre else usuario
         cambios["decidida_en"] = None if reabre else ahora
         conn.execute(update(p).where(p.c.huella == huella).values(**cambios))
         despues = antes | {k: v for k, v in cambios.items() if k in antes}
+        from cxc.operativos.lotes_efectivo import aplicar_conciliacion_a_operativos
+
+        aplicar_conciliacion_a_operativos(
+            conn,
+            huella=huella,
+            estado=str(despues.get("estado") or ""),
+            pago_id=despues.get("pago_id"),
+            usuario=usuario,
+            ahora=ahora,
+        )
         conn.execute(
             insert(bancos_decisiones).values(
                 huella=huella,

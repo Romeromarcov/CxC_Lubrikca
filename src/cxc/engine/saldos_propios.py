@@ -19,6 +19,10 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from ..ajustes_descuentos import (
+    ServicioAjustesDescuentos,
+    aplicar_ajustes_a_descuentos_orden,
+)
 from ..decimal_utils import q2
 from ..models import (
     EstadoBandeja,
@@ -198,10 +202,18 @@ def _recolectar_estado_bd(
     *,
     docs_comerciales: Sequence[Any] = (),
     docs_operativos: Sequence[Any] = (),
+    ajustes_descuentos_por_so: dict[str, list[dict[str, Any]]] | None = None,
     hoy: date | None = None,
 ) -> dict[str, Any]:
     hoy_d = hoy or date.today()
     por_fecha_tasa, fallback_tasa = _indice_tasas_bcv_local(repo)
+
+    if ajustes_descuentos_por_so is None:
+        eng_repo = getattr(repo, "_engine", None)
+        if eng_repo is not None:
+            ajustes_descuentos_por_so = ServicioAjustesDescuentos(eng_repo).listar_activos_por_so()
+        else:
+            ajustes_descuentos_por_so = {}
 
     clientes_map = {c.cliente_id: c for c in repo.all_clientes()}
     nombre_a_cid = {_norm_nombre(c.nombre): c.cliente_id for c in clientes_map.values() if c.nombre}
@@ -334,6 +346,7 @@ def _recolectar_estado_bd(
             }
         )
 
+    so_con_especiales_aplicados: set[str] = set()
     for bf in repo.all_bandeja():
         if bf.so_id in so_con_desc_aprobado or bf.so_id in no_otorgados:
             continue
@@ -342,7 +355,14 @@ def _recolectar_estado_bd(
         ord_obj = ordenes_por_so.get(bf.so_id)
         if ord_obj is None or ord_obj.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
             continue
-        monto_d = q2(_dec(bf.total_descuentos))
+        ajustes_so = ajustes_descuentos_por_so.get(bf.so_id, [])
+        if ajustes_so:
+            base_aj = bf.precio_base_calculado or ord_obj.monto_total
+            calc_aj = aplicar_ajustes_a_descuentos_orden(bf.descuentos_detalle, base_aj, ajustes_so)
+            monto_d = q2(_dec(calc_aj["total_descuento_ajustado"]))
+            so_con_especiales_aplicados.add(bf.so_id)
+        else:
+            monto_d = q2(_dec(bf.total_descuentos))
         if monto_d <= 0:
             continue
         b = ensure_bucket(ord_obj.cliente_id, "", ord_obj.vendedor_email)
@@ -357,6 +377,31 @@ def _recolectar_estado_bd(
                 "fuente": "cxc",
                 "debito_usd": 0.0,
                 "credito_usd": float(monto_d),
+            }
+        )
+
+    for so_id, ajustes_so in ajustes_descuentos_por_so.items():
+        if so_id in so_con_especiales_aplicados or so_id in no_otorgados or not ajustes_so:
+            continue
+        ord_obj = ordenes_por_so.get(so_id)
+        if ord_obj is None or ord_obj.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
+            continue
+        calc_esp = aplicar_ajustes_a_descuentos_orden([], ord_obj.monto_total, ajustes_so)
+        monto_esp = q2(_dec(calc_esp["total_especial"]))
+        if monto_esp <= 0:
+            continue
+        b = ensure_bucket(ord_obj.cliente_id, "", ord_obj.vendedor_email)
+        b["descuentos_sistema_usd"] += monto_esp
+        b["descuentos_confirmados_usd"] += monto_esp
+        b["movimientos"].append(
+            {
+                "fecha": ord_obj.fecha.isoformat(),
+                "tipo": "descuento_especial",
+                "etiqueta": "Descuento Comercial Especial (CxC)",
+                "referencia": so_id,
+                "fuente": "cxc",
+                "debito_usd": 0.0,
+                "credito_usd": float(monto_esp),
             }
         )
 
@@ -441,9 +486,11 @@ def _recolectar_estado_bd(
         if getattr(dop, "tipo", "") != "pago":
             continue
         est = str(getattr(dop, "estado", "") or "")
-        confirmado = bool(getattr(dop, "confirmado_cxc", False)) or est in (
-            "CONFIRMADO_CXC",
-            "ENVIADO_ODOO",
+        huella_banco = str(getattr(dop, "conciliado_banco_huella", "") or "").strip()
+        confirmado = (
+            bool(getattr(dop, "confirmado_cxc", False))
+            or est in ("CONFIRMADO_CXC", "ENVIADO_ODOO")
+            or bool(huella_banco)
         )
         if not confirmado:
             continue
@@ -483,6 +530,10 @@ def _recolectar_estado_bd(
             b["pagos_efectivo_cxc_usd"] += monto_usd
             etq = "Cobro Efectivo Confirmado (CxC)"
             tipo_mov = "pago_efectivo_cxc"
+        elif huella_banco:
+            b["pagos_otros_cxc_usd"] += monto_usd
+            etq = "Cobro Electrónico Conciliado en Banco"
+            tipo_mov = "pago_cxc_banco"
         else:
             b["pagos_otros_cxc_usd"] += monto_usd
             etq = "Cobro Confirmado en CxC"
@@ -662,6 +713,7 @@ def calcular_saldos_propios(
     *,
     docs_comerciales: Sequence[Any] = (),
     docs_operativos: Sequence[Any] = (),
+    ajustes_descuentos_por_so: dict[str, list[dict[str, Any]]] | None = None,
     hoy: date | None = None,
     vendedor: str | None = None,
     antiguedad: str | None = None,
@@ -673,6 +725,7 @@ def calcular_saldos_propios(
         repo,
         docs_comerciales=docs_comerciales,
         docs_operativos=docs_operativos,
+        ajustes_descuentos_por_so=ajustes_descuentos_por_so,
         hoy=hoy,
     )
     clientes_limpios = [
@@ -716,6 +769,7 @@ def estado_cuenta_cliente(
     *,
     docs_comerciales: Sequence[Any] = (),
     docs_operativos: Sequence[Any] = (),
+    ajustes_descuentos_por_so: dict[str, list[dict[str, Any]]] | None = None,
     hoy: date | None = None,
 ) -> dict[str, Any] | None:
     """Devuelve el estado de cuenta cronológico de un cliente desde BD propia."""
@@ -723,6 +777,7 @@ def estado_cuenta_cliente(
         repo,
         docs_comerciales=docs_comerciales,
         docs_operativos=docs_operativos,
+        ajustes_descuentos_por_so=ajustes_descuentos_por_so,
         hoy=hoy,
     )
     target = next((c for c in base["clientes"] if str(c["cliente_id"]) == str(cliente_id)), None)

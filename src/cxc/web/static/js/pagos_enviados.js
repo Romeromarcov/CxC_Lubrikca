@@ -95,8 +95,11 @@
                 const actHtml = typeof pagosApi.accionesHtml === "function"
                     ? pagosApi.accionesHtml(d, puedeAprobar, puedeAprobar, idx, "enviados")
                     : "";
+                const colDocEnv = typeof _cxc().trazabilidadHtml === "function"
+                    ? _cxc().trazabilidadHtml(d)
+                    : `<strong>${_esc(d.numero)}</strong>${odooHtml}<div>${origHtml}</div>`;
                 return `<tr>
-                    <td><strong>${_esc(d.numero)}</strong>${odooHtml}<div>${origHtml}</div></td>
+                    <td>${colDocEnv}</td>
                     <td>${_esc(d.fecha_documento || "—")}</td>
                     <td><strong>${_esc(d.contraparte_nombre || "Sin proveedor")}</strong><div class="cap-sub">${_esc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Se creará al aprobar"))}</div></td>
                     <td>${usrHtml}</td>

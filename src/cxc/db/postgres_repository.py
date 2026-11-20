@@ -1531,10 +1531,12 @@ def _orden_to_row(o: OrdenVenta) -> dict[str, Any]:
         "entregada_completa": o.entregada_completa,
         "tiene_devolucion": o.tiene_devolucion,
         "dias_credito": o.dias_credito,
+        "odoo_order_id": o.odoo_order_id,
     }
 
 
 def _row_to_orden(r: Any) -> OrdenVenta:
+    raw_oid = getattr(r, "odoo_order_id", None)
     return OrdenVenta(
         so_id=r.so_id,
         cliente_id=r.cliente_id,
@@ -1552,6 +1554,7 @@ def _row_to_orden(r: Any) -> OrdenVenta:
         entregada_completa=r.entregada_completa,
         tiene_devolucion=r.tiene_devolucion,
         dias_credito=getattr(r, "dias_credito", 0) or 0,
+        odoo_order_id=int(raw_oid) if raw_oid is not None else None,
     )
 
 

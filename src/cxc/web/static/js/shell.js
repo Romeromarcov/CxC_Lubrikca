@@ -149,6 +149,82 @@
         }
     }
 
+    function trazabilidadHtml(d) {
+        if (!d) return "";
+        const orgSis = String(d.origen_sistema || "").toLowerCase();
+        const canal = String(d.origen_canal || d.origen || "").toLowerCase();
+        let orgBadge;
+        if (orgSis === "odoo" || (canal === "odoo" && orgSis !== "cxc")) {
+            orgBadge = '<span class="badge-origen-odoo">🟣 Odoo</span>';
+        } else if (canal === "bot") {
+            orgBadge = '<span class="badge-origen-cxc">📲 Bot → CxC</span>';
+        } else {
+            orgBadge = '<span class="badge-origen-cxc">💻 CxC</span>';
+        }
+
+        const numCxc = d.numero_cxc || (orgSis === "cxc" ? (d.numero || "") : "");
+        const numOdoo = d.odoo_numero || d.odoo_order_name || d.numero_pago_odoo || d.odoo_numero_espejo || (orgSis === "odoo" ? (d.numero || d.so_id || "") : "");
+        const rawOid = d.odoo_id ?? d.odoo_order_id ?? d.odoo_pago_id ?? d.odoo_res_id ?? (d.pago_id && /^\d+$/.test(String(d.pago_id)) ? d.pago_id : null);
+        const oid = rawOid != null && String(rawOid).trim() !== "" ? String(rawOid).trim() : "";
+        const oUrl = d.odoo_url || "";
+
+        const lineas = [orgBadge];
+        if (numCxc) {
+            lineas.push(`<div class="cap-sub"><strong>CxC:</strong> ${_esc(numCxc)}</div>`);
+        }
+        if (numOdoo || oid) {
+            const lbl = numOdoo && oid
+                ? `${_esc(numOdoo)} (#${_esc(oid)})`
+                : (numOdoo ? _esc(numOdoo) : `#${_esc(oid)}`);
+            if (oUrl) {
+                lineas.push(`<div class="cap-sub"><a href="${_esc(oUrl)}" target="_blank" rel="noopener" style="color:#0284c7; text-decoration:underline;">🔗 Odoo: ${lbl} ↗</a></div>`);
+            } else {
+                lineas.push(`<div class="cap-sub" style="color:#475569;">🔗 Odoo: ${lbl}</div>`);
+            }
+        }
+        return `<div class="cxc-trazabilidad">${lineas.join("")}</div>`;
+    }
+
+    function estadoConfirmacionPagoHtml(d) {
+        if (!d) return "";
+        const est = String(d.estado_confirmacion_pago || "").toUpperCase();
+        const info = d.conciliado_banco_info || {};
+        const tipBanco = [
+            info.banco ? `Banco: ${info.banco}` : "",
+            info.fecha ? `Fecha: ${info.fecha}` : "",
+            info.referencia ? `Ref: ${info.referencia}` : "",
+            info.decidida_por ? `Por: ${info.decidida_por}` : "",
+        ].filter(Boolean).join(" · ");
+
+        if (est === "CONCILIADO_BANCO") {
+            return `<span class="semaphore verde" title="${_esc(tipBanco || "Conciliado mediante estado de cuenta bancario")}">🏦 Conciliado Banco</span>` +
+                (info.banco ? `<div class="cap-sub">${_esc(info.banco)}${info.fecha ? " · " + _esc(info.fecha) : ""}</div>` : "");
+        }
+        if (est === "PENDIENTE_CONCILIACION") {
+            return '<span class="semaphore amarillo" title="Los pagos electrónicos se confirman automáticamente al conciliar el estado de cuenta bancario.">⏳ Pend. Conciliación Banco</span>';
+        }
+        if (est === "RECIBIDO_EFECTIVO") {
+            const numR = d.numero_recibo || d.numero_recibido || "REC";
+            const rUrl = d.recibo_lote_path || d.recibo_path || "";
+            const badge = `<span class="semaphore verde" title="Efectivo recibido y comprobado">🧾 ${_esc(numR)}</span>`;
+            return rUrl
+                ? `<a href="${_esc(rUrl)}" target="_blank" rel="noopener" style="text-decoration:none;">${badge}</a>`
+                : badge;
+        }
+        if (est === "PENDIENTE_EFECTIVO") {
+            return '<span class="semaphore yellow" title="Efectivo pendiente de entrega por lote de vendedor">💵 Pendiente Efectivo</span>';
+        }
+        if (est === "CONFIRMADO_TERCERO") {
+            return '<span class="semaphore verde">💵 Zelle 3ro Confirmado</span>';
+        }
+        if (est === "PENDIENTE_TERCERO") {
+            return '<span class="semaphore amarillo">⏳ Zelle 3ro Pendiente</span>';
+        }
+        return d.recibido
+            ? '<span class="semaphore green">✓ Recibido</span>'
+            : '<span class="semaphore yellow">⏳ Pendiente</span>';
+    }
+
     function onPageChange(path) {
         const tit = document.getElementById("topbar-module-title");
         if (tit) tit.textContent = TITULOS_MODULO[path] || "Lubrikca CxC";
@@ -158,6 +234,8 @@
     window.CxC = Object.assign(window.CxC || {}, {
         onPageChange,
         loadInicioResumen,
+        trazabilidadHtml,
+        estadoConfirmacionPagoHtml,
     });
 
     document.addEventListener("DOMContentLoaded", () => {

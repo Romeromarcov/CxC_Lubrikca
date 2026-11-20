@@ -158,6 +158,11 @@ def _a_doc(r: Any) -> DocumentoOperativo:
             if getattr(r, "lote_caja_chica_id", None) is not None
             else None
         ),
+        lote_recibo_id=(
+            int(r.lote_recibo_id)
+            if getattr(r, "lote_recibo_id", None) is not None
+            else None
+        ),
         cuenta_contrapartida_id=(
             int(r.cuenta_contrapartida_id)
             if getattr(r, "cuenta_contrapartida_id", None) is not None

@@ -78,6 +78,7 @@ ordenes_venta = Table(
     "ordenes_venta",
     metadata,
     Column("so_id", String, primary_key=True),
+    Column("odoo_order_id", Integer, nullable=True, index=True),
     Column("cliente_id", String, ForeignKey("clientes.cliente_id"), nullable=False, index=True),
     Column("fecha", Date, nullable=False),
     Column("fecha_entrega", Date, nullable=True),
@@ -1416,6 +1417,7 @@ documentos_operativos = Table(
     ),
     Column("cuenta_contrapartida_id", Integer, nullable=True),
     Column("conciliado_banco_huella", String(64), nullable=False, server_default=""),
+    Column("lote_recibo_id", Integer, nullable=True, index=True),
     Column("creado_por", String, nullable=False, server_default="sistema"),
     Column("creado_en", DateTime(timezone=False), nullable=False),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
@@ -1502,4 +1504,47 @@ contactos_maestro = Table(
     Column("activo", Boolean, nullable=False, server_default="true", index=True),
     Column("creado_en", DateTime(timezone=False), nullable=False),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Trazabilidad, Recibos de Efectivo por Lote y Ajustes de Descuento (Odoo Cleanup) ---
+lotes_recibo_efectivo = Table(
+    "lotes_recibo_efectivo",
+    metadata,
+    Column("lote_id", Integer, primary_key=True, autoincrement=True),
+    Column("numero_recibo", String, unique=True, nullable=False, index=True),
+    Column("vendedor_email", String, nullable=False, server_default="", index=True),
+    Column("vendedor_nombre", String, nullable=False, server_default=""),
+    Column("fecha_lote", Date, nullable=False, index=True),
+    Column("cantidad_pagos", Integer, nullable=False, server_default="0"),
+    Column("total_usd", MONEY, nullable=False, server_default="0"),
+    Column("total_ves", MONEY, nullable=False, server_default="0"),
+    Column("total_eur", MONEY, nullable=False, server_default="0"),
+    Column("total_equivalente_usd", MONEY, nullable=False, server_default="0"),
+    Column("pagos_ref_json", Text, nullable=False, server_default="[]"),
+    Column("recibido_por", String, nullable=False, server_default=""),
+    Column("recibido_en", DateTime(timezone=False), nullable=False),
+    Column("observaciones", Text, nullable=False, server_default=""),
+    Column("estado", String, nullable=False, server_default="EMITIDO", index=True),
+)
+
+orden_descuentos_ajustes = Table(
+    "orden_descuentos_ajustes",
+    metadata,
+    Column("ajuste_id", Integer, primary_key=True, autoincrement=True),
+    Column("so_id", String, nullable=False, index=True),
+    # EXCLUIR_MOTOR | ESPECIAL
+    Column("accion", String, nullable=False, index=True),
+    Column("descuento_origen", String, nullable=False, server_default=""),
+    Column("regla_id", String, nullable=False, server_default=""),
+    # porcentaje | monto_fijo | exclusion
+    Column("tipo_valor", String, nullable=False, server_default="porcentaje"),
+    Column("porcentaje", Numeric(8, 4), nullable=True),
+    Column("monto_usd", MONEY, nullable=True),
+    Column("descripcion", Text, nullable=False, server_default=""),
+    Column("motivo", Text, nullable=False, server_default=""),
+    Column("activo", Boolean, nullable=False, server_default="true", index=True),
+    Column("creado_por", String, nullable=False, server_default=""),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("anulado_por", String, nullable=False, server_default=""),
+    Column("anulado_en", DateTime(timezone=False), nullable=True),
 )

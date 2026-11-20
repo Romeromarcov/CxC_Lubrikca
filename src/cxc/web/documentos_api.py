@@ -9,7 +9,9 @@ from fastapi import APIRouter, Body, Cookie, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from cxc.ajustes_descuentos import ServicioAjustesDescuentos
 from cxc.capturas.modelos import CapturaInvalida
+from cxc.config import AppConfig
 from cxc.documentos.catalogo import (
     CatalogoSQLOdoo,
     DatosPreciosOdoo,
@@ -607,8 +609,21 @@ def listar_ventas_unificadas(
     estado_filtro = (estado or "").strip().upper()
     q_filtro = (q or "").strip().lower()
 
-    repo_cxc, _ = _repo_y_engine(servicio)
+    repo_cxc, engine_docs = _repo_y_engine(servicio)
     _sincronizar_desde_espejo_seguro(servicio, repo_cxc)
+
+    try:
+        odoo_base_docs = (AppConfig.from_env().odoo.url or "").strip().rstrip("/")
+    except Exception:
+        odoo_base_docs = ""
+
+    if engine_docs is not None:
+        _srv_aj = ServicioAjustesDescuentos(engine_docs)
+        limpieza_act = _srv_aj.limpieza_activa()
+        ajustes_por_so = _srv_aj.listar_activos_por_so()
+    else:
+        limpieza_act = True
+        ajustes_por_so = {}
 
     docs_cxc, _, _ = servicio.listar(limit=500, offset=0)
     ordenes_all = list(repo_cxc.all_ordenes())
@@ -635,7 +650,20 @@ def listar_ventas_unificadas(
         vm = d.validacion_motor if isinstance(d.validacion_motor, dict) else {}
         raw_sync = vm.get("sync_odoo")
         sync_meta: dict[str, Any] = raw_sync if isinstance(raw_sync, dict) else {}
+        oid_cxc = d.odoo_order_id or (getattr(ord_esp, "odoo_order_id", None) if ord_esp else None)
+        onum_cxc = (d.odoo_order_name or (ord_esp.so_id if ord_esp else "") or "").strip() or None
         item["origen_sistema"] = "cxc"
+        item["numero_cxc"] = d.numero
+        item["odoo_order_id"] = oid_cxc
+        item["odoo_id"] = oid_cxc
+        item["odoo_numero"] = onum_cxc
+        item["odoo_url"] = (
+            f"{odoo_base_docs}/web#id={int(oid_cxc)}&model=sale.order&view_type=form"
+            if (odoo_base_docs and oid_cxc)
+            else None
+        )
+        item["tiene_ajustes_descuento"] = False
+        item["puede_ajustar_descuentos"] = False
         item["estado_odoo"] = (
             ord_esp.estado_orden
             if ord_esp is not None
@@ -679,10 +707,14 @@ def listar_ventas_unificadas(
         pl_mon = str(pl_info.get("moneda") or "USD").upper()
         if pl_mon not in ("USD", "VES"):
             pl_mon = "USD"
+        oid_od = getattr(o, "odoo_order_id", None)
+        ajs_od = ajustes_por_so.get(o.so_id, [])
         filas.append(
             {
                 "id": None,
                 "numero": o.so_id,
+                "numero_cxc": None,
+                "odoo_numero": o.so_id,
                 "token_preview": "",
                 "preview_path": "",
                 "tipo": PEDIDO,
@@ -717,8 +749,16 @@ def listar_ventas_unificadas(
                 "alertas_motor": [],
                 "auto_enviado": False,
                 "motivos_retencion": [],
-                "odoo_order_id": None,
+                "odoo_order_id": oid_od,
+                "odoo_id": oid_od,
                 "odoo_order_name": o.so_id,
+                "odoo_url": (
+                    f"{odoo_base_docs}/web#id={int(oid_od)}&model=sale.order&view_type=form"
+                    if (odoo_base_docs and oid_od)
+                    else None
+                ),
+                "tiene_ajustes_descuento": bool(ajs_od),
+                "puede_ajustar_descuentos": bool(limpieza_act),
                 "facturada": bool(o.facturada),
                 "entregada_completa": bool(o.entregada_completa),
                 "creado_por": "odoo",
@@ -771,9 +811,10 @@ def listar_ventas_unificadas(
             return False
         if q_filtro:
             bolsa = (
-                f"{it.get('numero', '')} {it.get('odoo_order_name', '')} "
-                f"{it.get('cliente_nombre', '')} {it.get('rif', '')} "
-                f"{it.get('vendedor_email', '')}"
+                f"{it.get('numero', '')} {it.get('numero_cxc', '')} "
+                f"{it.get('odoo_numero', '')} {it.get('odoo_id', '')} "
+                f"{it.get('odoo_order_name', '')} {it.get('cliente_nombre', '')} "
+                f"{it.get('rif', '')} {it.get('vendedor_email', '')}"
             ).lower()
             if q_filtro not in bolsa:
                 return False
@@ -785,6 +826,7 @@ def listar_ventas_unificadas(
 
     return {
         "puede_aprobar": tiene(user, PERMISO_APROBAR_PEDIDOS),
+        "limpieza_descuentos_odoo_activa": limpieza_act,
         "lista_defecto": servicio.lista_comercial_defecto().a_dict(),
         "politica_ventas": cargar_politica_global(repo_cxc),
         "resumen": resumen,

@@ -104,6 +104,7 @@ class OrdenVenta:
     # días de crédito + gracia desde la orden anterior) y por la alerta
     # de días de crédito máximo por volumen.
     dias_credito: int = 0
+    odoo_order_id: int | None = None
 
 
 # --- 3.2b Facturas (espejo, agosto 2026 -- Fase 0 del plan de consolidación
