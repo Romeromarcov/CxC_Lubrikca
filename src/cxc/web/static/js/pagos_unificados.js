@@ -165,16 +165,21 @@
     }
 
     function estadoBadgeUnificado(d) {
+        let base;
         if (d.estado === "CONFIRMADO_ODOO") {
-            return '<span class="semaphore verde">🟣 Confirmado Odoo</span>';
+            base = '<span class="semaphore verde">🟣 Confirmado Odoo</span>';
+        } else if (d.estado === "CONFIRMADO_CXC") {
+            base = '<span class="semaphore verde badge-confirmado-cxc">✔️ Confirmado CxC</span>';
+        } else if (typeof _cxc().estadoBadge === "function") {
+            base = _cxc().estadoBadge(d);
+        } else {
+            base = `<span class="state-badge">${_esc(d.estado)}</span>`;
         }
-        if (d.estado === "CONFIRMADO_CXC") {
-            return '<span class="semaphore verde badge-confirmado-cxc">✔️ Confirmado CxC</span>';
+        if (typeof _cxc().estadoConfirmacionPagoHtml === "function") {
+            const conf = _cxc().estadoConfirmacionPagoHtml(d);
+            if (conf) base += `<div style="margin-top:3px;">${conf}</div>`;
         }
-        if (typeof _cxc().estadoBadge === "function") {
-            return _cxc().estadoBadge(d);
-        }
-        return `<span class="state-badge">${_esc(d.estado)}</span>`;
+        return base;
     }
 
     function alertasHtml(d) {
@@ -188,17 +193,21 @@
         const btns = [
             `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem;" data-unif-detalle="${idx}" data-unif-dir="${dir}">👁️ Detalle</button>`,
         ];
+        if (d.recibo_lote_path) {
+            btns.push(`<a href="${_esc(d.recibo_lote_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; text-decoration:none; background:#eff6ff; color:#1d4ed8;">🧾 Recibo Lote</a>`);
+        }
         if (d.origen_sistema === "odoo") {
             return btns.join("") + `<span class="cap-sub">${_esc(d.odoo_numero || d.odoo_ref || "Odoo")}</span>`;
         }
         if (d.preview_path) {
             btns.push(`<a href="${_esc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; text-decoration:none;">🔗 Preview</a>`);
         }
-        if (d.recibo_path && d.numero_recibo) {
+        if (d.recibo_path && d.numero_recibo && !d.recibo_lote_path) {
             btns.push(`<a href="${_esc(d.recibo_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; text-decoration:none; background:#eff6ff; color:#1d4ed8;">🧾 Recibo</a>`);
         }
         btns.push(`<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem;" onclick="editarOperativoPorId(${d.id})">${d.puede_editar ? "✏️ Editar" : "👁 Ver"}</button>`);
-        if (d.puede_confirmar_cxc && (puedeAprobar || puedeRecibo)) {
+        const esManualCashOTercero = Boolean(d.es_efectivo || d.es_zelle_tercero);
+        if (d.puede_confirmar_cxc && esManualCashOTercero && (puedeAprobar || puedeRecibo)) {
             btns.push(`<button type="button" class="btn-primary" style="padding:0.32rem 0.55rem; font-size:0.78rem; background:#0284c7;" onclick="confirmarPagoCxc(${d.id}, false)" title="Confirmar primero en CxC y emitir recibo numerado">✔️ Confirmar CxC</button>`);
         }
         if (d.puede_aprobar && puedeAprobar) {
@@ -271,8 +280,11 @@
                 const diarioTxt = d.es_zelle_tercero
                     ? `<span style="color:#7c3aed; font-weight:600;">Asiento Tercero (CxP/CxC)</span><div class="cap-sub">${_esc(d.beneficiario_tercero || d.proveedor_tercero_nombre || "Sin banco")}</div>`
                     : _esc(d.diario_nombre || d.banco || "Por definir");
+                const docColHtml = typeof _cxc().trazabilidadHtml === "function"
+                    ? _cxc().trazabilidadHtml(d) + (d.es_zelle_tercero ? `<div><span class="badge-zelle3">💵 Zelle 3ro${d.cuenta_tercero_alias ? ": " + _esc(d.cuenta_tercero_alias) : ""}</span></div>` : "")
+                    : `<strong>${_esc(d.numero)}</strong>${odooLinkHtml(d)}<div>${origenChip(d)}</div>`;
                 return `<tr>
-                    <td><strong>${_esc(d.numero)}</strong>${odooLinkHtml(d)}<div>${origenChip(d)}</div></td>
+                    <td>${docColHtml}</td>
                     <td>${_esc(d.fecha_documento || "—")}</td>
                     <td><strong>${_esc(d.contraparte_nombre || "Sin cliente")}</strong><div class="cap-sub">${_esc(d.rif || (d.partner_odoo_id ? ("Odoo #" + d.partner_odoo_id) : "Sin vincular"))}${d.pedido_ref ? " · Ped: " + _esc(d.pedido_ref) : ""}</div></td>
                     <td>${usuariosPagoHtml(d, "recibidos")}</td>

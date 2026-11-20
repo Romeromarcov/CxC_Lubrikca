@@ -162,9 +162,13 @@
             let accionesHtml = "";
             if (esOdooNativo) {
                 const soRef = _esc(d.odoo_order_name || d.numero);
-                accionesHtml = typeof window.abrirModalDetalleOrden === "function"
+                const btnVerSo = typeof window.abrirModalDetalleOrden === "function"
                     ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.6rem; font-size:0.78rem;" onclick="abrirModalDetalleOrden('${soRef}')">👁 Ver SO</button>`
                     : `<span class="cap-sub">🔒 Solo lectura</span>`;
+                const btnAj = (d.puede_ajustar_descuentos && typeof window.abrirModalAjustesDescuentos === "function")
+                    ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.6rem; font-size:0.78rem; background:#ede9fe; color:#5b21b6; border-color:#c4b5fd;" onclick="abrirModalAjustesDescuentos('${soRef}')">✏️ Ajustar Desc.</button>`
+                    : "";
+                accionesHtml = `${btnVerSo}${btnAj}`;
             } else {
                 const editable = !bloqueadoOdoo;
                 const btnPreview = d.preview_path
@@ -189,8 +193,15 @@
                 ? `<span class="cap-sub">${d.facturada ? "📄 Facturada" : "Por facturar"}${d.entregada_completa ? " · 📦 Entregada" : ""}</span>`
                 : `${d.n_lineas} ítem(s)<div class="cap-sub">${Number(d.total_litros || 0).toFixed(2)} L</div>${avisoSinCat}`;
 
+            const trazColV = (window.CxC && typeof window.CxC.trazabilidadHtml === "function")
+                ? window.CxC.trazabilidadHtml(d)
+                : `<strong>${_esc(d.numero)}</strong><div style="margin-top:2px;">${origenBadge}</div>`;
+            const ajBadgeV = d.tiene_ajustes_descuento
+                ? `<div style="margin-top:2px;"><span class="state-badge" style="background:#ede9fe; color:#5b21b6; font-size:0.7rem;">✏️ Desc. Ajustado</span></div>`
+                : "";
+
             return `<tr>
-                <td><strong>${_esc(d.numero)}</strong><div style="margin-top:2px;">${origenBadge}</div>${syncChip}</td>
+                <td>${trazColV}${syncChip}${ajBadgeV}</td>
                 <td>${badgeTipo}</td>
                 <td><strong>${_esc(d.cliente_nombre)}</strong><div class="cap-sub">${rolBadge}${d.rif ? " · " + _esc(d.rif) : ""}</div></td>
                 <td><strong>${_esc(d.lista_precios_nombre || d.moneda_lista || "—")}</strong></td>

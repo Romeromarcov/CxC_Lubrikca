@@ -301,6 +301,7 @@ def map_orden(rec: dict[str, Any]) -> OrdenVenta:
         entregada_completa=entregada_completa,
         tiene_devolucion=bool(rec.get("tiene_devolucion", False)),
         dias_credito=int(rec.get("dias_credito") or 0),
+        odoo_order_id=int(rec["id"]) if rec.get("id") else None,
     )
 
 

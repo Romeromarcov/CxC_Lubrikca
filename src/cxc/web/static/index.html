@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=20261120_1">
+    <link rel="stylesheet" href="/static/styles.css?v=20261120_2">
 </head>
 <body>
     <div class="glow-container">
@@ -577,6 +577,7 @@
             <div class="config-subnav tab-navigation" role="tablist" aria-label="Secciones de Cobranza" style="margin-bottom:1rem;">
                 <button type="button" class="tab-btn cobranza-subnav-btn active" data-cobranza-subpage="odoo">💵 Pagos en Odoo y Conciliación</button>
                 <button type="button" class="tab-btn cobranza-subnav-btn" data-cobranza-subpage="aprobacion">⏳ Pagos Recibidos por Aprobar (Bot / CxC) <span id="badge-op-pagos-pend" class="state-badge" style="margin-left:4px;">0</span></button>
+                <button type="button" class="tab-btn cobranza-subnav-btn" data-cobranza-subpage="lotes-efectivo">🧾 Recepción de Efectivo por Lote <span id="badge-lotes-efectivo-pend" class="state-badge" style="margin-left:4px;">0</span></button>
             </div>
             <div data-cobranza-panel="odoo">
             <div class="cobranza-stack" style="display:flex; flex-direction:column; gap:1.5rem;">
@@ -588,8 +589,9 @@
                             <span id="badge-cobranza-count" class="badge" style="background:#e0e7ff; color:#3730a3; padding:6px 12px; font-weight:700; border-radius:20px; display:inline-block; margin-top:0.4rem;">0 Pagos</span>
                         </div>
                         <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                            <button type="button" class="btn btn-secondary" onclick="abrirSubtabLotesEfectivo()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600;">🧾 Recibir Efectivo por Lote</button>
                             <button class="btn btn-primary" onclick="generarReciboSeleccionados()" style="padding: 0.55rem 1rem; font-size: 0.85rem; font-weight: 600; display:flex; align-items:center; gap:0.4rem;">
-                                <span>🖨️</span> Marcar Recibido y Generar Recibo
+                                <span>🖨️</span> Recibo Efectivo Seleccionados
                             </button>
                             <button class="btn btn-secondary" onclick="loadCobranzaUnificado()" style="padding: 0.55rem 1rem; font-size: 0.85rem;">🔄 Actualizar</button>
                             <button class="btn btn-secondary" onclick="descargarCobranzaExcel()" style="padding: 0.55rem 1rem; font-size: 0.85rem;">📥 Descargar Excel</button>
@@ -790,6 +792,72 @@
                             </thead>
                             <tbody id="op-pagos-table-body">
                                 <tr><td colspan="9" class="table-empty">Cargando pagos recibidos...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+            <div data-cobranza-panel="lotes-efectivo" class="config-subpage-hidden" style="display:flex; flex-direction:column; gap:1.25rem;">
+                <section class="card" style="padding:1.5rem;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1rem;">
+                        <div>
+                            <h2 style="margin:0 0 0.25rem 0;">🧾 Recepción Agrupada de Efectivo por Vendedor</h2>
+                            <p style="color:#475569; margin:0;">Recibe el efectivo recaudado por cada vendedor en un solo lote (<strong>solo efectivo</strong>). Las transferencias, Pago Móvil y Zelle se confirman automáticamente al conciliar el banco.</p>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="loadRecibosLoteEfectivo()">↻ Actualizar pendientes</button>
+                    </div>
+                    <div class="dashboard-kpi-row" style="margin:0 0 1rem 0;">
+                        <div class="card kpi-card"><h3>Vendedores con efectivo</h3><p id="lotes-ef-kpi-vendedores">—</p><span>Con efectivo pendiente</span></div>
+                        <div class="card kpi-card"><h3>Pagos pendientes</h3><p id="lotes-ef-kpi-pagos">—</p><span>Solo efectivo</span></div>
+                        <div class="card kpi-card"><h3>Total Equiv. USD</h3><p id="lotes-ef-kpi-usd">—</p><span>Por recibir en caja</span></div>
+                    </div>
+                    <div id="lotes-efectivo-vendedores" style="display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem;"></div>
+                    <h3 id="lote-efectivo-vend-titulo" style="margin:0 0 0.5rem 0; font-size:0.98rem;">Pagos en efectivo pendientes</h3>
+                    <div class="table-wrapper" style="margin-bottom:0.85rem;">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:32px; text-align:center;"><input type="checkbox" id="lote-efectivo-chk-all" checked></th>
+                                    <th>Trazabilidad</th>
+                                    <th>Fecha</th>
+                                    <th>Cliente</th>
+                                    <th>Método / Pedido</th>
+                                    <th style="text-align:right;">Monto Original</th>
+                                    <th style="text-align:right;">Equiv. USD</th>
+                                </tr>
+                            </thead>
+                            <tbody id="lotes-efectivo-pendientes-tbody">
+                                <tr><td colspan="7" class="table-empty">Cargando efectivo pendiente...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; background:#f8fafc; padding:0.85rem; border-radius:8px; border:1px solid #e2e8f0;">
+                        <span id="lote-efectivo-sel-resumen" style="font-weight:600; color:#0f172a; font-size:0.88rem; margin-right:auto;">0 pagos seleccionados.</span>
+                        <label style="font-size:0.8rem; color:#475569; font-weight:600;">Fecha entrega:
+                            <input type="date" id="lote-efectivo-fecha" class="filter-select" style="margin-left:4px;">
+                        </label>
+                        <input type="text" id="lote-efectivo-obs" class="filter-select" placeholder="Observaciones del sobre / entrega (opcional)" style="cursor:text; min-width:220px;">
+                        <button type="button" id="lote-efectivo-btn-generar" class="btn-primary" style="background:#16a34a;">🧾 Generar Recibo por Lote</button>
+                    </div>
+                    <div id="lote-efectivo-status" style="margin-top:0.5rem; font-size:0.86rem; font-weight:600;"></div>
+                </section>
+                <section class="card" style="padding:1.5rem;">
+                    <h3 style="margin:0 0 0.75rem 0;">📚 Recibos de Efectivo por Lote Emitidos</h3>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr>
+                                    <th>Nº Recibo Lote</th>
+                                    <th>Fecha</th>
+                                    <th>Vendedor</th>
+                                    <th>Pagos</th>
+                                    <th>Total Equiv. USD</th>
+                                    <th>Recibió</th>
+                                    <th>Comprobante</th>
+                                </tr>
+                            </thead>
+                            <tbody id="lotes-efectivo-emitidos-tbody">
+                                <tr><td colspan="7" class="table-empty">Cargando recibos emitidos...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -2819,6 +2887,22 @@
                     </div>
                 </section>
 
+                <!-- LIMPIEZA TEMPORAL DE DESCUENTOS SOBRE ÓRDENES ODOO EXISTENTES -->
+                <section class="config-card card" data-subpage="motor" id="limpieza-descuentos-odoo-card" style="grid-column: 1 / span 2; border-top: 4px solid #7c3aed;">
+                    <div class="panel-header" style="margin-bottom:0.65rem;">
+                        <h2>🧹 Limpieza Temporal de Descuentos (Órdenes Odoo existentes)</h2>
+                        <p>Permite quitar individualmente reglas sugeridas del motor y agregar negociaciones especiales únicamente en órdenes ya existentes de Odoo mientras culmina el saneamiento de datos. Al desactivarlo, todas las órdenes quedan congeladas en solo lectura.</p>
+                    </div>
+                    <div style="display:flex; gap:1rem; align-items:center; flex-wrap:wrap;">
+                        <label style="display:flex; align-items:center; gap:0.5rem; font-weight:600; background:#f8fafc; padding:0.6rem 0.9rem; border-radius:8px; border:1px solid #e2e8f0; cursor:pointer;">
+                            <input type="checkbox" id="cfg-limpieza-descuentos-odoo" checked style="width:auto;">
+                            Permitir ajustar descuentos individuales en órdenes existentes de Odoo
+                        </label>
+                        <button type="button" id="cfg-btn-guardar-limpieza-desc" class="btn-primary" style="background:#6d28d9;">💾 Guardar Estado de Limpieza</button>
+                    </div>
+                    <div id="cfg-limpieza-descuentos-status" style="margin-top:0.55rem; font-size:0.84rem; font-weight:600;"></div>
+                </section>
+
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
                 <!-- FORMULARIO ÚNICO DE REGLAS (paso 4 del plan de unificación).
                      Reemplaza a los seis formularios por tabla, que ofrecían
@@ -4297,13 +4381,95 @@
             </div>
         </div>
 
-    <script src="/static/app.js?v=20261119_8"></script>
-    <script src="/static/js/shell.js?v=20261119_8"></script>
-    <script src="/static/js/pagos_unificados.js?v=20261119_8"></script>
-    <script src="/static/js/pagos_enviados.js?v=20261119_8"></script>
+        <!-- MODAL AJUSTES DE DESCUENTOS EN ÓRDENES EXISTENTES DE ODOO -->
+        <div id="modal-ajustes-descuentos-orden" class="modal-backdrop" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="aj-desc-titulo">
+            <div class="modal-card" style="max-width:960px; width:96%; max-height:92vh; overflow-y:auto;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:0.75rem; margin-bottom:0.5rem;">
+                    <div>
+                        <h3 id="aj-desc-titulo" style="margin:0;">Ajuste de Descuentos</h3>
+                        <p id="aj-desc-subtitulo" style="margin:0.25rem 0 0 0; color:#64748b; font-size:0.84rem;"></p>
+                    </div>
+                    <button type="button" class="btn-secondary" onclick="cerrarModalAjustesDescuentos()" aria-label="Cerrar">✕</button>
+                </div>
+                <div id="aj-desc-bloqueo" style="display:none; background:#fffbeb; border-left:4px solid #f59e0b; color:#92400e; padding:0.6rem 0.85rem; border-radius:6px; font-size:0.84rem; margin-bottom:0.75rem;"></div>
+                <div id="aj-desc-kpis" class="dashboard-kpi-row" style="margin:0 0 1rem 0;"></div>
+                <div id="aj-desc-status" style="margin-bottom:0.65rem; font-size:0.84rem; font-weight:600;"></div>
+
+                <h4 style="margin:0 0 0.45rem 0;">⚙️ Reglas Sugeridas por el Motor (quitar individualmente sin afectar las demás)</h4>
+                <div class="table-wrapper" style="margin-bottom:1.1rem;">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Origen / Regla</th>
+                                <th>ID Regla</th>
+                                <th>Descripción</th>
+                                <th style="text-align:right;">%</th>
+                                <th style="text-align:right;">Monto USD</th>
+                                <th>Estado</th>
+                                <th>Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody id="aj-desc-motor-tbody">
+                            <tr><td colspan="7" class="table-empty">Cargando descuentos...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <h4 style="margin:0 0 0.45rem 0;">🏷️ Descuentos Especiales / Negociaciones Comerciales</h4>
+                <div class="table-wrapper" style="margin-bottom:0.85rem;">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Descripción</th>
+                                <th>Valor</th>
+                                <th style="text-align:right;">Monto USD</th>
+                                <th>Motivo</th>
+                                <th>Registrado por</th>
+                                <th>Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody id="aj-desc-especiales-tbody">
+                            <tr><td colspan="6" class="table-empty">Sin descuentos especiales.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <form id="aj-desc-form-especial" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.65rem; align-items:end; background:#f8fafc; padding:0.85rem; border-radius:8px; border:1px solid #e2e8f0;">
+                    <div>
+                        <label style="font-size:0.76rem; font-weight:600; color:#475569;">Modalidad</label>
+                        <select id="aj-esp-tipo" class="filter-select" style="width:100%;">
+                            <option value="porcentaje">% sobre Subtotal</option>
+                            <option value="monto_fijo">Monto fijo (USD)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size:0.76rem; font-weight:600; color:#475569;">Valor (% o USD) *</label>
+                        <input type="number" id="aj-esp-valor" class="filter-select" style="width:100%; cursor:text;" step="0.01" min="0.01" placeholder="Ej: 5.00" required>
+                    </div>
+                    <div>
+                        <label style="font-size:0.76rem; font-weight:600; color:#475569;">Descripción</label>
+                        <input type="text" id="aj-esp-desc" class="filter-select" style="width:100%; cursor:text;" placeholder="Ej: Acuerdo gerencia">
+                    </div>
+                    <div>
+                        <label style="font-size:0.76rem; font-weight:600; color:#475569;">Motivo comercial</label>
+                        <input type="text" id="aj-esp-motivo" class="filter-select" style="width:100%; cursor:text;" placeholder="Justificación">
+                    </div>
+                    <div>
+                        <button type="submit" class="btn-primary" style="width:100%; background:#2563eb;">➕ Agregar Especial</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+    <script src="/static/app.js?v=20261120_2"></script>
+    <script src="/static/js/shell.js?v=20261120_2"></script>
+    <script src="/static/js/recibos_lote.js?v=20261120_2"></script>
+    <script src="/static/js/ajustes_descuentos_odoo.js?v=20261120_2"></script>
+    <script src="/static/js/pagos_unificados.js?v=20261120_2"></script>
+    <script src="/static/js/pagos_enviados.js?v=20261120_2"></script>
     <script src="/static/js/config_tesoreria.js?v=20261119_8"></script>
-    <script src="/static/js/ventas_unificadas.js?v=20261119_8"></script>
-    <script src="/static/js/compras_unificadas.js?v=20261119_8"></script>
+    <script src="/static/js/ventas_unificadas.js?v=20261120_2"></script>
+    <script src="/static/js/compras_unificadas.js?v=20261120_2"></script>
     <script src="/static/js/reportes_propios.js?v=20261119_8"></script>
     <script src="/static/js/contactos_maestro.js?v=20261119_8"></script>
 </body>

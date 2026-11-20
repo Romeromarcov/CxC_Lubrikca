@@ -152,9 +152,12 @@
                     accionesHtml = `${btnPrev}${btnEdit}${btnApr}${btnRec}`;
                 }
 
+                const trazColC = (typeof _cxc().trazabilidadHtml === "function")
+                    ? _cxc().trazabilidadHtml(d)
+                    : `<strong>${_esc(d.numero)}</strong><div>${_origenBadge(d)}</div>`;
                 const provSub = d.rif || (d.partner_odoo_id ? `Odoo #${d.partner_odoo_id}` : "Se creará al aprobar");
                 return `<tr>
-                    <td><strong>${_esc(d.numero)}</strong><div>${_origenBadge(d)}</div></td>
+                    <td>${trazColC}</td>
                     <td>${_tipoContableBadge(d)}</td>
                     <td>${_esc(d.fecha_documento || "—")}</td>
                     <td><strong>${_esc(d.contraparte_nombre || "Sin proveedor")}</strong><div class="cap-sub">${_esc(provSub)}</div></td>
@@ -224,11 +227,14 @@
                         const btn = puedeConciliar
                             ? `<button type="button" class="btn-primary" style="padding:0.32rem 0.65rem; font-size:0.78rem; background:#0284c7;" data-r4-vincular="1" data-doc-id="${s.documento_id}" data-huella="${_esc(s.huella)}">🔗 Conciliar</button>`
                             : '<span class="cap-sub">Solo lectura</span>';
+                        const trazSug = typeof _cxc().trazabilidadHtml === "function"
+                            ? _cxc().trazabilidadHtml(s)
+                            : `<strong>${_esc(s.numero)}</strong>`;
                         return `<tr>
                             <td>${dirBadge}</td>
                             <td><strong>${_esc(s.banco)} · ${_esc(s.fecha_banco || "—")}</strong><div class="cap-sub">Ref: ${_esc(s.referencia_banco || "—")} · ${_esc(s.descripcion_banco || "")}</div></td>
                             <td><strong>${_monto(s.monto_banco)} ${_esc(s.moneda_banco || s.moneda_doc)}</strong></td>
-                            <td><strong>${_esc(s.numero)}</strong> (${_esc(s.tipo)})<div class="cap-sub">${_esc(s.contraparte || "Sin contraparte")} · Ref: ${_esc(s.referencia_doc || "S/N")}</div></td>
+                            <td>${trazSug}<div class="cap-sub">${_esc(s.tipo)} · ${_esc(s.contraparte || "Sin contraparte")} · Ref: ${_esc(s.referencia_doc || "S/N")}</div></td>
                             <td><span class="state-badge abierta">Pts ${s.puntaje}</span><div class="cap-sub">${_esc(s.motivo || "")}</div></td>
                             <td>${btn}</td>
                         </tr>`;
@@ -254,9 +260,12 @@
                             ? `<span class="semaphore verde">🏦 Conciliado</span><div class="cap-sub">${_esc(d.conciliado_banco_huella.slice(0, 14))}…</div>` +
                               (puedeConciliar ? `<button type="button" class="btn-secondary" style="margin-top:2px; padding:2px 6px; font-size:0.72rem; color:#991b1b;" data-r4-desvincular="1" data-doc-id="${d.documento_id}">✖ Desvincular</button>` : "")
                             : '<span class="semaphore rojo">⏳ Sin conciliar</span>';
+                        const trazDoc = typeof _cxc().trazabilidadHtml === "function"
+                            ? _cxc().trazabilidadHtml(d)
+                            : `<strong>${_esc(d.numero)}</strong>`;
                         return `<tr>
                             <td>${dirChip}</td>
-                            <td><strong>${_esc(d.numero)}</strong><div class="cap-sub">${_esc(d.tipo)}</div></td>
+                            <td>${trazDoc}<div class="cap-sub">${_esc(d.tipo)}</div></td>
                             <td>${_esc(d.fecha_documento || "—")}</td>
                             <td><strong>${_esc(d.contraparte_nombre || "Sin contraparte")}</strong><div class="cap-sub">${_esc(d.concepto || d.categoria || "")}</div></td>
                             <td><strong>${d.monto != null ? _monto(d.monto) : "—"} ${_esc(d.moneda)}</strong></td>

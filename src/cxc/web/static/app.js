@@ -2242,8 +2242,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 ? Number(item.venta_teorica_subtotal)
                 : Number(item.venta_neta_real || 0) / 1.16;
 
+            const trazVentaCell = (window.CxC && typeof window.CxC.trazabilidadHtml === "function")
+                ? window.CxC.trazabilidadHtml(item)
+                : `<strong>${item.so_id}</strong>`;
+            const ajBadgeVenta = item.tiene_ajustes_descuento
+                ? `<div><span class="state-badge" style="background:#ede9fe;color:#5b21b6;font-size:0.7rem;">✏️ Desc. Ajustado</span></div>`
+                : '';
+            const btnAjustarVenta = (item.puede_ajustar_descuentos && typeof window.abrirModalAjustesDescuentos === "function")
+                ? `<button class="btn-secondary" style="padding:4px 8px;font-size:0.75rem;margin-top:3px;background:#ede9fe;color:#5b21b6;border-color:#c4b5fd;" onclick="abrirModalAjustesDescuentos('${item.so_id}')">✏️ Ajustar Desc.</button>`
+                : '';
+
             row.innerHTML = `
-                <td><strong>${item.so_id}</strong></td>
+                <td>${trazVentaCell}${ajBadgeVenta}</td>
                 <td><small>${item.fecha_entrega ?? '—'}</small></td>
                 <td>${item.cliente_nombre}</td>
                 <td>${clasifCell}</td>
@@ -2265,7 +2275,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${pagadaCell}</td>
                 <td><strong style="color:${item.saldo_cxc > 0 ? '#b91c1c' : '#059669'};">${fmt(item.saldo_cxc)}</strong></td>
                 <td>${revisarCell}</td>
-                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button></td>
+                <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem" onclick="abrirModalDetalleOrden('${item.so_id}')">Ver Detalle</button>${btnAjustarVenta}</td>
                 <td><button class="btn-primary" style="padding:4px 8px;font-size:0.75rem;background:#0369a1" onclick="abrirModalPagosOrden('${item.so_id}')">Ver Pagos</button></td>
             `;
             tbody.appendChild(row);
@@ -2516,7 +2526,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 teorico_ves: data.teorico_ves,
                 teorico_usd: data.teorico_usd,
             };
-            subtitulo.textContent = `${data.cliente_nombre || ''} — Lista nacimiento: ${data.lista_nacimiento_label || '—'}`;
+            subtitulo.innerHTML = `${data.cliente_nombre || ''} — Lista nacimiento: ${data.lista_nacimiento_label || '—'}`
+                + (data.odoo_order_id ? ` · <strong>Odoo ID #${data.odoo_order_id}</strong>` : '')
+                + (data.odoo_url ? ` <a href="${data.odoo_url}" target="_blank" rel="noopener" style="color:#0284c7;">Abrir en Odoo ↗</a>` : '')
+                + (data.ajustes_descuento && data.ajustes_descuento.puede_editar && typeof window.abrirModalAjustesDescuentos === "function"
+                    ? ` <button type="button" class="btn-secondary" style="margin-left:8px; padding:3px 10px; font-size:0.78rem; background:#ede9fe; color:#5b21b6; border-color:#c4b5fd;" onclick="abrirModalAjustesDescuentos('${soId}')">✏️ Ajustar Descuentos (${data.ajustes_descuento.count_excluidos || 0} excl. / ${data.ajustes_descuento.count_especiales || 0} esp.)</button>`
+                    : '');
             if (modoSelect) modoSelect.value = "real_orden";
             _renderDetalleOrdenModo("real_orden");
         } catch (err) {
@@ -4966,16 +4981,11 @@ document.addEventListener("DOMContentLoaded", () => {
         tbody.innerHTML = grupos.map(grupo => {
             const item = grupo[0];
             const total = grupo.length;
-            const origPill = item.origen_sistema === "cxc"
-                ? ' <span class="badge-origen-cxc" title="Registrado vía CxC / Bot">CxC</span>'
-                : ' <span class="badge-origen-odoo" title="Creado directo en Odoo">Odoo</span>';
-            const numOdooLbl = item.numero_pago_odoo || item.odoo_numero_espejo || "";
-            const enlaceOdoo = item.odoo_url
-                ? `<a href="${item.odoo_url}" target="_blank" rel="noopener" title="Abrir pago #${item.pago_id} en Odoo" style="color:#0284c7; text-decoration:underline;">${numOdooLbl || ('#' + item.pago_id)}</a>`
-                : (numOdooLbl ? `<span>${numOdooLbl}</span>` : '');
-            const pagoCell = `<strong>${item.pago_id}</strong>${origPill}`
-                + (enlaceOdoo ? `<br><small style="color:#64748b;">Odoo: ${enlaceOdoo}</small>` : '')
-                + (total > 1 ? `<br><small style="color:#64748b;" title="Este pago cubre ${total} documentos -- no está duplicado">cubre ${total} ${grupo.every(g => g.so_id) ? 'órdenes' : 'documentos'}</small>` : '');
+            const trazCob = (window.CxC && typeof window.CxC.trazabilidadHtml === "function")
+                ? window.CxC.trazabilidadHtml(item)
+                : `<strong>${item.pago_id}</strong>`;
+            const pagoCell = `<div>${trazCob}</div>`
+                + (total > 1 ? `<small style="color:#64748b;" title="Este pago cubre ${total} documentos -- no está duplicado">cubre ${total} ${grupo.every(g => g.so_id) ? 'órdenes' : 'documentos'}</small>` : '');
 
             const montoCell = item.moneda_pago === "VES"
                 ? `Bs. ${Number(item.monto_pago_original).toLocaleString('es-VE', { minimumFractionDigits: 2 })}`
@@ -5019,9 +5029,11 @@ document.addEventListener("DOMContentLoaded", () => {
             if (grupo.some(g => g.reasignado_por_odoo)) alertas.push(`<span title="${item.reasignado_detalle || ''}" style="font-size:0.68rem; color:#0369a1; font-weight:600;">🔄 Odoo lo movió${item.reasignado_fecha ? ` el ${item.reasignado_fecha}` : ''}</span>`);
             const alertasCell = alertas.length ? alertas.join('<br>') : '<span style="color:#94a3b8;">-</span>';
 
-            const reciboCell = item.recibido
-                ? `<span class="semaphore green" title="Entregado a Administración">✓ Recibido</span>`
-                : `<span class="semaphore yellow">⏳ Pendiente</span>`;
+            const reciboCell = (window.CxC && typeof window.CxC.estadoConfirmacionPagoHtml === "function")
+                ? window.CxC.estadoConfirmacionPagoHtml(item)
+                : (item.recibido
+                    ? `<span class="semaphore green" title="Entregado a Administración">✓ Recibido</span>`
+                    : `<span class="semaphore yellow">⏳ Pendiente</span>`);
 
             let accionesExtra = '';
             let checkboxCell = '<td></td>';
@@ -8372,7 +8384,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let _opValidTimer = null;
 
     function applyCobranzaSubpage(subpage) {
-        document.querySelectorAll("#tab-cobranza [data-cobranza-panel]").forEach((panel) => {
+        document.querySelectorAll("#tab-pagos [data-cobranza-panel], #tab-cobranza [data-cobranza-panel]").forEach((panel) => {
             panel.classList.toggle(
                 "config-subpage-hidden",
                 panel.getAttribute("data-cobranza-panel") !== subpage
@@ -8382,6 +8394,9 @@ document.addEventListener("DOMContentLoaded", () => {
             btn.classList.toggle("active", btn.getAttribute("data-cobranza-subpage") === subpage);
         });
         if (subpage === "aprobacion") loadOperativosCobranza();
+        if (subpage === "lotes-efectivo" && typeof window.loadRecibosLoteEfectivo === "function") {
+            window.loadRecibosLoteEfectivo();
+        }
     }
 
     function _opEstadoBadge(d) {

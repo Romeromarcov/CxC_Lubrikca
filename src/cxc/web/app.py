@@ -185,6 +185,7 @@ from cxc.sheets import serde
 from cxc.sync.incremental import IncrementalSync
 from cxc.sync.siembra_odoo import SiembraOdooService
 from cxc.web import reporte_cxc_excel, reporte_cxc_vendedor
+from cxc.web.ajustes_descuentos_api import router as ajustes_descuentos_router
 from cxc.web.bots_api import router as bots_router
 from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
 from cxc.web.capturas_api import router as capturas_router
@@ -210,6 +211,7 @@ app.include_router(contactos_router)  # maestro único de contactos y anti-dupli
 app.include_router(bots_router)
 app.include_router(directorio_router)  # directorio y plan de cuentas Odoo (directorio_api.py)
 app.include_router(reportes_propios_router)  # reportes BD propia y siembra Odoo (Fase 5)
+app.include_router(ajustes_descuentos_router)  # ajustes por regla y especiales Odoo
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -13081,14 +13083,19 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
             )
 
         cxc_pago_odoo_ids: set[str] = set()
-        cxc_pago_meta: dict[str, dict[str, str]] = {}
+        cxc_pago_meta: dict[str, dict[str, Any]] = {}
+        conc_map_cob: dict[str, Any] = {"por_pago_id": {}, "por_huella": {}}
         try:
             engine_op = _inicio_engine_seguro()
             if engine_op is not None:
                 from sqlalchemy import select as _sa_select
 
                 from cxc.db.schema import documentos_operativos as _t_ops
+                from cxc.operativos.lotes_efectivo import (
+                    mapa_conciliacion_pagos as _mapa_conc_pagos,
+                )
 
+                conc_map_cob = _mapa_conc_pagos(engine_op)
                 with engine_op.connect() as _conn_op:
                     _rows_op = _conn_op.execute(
                         _sa_select(
@@ -13096,6 +13103,10 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                             _t_ops.c.creado_por,
                             _t_ops.c.confirmado_cxc_por,
                             _t_ops.c.aprobado_por,
+                            _t_ops.c.numero,
+                            _t_ops.c.origen,
+                            _t_ops.c.lote_recibo_id,
+                            _t_ops.c.conciliado_banco_huella,
                         ).where(
                             _t_ops.c.tipo == "pago",
                             _t_ops.c.odoo_res_id.is_not(None),
@@ -13109,10 +13120,15 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                                 "creado_por": str(r_op[1] or "").strip(),
                                 "confirmado_cxc_por": str(r_op[2] or "").strip(),
                                 "aprobado_por": str(r_op[3] or "").strip(),
+                                "numero": str(r_op[4] or "").strip(),
+                                "origen_canal": str(r_op[5] or "cxc").strip(),
+                                "lote_recibo_id": int(r_op[6]) if r_op[6] is not None else None,
+                                "conciliado_banco_huella": str(r_op[7] or "").strip(),
                             }
         except Exception:
             cxc_pago_odoo_ids = set()
             cxc_pago_meta = {}
+            conc_map_cob = {"por_pago_id": {}, "por_huella": {}}
 
         usuarios_map_pagos: dict[str, str] = {}
         try:
@@ -13179,6 +13195,33 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 else None
             )
 
+            from cxc.operativos.lotes_efectivo import es_pago_efectivo as _es_ef_cob
+
+            es_ef_cob = _es_ef_cob(metodo_nombre)
+            huella_cob = str(meta_op.get("conciliado_banco_huella") or "").strip()
+            info_b_cob = (
+                conc_map_cob.get("por_huella", {}).get(huella_cob) if huella_cob else None
+            ) or conc_map_cob.get("por_pago_id", {}).get(str(pid))
+            if not huella_cob and info_b_cob:
+                huella_cob = str(info_b_cob.get("huella") or "")
+            conc_cob = bool(info_b_cob or huella_cob)
+            rec_manual = p_row.get("recibido") == "TRUE"
+            rec_efectivo_o_banco = rec_manual or (not es_ef_cob and conc_cob)
+            if not rec_por_raw and info_b_cob and info_b_cob.get("decidida_por"):
+                rec_por_raw = str(info_b_cob["decidida_por"])
+
+            lote_rec_id = meta_op.get("lote_recibo_id")
+            if es_ef_cob:
+                est_conf_cob = "RECIBIDO_EFECTIVO" if rec_manual else "PENDIENTE_EFECTIVO"
+            else:
+                est_conf_cob = "CONCILIADO_BANCO" if conc_cob else "PENDIENTE_CONCILIACION"
+
+            num_odoo_cob = str(p_row.get("numero_odoo") or "").strip() or (
+                f"PAGO-{pid}" if str(pid).isdigit() else None
+            )
+            num_cxc_cob = str(meta_op.get("numero") or "").strip() or None
+            org_sis_cob = "cxc" if str(pid) in cxc_pago_odoo_ids else "odoo"
+
             return {
                 "metodo_pago": metodo_nombre,
                 "vendedor": vendedor,
@@ -13195,13 +13238,24 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                 "reasignado_fecha": (
                     str(reasignado.get("timestamp_audit") or "")[:10] if reasignado else None
                 ),
-                "recibido": p_row.get("recibido") == "TRUE",
+                "recibido": rec_efectivo_o_banco,
                 "numero_recibido": p_row.get("numero_recibido") or None,
                 "fecha_recibido": p_row.get("fecha_recibido") or None,
                 "recibido_por": p_row.get("recibido_por") or None,
-                "origen_sistema": "cxc" if str(pid) in cxc_pago_odoo_ids else "odoo",
+                "origen_sistema": org_sis_cob,
+                "origen_canal": meta_op.get("origen_canal") or org_sis_cob,
+                "numero_cxc": num_cxc_cob,
+                "odoo_numero": num_odoo_cob,
                 "odoo_numero_espejo": p_row.get("numero_odoo") or None,
+                "odoo_id": int(pid) if str(pid).isdigit() else None,
                 "odoo_url": odoo_url_cob,
+                "es_efectivo": es_ef_cob,
+                "conciliado_banco": conc_cob,
+                "conciliado_banco_huella": huella_cob,
+                "conciliado_banco_info": info_b_cob,
+                "estado_confirmacion_pago": est_conf_cob,
+                "lote_recibo_id": lote_rec_id,
+                "recibo_lote_path": f"/recibo-lote/{lote_rec_id}" if lote_rec_id else None,
                 "registrado_por_nombre": _resolver_nom_cob(reg_raw),
                 "aprobado_o_recibido_por_nombre": _resolver_nom_cob(rec_por_raw),
             }
@@ -13329,7 +13383,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     # pagos_tasa_binance_override (ver POST /api/pago/
                     # {pago_id}/tasa-binance), no en una Vinculación.
                     "puede_editar_tasas": True,
-                    "puede_marcar_recibido": not extra["recibido"],
+                    "puede_marcar_recibido": bool(extra["es_efectivo"] and not extra["recibido"]),
                     **extra,
                 }
             )
@@ -13430,7 +13484,7 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
                     "puede_vincular": False,
                     "puede_cerrar_huerfano": False,
                     "puede_editar_tasas": bool(item.get("editable")),
-                    "puede_marcar_recibido": not extra["recibido"],
+                    "puede_marcar_recibido": bool(extra["es_efectivo"] and not extra["recibido"]),
                     **extra,
                 }
             )
@@ -15399,6 +15453,44 @@ def _get_ventas_sync(
             if str(r.get("activo", "true")).strip().lower() not in ("false", "0", "no")
         }
 
+        ajustes_por_so_v: dict[str, list[dict[str, Any]]] = {}
+        limpieza_aj_v = True
+        docs_com_por_so: dict[str, tuple[str, int | None]] = {}
+        try:
+            odoo_base_v = (AppConfig.from_env().odoo.url or "").strip().rstrip("/")
+        except Exception:
+            odoo_base_v = ""
+        try:
+            _eng_v = _inicio_engine_seguro()
+            if _eng_v is not None:
+                from sqlalchemy import select as _sel_v
+
+                from cxc.ajustes_descuentos import (
+                    ServicioAjustesDescuentos as _SrvAjV,
+                )
+                from cxc.db.schema import documentos_comerciales as _t_dc_v
+
+                _srv_aj_v = _SrvAjV(_eng_v)
+                limpieza_aj_v = _srv_aj_v.limpieza_activa()
+                ajustes_por_so_v = _srv_aj_v.listar_activos_por_so()
+                with _eng_v.connect() as _conn_v:
+                    for _rdc in _conn_v.execute(
+                        _sel_v(
+                            _t_dc_v.c.odoo_order_name,
+                            _t_dc_v.c.numero,
+                            _t_dc_v.c.odoo_order_id,
+                        ).where(_t_dc_v.c.odoo_order_name != "")
+                    ).all():
+                        _kdc = str(_rdc[0] or "").strip().upper()
+                        if _kdc:
+                            docs_com_por_so[_kdc] = (
+                                str(_rdc[1] or ""),
+                                int(_rdc[2]) if _rdc[2] is not None else None,
+                            )
+        except Exception:
+            ajustes_por_so_v = {}
+            docs_com_por_so = {}
+
         # Fase 4 (estatus de pago): equivalentes de pago congelados por
         # abono (ya calculados en engine/equivalents.py -- NUNCA se compara
         # contra VES directo). Agrupados por orden en una sola pasada para
@@ -15866,6 +15958,22 @@ def _get_ventas_sync(
                 if b
                 else Decimal("0")
             )
+            ajs_so_v = ajustes_por_so_v.get(o.so_id, [])
+            calc_aj_v: dict[str, Any] | None = None
+            if ajs_so_v:
+                from cxc.ajustes_descuentos import (
+                    aplicar_ajustes_a_descuentos_orden as _ap_aj_v,
+                )
+
+                _base_aj_v = (
+                    float(b.precio_base_calculado)
+                    if (b and float(b.precio_base_calculado or 0) > 0)
+                    else float(venta_bruta_real or 0)
+                )
+                calc_aj_v = _ap_aj_v(b.descuentos_detalle if b else [], _base_aj_v, ajs_so_v)
+                motor_total_descuentos = Decimal(str(calc_aj_v["total_descuento_ajustado"])) + (
+                    Decimal(str(b.ncs_calculadas)) if b else Decimal("0")
+                )
             # Sin ningún pago vinculado todavía, el cálculo REAL de contado
             # da $0 -- `contado_evaluable` exige al menos un abono (ver
             # `_calcular_componentes`) -- aunque el vendedor ya haya cargado
@@ -16411,9 +16519,38 @@ def _get_ventas_sync(
                 umbral_litros=umbral_litros_industrial,
             )
 
+            so_key_v = str(o.so_id or "").strip().upper()
+            doc_cxc_v = docs_com_por_so.get(so_key_v)
+            oid_v = getattr(o, "odoo_order_id", None) or (doc_cxc_v[1] if doc_cxc_v else None)
+
             items.append(
                 {
                     "so_id": o.so_id,
+                    "origen_sistema": "cxc" if doc_cxc_v else "odoo",
+                    "numero_cxc": doc_cxc_v[0] if doc_cxc_v else None,
+                    "odoo_numero": o.so_id,
+                    "odoo_order_id": oid_v,
+                    "odoo_id": oid_v,
+                    "odoo_url": (
+                        f"{odoo_base_v}/web#id={int(oid_v)}&model=sale.order&view_type=form"
+                        if (odoo_base_v and oid_v)
+                        else None
+                    ),
+                    "tiene_ajustes_descuento": bool(ajs_so_v),
+                    "puede_ajustar_descuentos": bool(limpieza_aj_v and not doc_cxc_v),
+                    "ajustes_descuento_resumen": (
+                        {
+                            "total_motor_original": calc_aj_v["total_motor_original"],
+                            "total_motor_vigente": calc_aj_v["total_motor_vigente"],
+                            "total_excluido": calc_aj_v["total_excluido"],
+                            "total_especial": calc_aj_v["total_especial"],
+                            "total_descuento_ajustado": calc_aj_v["total_descuento_ajustado"],
+                            "count_excluidos": calc_aj_v["count_excluidos"],
+                            "count_especiales": calc_aj_v["count_especiales"],
+                        }
+                        if calc_aj_v
+                        else None
+                    ),
                     "cliente_nombre": clientes_map.get(o.cliente_id, f"Cliente ID: {o.cliente_id}"),
                     "vendedor": o.vendedor_email or "Sin Vendedor",
                     # Ítem 6 (clasificación Comercial/Industrial, septiembre
@@ -17432,10 +17569,59 @@ async def get_ventas_detalle(so_id: str):
             "equiv_usd_binance": round(sum(p.get("equiv_usd_binance") or 0.0 for p in pagos), 2),
         }
 
+        ajustes_det_payload: dict[str, Any] | None = None
+        oid_det = getattr(orden, "odoo_order_id", None)
+        try:
+            _odoo_url_det = (
+                f"{(config.odoo.url or '').strip().rstrip('/')}"
+                f"/web#id={int(oid_det)}&model=sale.order&view_type=form"
+                if (config.odoo.url and oid_det)
+                else None
+            )
+            _eng_det = _inicio_engine_seguro()
+            if _eng_det is not None:
+                from cxc.ajustes_descuentos import (
+                    AjusteDescuentoError as _AjDetErr,
+                )
+                from cxc.ajustes_descuentos import (
+                    ServicioAjustesDescuentos as _SrvAjDet,
+                )
+                from cxc.ajustes_descuentos import (
+                    aplicar_ajustes_a_descuentos_orden as _ap_aj_det,
+                )
+
+                _srv_det = _SrvAjDet(_eng_det)
+                _limp_det = _srv_det.limpieza_activa()
+                try:
+                    _es_od_det = _srv_det.es_orden_odoo_existente(so_id)
+                except (_AjDetErr, LookupError):
+                    _es_od_det = False
+                _bf_det = next((bf_d for bf_d in repo.all_bandeja() if bf_d.so_id == so_id), None)
+                _base_det = (
+                    float(_bf_det.precio_base_calculado)
+                    if (_bf_det and float(_bf_det.precio_base_calculado or 0) > 0)
+                    else float(orden.monto_total or 0)
+                )
+                _act_det = _srv_det.listar_por_so(so_id, solo_activos=True)
+                _calc_det = _ap_aj_det(
+                    list(_bf_det.descuentos_detalle) if _bf_det else [], _base_det, _act_det
+                )
+                ajustes_det_payload = {
+                    "limpieza_activa": _limp_det,
+                    "es_orden_odoo_existente": _es_od_det,
+                    "puede_editar": bool(_limp_det and _es_od_det),
+                    **_calc_det,
+                }
+        except Exception:
+            _odoo_url_det = None
+
         return {
             "so_id": so_id,
+            "odoo_order_id": oid_det,
+            "odoo_url": _odoo_url_det,
             "cliente_nombre": cliente_nombre,
             "lista_nacimiento_label": _lista_label(orden.lista_precios),
+            "ajustes_descuento": ajustes_det_payload,
             "real_orden": {
                 "lineas": lineas_real_orden,
                 "subtotal": round(sum(line["subtotal"] for line in lineas_real_orden), 2),
@@ -18040,6 +18226,7 @@ async def get_config_dias_credito_volumen():
 class MarcarRecibidoRequest(BaseModel):
     pago_ids: list[str]
     recibido_por: str = "Administración"
+    solo_efectivo: bool = True
 
 
 @app.post("/api/cobranza/marcar-recibido")
@@ -18054,6 +18241,39 @@ async def post_marcar_recibido(
         recibido_por = actor_de_la_accion(user, req.recibido_por)
         repo = get_repo()
 
+        if req.solo_efectivo:
+            from cxc.operativos.lotes_efectivo import es_pago_electronico_conocido
+
+            try:
+                pagos_repo = repo.all_pagos()
+            except Exception:
+                pagos_repo = []
+            if isinstance(pagos_repo, list | tuple):
+                metodos_map_rec: dict[str, str] = {}
+                try:
+                    mets_raw = repo.all_metodos_pago()
+                    if isinstance(mets_raw, list | tuple):
+                        metodos_map_rec = {str(m.metodo_id): str(m.nombre) for m in mets_raw}
+                except Exception:
+                    metodos_map_rec = {}
+                pagos_idx = {str(p.pago_id): p for p in pagos_repo}
+                no_efectivo = []
+                for pid in req.pago_ids:
+                    p_obj = pagos_idx.get(str(pid))
+                    if p_obj is None:
+                        continue
+                    m_nom = metodos_map_rec.get(str(p_obj.metodo_pago), str(p_obj.metodo_pago))
+                    if es_pago_electronico_conocido(m_nom):
+                        no_efectivo.append(f"{pid} ({m_nom})")
+                if no_efectivo:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Solo los pagos en efectivo pueden marcarse con recibo físico. "
+                            f"Pagos electrónicos detectados: {', '.join(no_efectivo)}"
+                        ),
+                    )
+
         now = datetime.now()
         recibo_num = f"REC-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')}"
 
@@ -18066,6 +18286,8 @@ async def post_marcar_recibido(
             "recibido_por": recibido_por,
             "pagos": pagos_actualizados,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         raise HTTPException(status_code=500, detail=str(e)) from e
