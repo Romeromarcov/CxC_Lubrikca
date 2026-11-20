@@ -24,7 +24,7 @@ body {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    overflow-x: hidden;
+    overflow-x: clip;
     position: relative;
 }
 
@@ -181,6 +181,8 @@ body {
 
 .main-content {
     flex: 1;
+    min-width: 0;
+    width: 100%;
     padding: 1.5rem 2rem;
 }
 
@@ -518,15 +520,21 @@ body {
 
 /* Botones */
 .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
     background: linear-gradient(135deg, hsl(var(--accent-cyan)), #2563eb);
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     color: #ffffff;
     font-family: inherit;
     font-weight: 600;
     font-size: 0.85rem;
-    padding: 0.65rem;
+    padding: 0.5rem 0.95rem;
     cursor: pointer;
+    text-decoration: none;
+    line-height: 1.25;
     transition: filter 0.2s ease, opacity 0.2s ease;
     box-shadow: 0 2px 4px rgba(37, 99, 235, 0.15);
 }
@@ -536,6 +544,36 @@ body {
 }
 
 .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #1e293b;
+    font-family: inherit;
+    font-weight: 550;
+    font-size: 0.84rem;
+    padding: 0.48rem 0.9rem;
+    cursor: pointer;
+    text-decoration: none;
+    line-height: 1.25;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    color: #0f172a;
+}
+
+.btn-secondary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
@@ -1524,4 +1562,39 @@ body {
 .badge-confirmado-cxc {
     background: #e0f2fe;
     color: #0369a1;
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1.3;
+    background: #e2e8f0;
+    color: #334155;
+}
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.62);
+    z-index: 99998;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    overflow-y: auto;
+}
+
+.modal-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 1.5rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    max-height: 90vh;
+    overflow-y: auto;
+    color: hsl(var(--text-primary));
 }

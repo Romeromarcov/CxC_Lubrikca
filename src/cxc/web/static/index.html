@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=20261119_2">
+    <link rel="stylesheet" href="/static/styles.css?v=20261120_1">
 </head>
 <body>
     <div class="glow-container">
@@ -1441,7 +1441,7 @@
                 <button type="button" class="tab-btn compras-subnav-btn active" data-compras-subpage="facturas">📄 Facturas de Proveedor <span id="badge-op-compras-pend" class="state-badge" style="margin-left:4px;">0</span></button>
                 <button type="button" class="tab-btn compras-subnav-btn" data-compras-subpage="gastos">🧾 Gastos Menores y Caja Chica</button>
                 <button type="button" class="tab-btn compras-subnav-btn" data-compras-subpage="cuentas">📚 Plan de Cuentas y Reglas</button>
-                <button type="button" class="tab-btn" onclick="if (window.CxC && window.CxC.shell) window.CxC.shell.navigate('pagos', 'conciliacion');">🏦 Conciliación Bancaria →</button>
+                <button type="button" class="tab-btn" onclick="if (window.CxC && typeof window.CxC.navigate === 'function') window.CxC.navigate('pagos', 'conciliacion'); else window.location.href='/pagos?tab=conciliacion';">🏦 Conciliación Bancaria →</button>
             </div>
 
             <div id="compras-gastos-banner" class="card config-subpage-hidden" style="margin-bottom:1rem; border-left:4px solid #ea580c; padding:1rem 1.25rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
@@ -2250,7 +2250,6 @@
                     </div>
                 </section>
                         </div>
-                        </div>
                     </details>
                 </div>
 
@@ -2312,32 +2311,6 @@
                         </div>
                     </section>
                 </div>
-
-                    <div id="modal-estado-cuenta-propio" class="modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:90; align-items:center; justify-content:center; padding:1rem;">
-                        <div class="card" style="max-width:920px; width:100%; max-height:85vh; overflow:auto; padding:1.5rem; background:#fff;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
-                                <h3 id="rep-prop-ec-titulo" style="margin:0;">📄 Estado de Cuenta</h3>
-                                <button type="button" id="rep-prop-ec-cerrar" class="btn-secondary">✖ Cerrar</button>
-                            </div>
-                            <p id="rep-prop-ec-resumen" style="margin:0 0 0.9rem 0; color:#334155; font-size:0.9rem;"></p>
-                            <div class="table-wrapper">
-                                <table class="cxc-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Fecha</th>
-                                            <th>Movimiento</th>
-                                            <th>Correlativo / Ref</th>
-                                            <th>Fuente</th>
-                                            <th>Débito USD</th>
-                                            <th>Crédito USD</th>
-                                            <th>Saldo USD</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="rep-prop-ec-tbody"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
             </div>
         </div>
 
@@ -4190,6 +4163,33 @@
                         </div>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <!-- MODAL ESTADO DE CUENTA PROPIO (CXC / CXP BD PROPIA) -->
+        <div id="modal-estado-cuenta-propio" class="modal-backdrop" style="display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:99990; align-items:center; justify-content:center; padding:1rem;">
+            <div class="modal-card" style="max-width:920px; width:100%; max-height:85vh; overflow:auto;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+                    <h3 id="rep-prop-ec-titulo" style="margin:0;">📄 Estado de Cuenta</h3>
+                    <button type="button" id="rep-prop-ec-cerrar" class="btn-secondary">✖ Cerrar</button>
+                </div>
+                <p id="rep-prop-ec-resumen" style="margin:0 0 0.9rem 0; color:#334155; font-size:0.9rem;"></p>
+                <div class="table-wrapper">
+                    <table class="cxc-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Movimiento</th>
+                                <th>Correlativo / Ref</th>
+                                <th>Fuente</th>
+                                <th>Débito USD</th>
+                                <th>Crédito USD</th>
+                                <th>Saldo USD</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rep-prop-ec-tbody"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
