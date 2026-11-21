@@ -444,6 +444,9 @@ def decidir(
             pago_id=despues.get("pago_id"),
             usuario=usuario,
             ahora=ahora,
+            regla=str(fila["regla"] or ""),
+            pago_nombre=str(despues.get("pago_nombre") or ""),
+            candidatos_raw=fila["candidatos"],
         )
         conn.execute(
             insert(bancos_decisiones).values(

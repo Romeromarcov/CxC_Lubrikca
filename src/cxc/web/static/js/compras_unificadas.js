@@ -356,19 +356,19 @@
             const [rCfg, rDir, rCtas] = await Promise.all([
                 fetch("/api/config/gastos-contabilidad"),
                 fetch("/api/config/diarios-generales"),
-                fetch("/api/directorio/cuentas?limit=300"),
+                fetch("/api/odoo/plan-cuentas"),
             ]);
             const dCfg = await rCfg.json().catch(() => ({}));
             if (!rCfg.ok) throw new Error(dCfg.detail || dCfg.error || `Error ${rCfg.status}`);
 
             const dDir = rDir.ok ? await rDir.json().catch(() => ({})) : { items: [] };
-            const dCtas = rCtas.ok ? await rCtas.json().catch(() => ({})) : { items: [] };
+            const dCtas = rCtas.ok ? await rCtas.json().catch(() => ({})) : { cuentas: [] };
 
             const cfg = dCfg.config || {};
             const categorias = dCfg.categorias || [];
             const metodos = dCfg.metodos || [];
             const diarios = dDir.items || [];
-            const cuentas = dCtas.items || [];
+            const cuentas = dCtas.cuentas || dCtas.items || [];
             _gastosConfigCache = { categorias, metodos };
 
             const selDiario = document.getElementById("cfg-gas-diario-id");

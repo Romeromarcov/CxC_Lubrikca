@@ -4799,6 +4799,23 @@ document.addEventListener("DOMContentLoaded", () => {
     // esperan el esquema viejo de /api/conciliaciones/sugerencias, sigan
     // funcionando sin tocarlas.
     let cobranzaUnificadaData = [];
+    let _cobranzaPage = 1;
+    let _cobranzaPageSize = 100;
+
+    window.setCobranzaPage = function(p) {
+        const num = parseInt(p, 10);
+        if (!isNaN(num) && num >= 1) {
+            _cobranzaPage = num;
+            renderCobranzaUnificado();
+        }
+    };
+
+    window.setCobranzaPageSize = function(sz) {
+        const num = parseInt(sz, 10);
+        _cobranzaPageSize = (!isNaN(num) && num >= 0) ? num : 100;
+        _cobranzaPage = 1;
+        renderCobranzaUnificado();
+    };
 
     async function loadCobranzaUnificado() {
         const tbody = document.getElementById("cobranza-table-body");
@@ -4828,13 +4845,13 @@ document.addEventListener("DOMContentLoaded", () => {
              "cobranza-solo-duplicados", "cobranza-solo-alertas", "cobranza-sort"].forEach(id => {
                 const el = document.getElementById(id);
                 if (el && !el.dataset.wired) {
-                    el.addEventListener("change", renderCobranzaUnificado);
+                    el.addEventListener("change", () => { _cobranzaPage = 1; renderCobranzaUnificado(); });
                     el.dataset.wired = "1";
                 }
             });
             const searchEl = document.getElementById("cobranza-search");
             if (searchEl && !searchEl.dataset.wired) {
-                searchEl.addEventListener("input", renderCobranzaUnificado);
+                searchEl.addEventListener("input", () => { _cobranzaPage = 1; renderCobranzaUnificado(); });
                 searchEl.dataset.wired = "1";
             }
 
@@ -4912,6 +4929,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (chkD) chkD.checked = false;
                 }
                 window._cobSoloRecibidoKpi = Boolean(recK);
+                _cobranzaPage = 1;
                 renderCobranzaUnificado();
             };
             card.addEventListener("click", handler);
@@ -4950,8 +4968,10 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (countBadge) countBadge.textContent = `${grupos.length} Pagos`;
 
+        const pagEl = document.getElementById("cobranza-pagination");
         if (filtered.length === 0) {
             tbody.innerHTML = '<tr><td colspan="12" class="table-empty">No hay pagos para el filtro seleccionado.</td></tr>';
+            if (pagEl) pagEl.innerHTML = "";
             currentSugerenciasList = [];
             return;
         }
@@ -4971,6 +4991,34 @@ document.addEventListener("DOMContentLoaded", () => {
         const idxByPagoSug = {};
         currentSugerenciasList.forEach((it, idx) => { idxByPagoSug[it.sugerencia_id] = idx; });
 
+        const totalGrupos = grupos.length;
+        const pageSize = _cobranzaPageSize > 0 ? _cobranzaPageSize : totalGrupos;
+        const totalPages = Math.max(1, Math.ceil(totalGrupos / pageSize));
+        _cobranzaPage = Math.min(Math.max(1, _cobranzaPage), totalPages);
+        const startIdx = (_cobranzaPage - 1) * pageSize;
+        const endIdx = Math.min(totalGrupos, startIdx + pageSize);
+        const visibles = grupos.slice(startIdx, endIdx);
+
+        if (pagEl) {
+            pagEl.innerHTML = `
+                <div>Mostrando <strong>${startIdx + 1}–${endIdx}</strong> de <strong>${totalGrupos}</strong> pagos</div>
+                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    <label style="display:flex; align-items:center; gap:0.35rem;">
+                        Por página:
+                        <select class="filter-select" style="padding:0.25rem 0.5rem; font-size:0.82rem;" onchange="setCobranzaPageSize(this.value)">
+                            <option value="50"${_cobranzaPageSize === 50 ? ' selected' : ''}>50</option>
+                            <option value="100"${_cobranzaPageSize === 100 ? ' selected' : ''}>100</option>
+                            <option value="250"${_cobranzaPageSize === 250 ? ' selected' : ''}>250</option>
+                            <option value="0"${_cobranzaPageSize === 0 ? ' selected' : ''}>Todos</option>
+                        </select>
+                    </label>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="setCobranzaPage(${_cobranzaPage - 1})" ${_cobranzaPage <= 1 ? 'disabled' : ''}>← Anterior</button>
+                    <span>Página <strong>${_cobranzaPage}</strong> de <strong>${totalPages}</strong></span>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="setCobranzaPage(${_cobranzaPage + 1})" ${_cobranzaPage >= totalPages ? 'disabled' : ''}>Siguiente →</button>
+                </div>
+            `;
+        }
+
         const fmt = (v) => v == null ? "-" : new Intl.NumberFormat("es-US", { style: "currency", currency: "USD" }).format(v);
         const estadoBadge = {
             pendiente: '<span class="badge" style="background:#fef3c7; color:#92400e; font-weight:700;">⏳ Pendiente</span>',
@@ -4978,7 +5026,7 @@ document.addEventListener("DOMContentLoaded", () => {
             conciliado_odoo: '<span class="badge" style="background:#dcfce7; color:#166534; font-weight:700;">✓ Conciliado (Odoo)</span>',
         };
 
-        tbody.innerHTML = grupos.map(grupo => {
+        tbody.innerHTML = visibles.map(grupo => {
             const item = grupo[0];
             const total = grupo.length;
             const trazCob = (window.CxC && typeof window.CxC.trazabilidadHtml === "function")

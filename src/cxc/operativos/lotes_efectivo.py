@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import Connection, Engine, func, insert, select, update
+from sqlalchemy import Connection, Engine, func, insert, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 
 from cxc.capturas.modelos import es_efectivo
@@ -134,6 +134,28 @@ def mapa_conciliacion_pagos(engine: Engine | None) -> dict[str, dict[str, dict[s
     return {"por_pago_id": por_pago_id, "por_huella": por_huella}
 
 
+def _extraer_doc_ids_candidatos(candidatos_raw: Any) -> list[int]:
+    """Extrae enteros válidos de candidatos guardados en ``bancos_propuestas``."""
+    raw = candidatos_raw
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "[]")
+        except ValueError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    for item in raw:
+        val = item.get("id") if isinstance(item, dict) else item
+        if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+            out.append(val)
+        elif isinstance(val, str) and val.strip().isdigit():
+            n = int(val.strip())
+            if n > 0:
+                out.append(n)
+    return out
+
+
 def aplicar_conciliacion_a_operativos(
     conn: Connection,
     *,
@@ -142,13 +164,32 @@ def aplicar_conciliacion_a_operativos(
     pago_id: int | None,
     usuario: str,
     ahora: datetime,
+    regla: str = "",
+    pago_nombre: str = "",
+    candidatos_raw: Any = None,
 ) -> None:
     """Sincroniza la confirmación bancaria de pagos electrónicos en ``documentos_operativos``."""
     if not sa.inspect(conn).has_table("documentos_operativos"):
         return
     d = documentos_operativos
 
-    if estado in _ESTADOS_CONCILIADOS and pago_id is not None:
+    if estado in _ESTADOS_CONCILIADOS:
+        filtros: list[Any] = []
+        if pago_id is not None:
+            filtros.append(d.c.odoo_res_id == int(pago_id))
+        pago_nom = str(pago_nombre or "").strip()
+        es_r5_cxc = (regla == "R5") or (
+            pago_id is None and (pago_nom.startswith("PAG-") or candidatos_raw is not None)
+        )
+        if es_r5_cxc:
+            doc_ids = _extraer_doc_ids_candidatos(candidatos_raw)
+            if len(doc_ids) == 1:
+                filtros.append(d.c.documento_id == doc_ids[0])
+            if pago_nom.startswith("PAG-"):
+                filtros.append(d.c.numero == pago_nom)
+        if not filtros:
+            return
+
         candidatos = conn.execute(
             select(
                 d.c.documento_id,
@@ -156,7 +197,8 @@ def aplicar_conciliacion_a_operativos(
                 d.c.diario_nombre,
                 d.c.es_zelle_tercero,
                 d.c.confirmado_cxc,
-            ).where(d.c.tipo == "pago", d.c.odoo_res_id == int(pago_id))
+                d.c.estado,
+            ).where(d.c.tipo == "pago", or_(*filtros))
         ).all()
         for row in candidatos:
             if row.es_zelle_tercero or es_pago_efectivo(
@@ -171,6 +213,8 @@ def aplicar_conciliacion_a_operativos(
                 valores["confirmado_cxc"] = True
                 valores["confirmado_cxc_por"] = usuario
                 valores["confirmado_cxc_en"] = ahora
+            if row.estado == PENDIENTE_APROBACION:
+                valores["estado"] = CONFIRMADO_CXC
             conn.execute(update(d).where(d.c.documento_id == row.documento_id).values(**valores))
         return
 
@@ -182,6 +226,7 @@ def aplicar_conciliacion_a_operativos(
                 d.c.metodo_pago,
                 d.c.diario_nombre,
                 d.c.numero_recibo,
+                d.c.estado,
             ).where(d.c.conciliado_banco_huella == huella)
         ).all()
         for row in afectados:
@@ -197,6 +242,8 @@ def aplicar_conciliacion_a_operativos(
                 valores_limp["confirmado_cxc"] = False
                 valores_limp["confirmado_cxc_por"] = ""
                 valores_limp["confirmado_cxc_en"] = None
+                if row.estado == CONFIRMADO_CXC:
+                    valores_limp["estado"] = PENDIENTE_APROBACION
             conn.execute(
                 update(d).where(d.c.documento_id == row.documento_id).values(**valores_limp)
             )

@@ -360,6 +360,14 @@ def _sincronizar_contacto_desde_captura(captura: Any) -> dict[str, Any]:
         return {}
 
 
+def _procesar_y_sincronizar_en_segundo_plano(
+    servicio: ServicioCapturas, captura_id: int
+) -> None:
+    """Procesa la captura en Odoo y actualiza ``contactos_maestro`` con el resultado."""
+    procesada = servicio.procesar(captura_id)
+    _sincronizar_contacto_desde_captura(procesada)
+
+
 @router.post("/api/bots/capturas", dependencies=[Depends(exigir_bot_key)])
 def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio) -> JSONResponse:
     try:
@@ -391,7 +399,8 @@ def recibir_captura(body: CapturaIn, tareas: BackgroundTasks, servicio: Servicio
             cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_op}
         return JSONResponse(status_code=201 if creada else 200, content=cuerpo)
     if (creada or actualizada) and captura.estado == PENDIENTE:
-        tareas.add_task(servicio.procesar, captura.captura_id)  # a Odoo, sin hacer esperar al bot
+        # a Odoo en segundo plano, sincronizando luego el Maestro Único con el partner_id creado
+        tareas.add_task(_procesar_y_sincronizar_en_segundo_plano, servicio, captura.captura_id)
     extra_contacto = _sincronizar_contacto_desde_captura(captura)
     cuerpo = captura.a_dict()
     if extra_contacto:

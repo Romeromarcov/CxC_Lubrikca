@@ -718,7 +718,12 @@ def _enriquecer_pago_item(
         elif item.get("origen_sistema") == "odoo":
             odoo_numero = str(item.get("numero") or "")
         elif sid.isdigit():
-            odoo_numero = f"PAGO-{sid}"
+            pref_od = (
+                "ASIENTO"
+                if (item.get("odoo_model") == "account.move" or item.get("es_zelle_tercero"))
+                else "PAGO"
+            )
+            odoo_numero = f"{pref_od}-{sid}"
 
     if direccion == "enviados":
         reg_raw = item.get("creado_por") or ("Odoo" if item.get("origen_sistema") == "odoo" else "")
