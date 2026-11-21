@@ -182,7 +182,7 @@
                     ? `<a href="${_esc(d.preview_path)}" target="_blank" rel="noopener" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; text-decoration:none;">🔗 Preview</a>`
                     : "";
                 const btnConv = (d.tipo === "cotizacion" && editable && d.estado !== "RECHAZADO")
-                    ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; background:#dcfce7; color:#166534;" onclick="convertirDocumentoAPedido(${d.id})">🛒 A Pedido</button>`
+                    ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; background:#dcfce7; color:#166534;" onclick="if (typeof abrirConversionCotizacionAPedido === 'function') abrirConversionCotizacionAPedido(${d.id}); else convertirDocumentoAPedido(${d.id});">🛒 A Pedido</button>`
                     : "";
                 const btnAprobar = (d.estado === "PENDIENTE_APROBACION" && puedeAprobar && editable)
                     ? `<button type="button" class="btn-primary" style="padding:0.35rem 0.65rem; font-size:0.8rem; background:#16a34a;" onclick="aprobarPedidoEnCxC(${d.id})">✅ Autorizar</button>
@@ -212,11 +212,18 @@
                 ? `<div class="cap-sub" style="color:#0369a1; font-weight:600;">🔗 Pagos: $${_monto(d.monto_vinculado_usd || 0)} · Saldo: $${_monto(d.saldo_pendiente_vinc_usd || 0)}</div>`
                 : "";
 
+            const esBinR = d.ruta_pago === "binance" || (!d.ruta_pago && String(d.moneda_lista || "").toUpperCase() === "USD");
+            const rutaBadge = `<span style="display:inline-block; background:${esBinR ? "#fef3c7" : "#dbeafe"}; color:${esBinR ? "#92400e" : "#1e40af"}; border:1px solid ${esBinR ? "#fcd34d" : "#bfdbfe"}; padding:1px 6px; border-radius:99px; font-size:0.7rem; font-weight:700;">${esBinR ? "🔒 Ruta Binance" : "🔒 Ruta BCV"}</span>`;
+            const credDias = Number(d.dias_credito || 0);
+            const credBadge = credDias > 0
+                ? `<span style="display:inline-block; background:#f3e8ff; color:#6b21a8; padding:1px 6px; border-radius:99px; font-size:0.7rem; font-weight:600; margin-left:3px;">🗓 ${credDias}d</span>`
+                : `<span style="display:inline-block; background:#f1f5f9; color:#475569; padding:1px 6px; border-radius:99px; font-size:0.7rem; margin-left:3px;">Contado</span>`;
+
             return `<tr>
                 <td>${trazColV}${syncChip}${ajBadgeV}</td>
                 <td>${badgeTipo}</td>
                 <td><strong>${_esc(d.cliente_nombre)}</strong><div class="cap-sub">${rolBadge}${d.rif ? " · " + _esc(d.rif) : ""}</div></td>
-                <td><strong>${_esc(d.lista_precios_nombre || d.moneda_lista || "—")}</strong></td>
+                <td><strong>${_esc(d.lista_precios_nombre || d.moneda_lista || "—")}</strong><div style="margin-top:3px;">${rutaBadge}${credBadge}</div></td>
                 <td>${lineasCell}</td>
                 <td><strong>$${_monto(d.subtotal || 0)}</strong>${descSub}</td>
                 <td><strong>$${_monto(d.total_con_iva || d.subtotal || 0)}</strong>${ivaSub}${pagosVincSub}${avisoMotor}</td>

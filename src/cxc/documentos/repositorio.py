@@ -109,6 +109,9 @@ def _serializar_campos_sql(cabecera: dict[str, Any]) -> dict[str, Any]:
     if "descuentos_elegidos" in out:
         val_d = out.pop("descuentos_elegidos")
         out["descuentos_json"] = json.dumps(list(val_d or []), ensure_ascii=False)
+    if "descuentos_especiales" in out:
+        val_de = out.pop("descuentos_especiales")
+        out["descuentos_especiales_json"] = json.dumps(list(val_de or []), ensure_ascii=False)
     if "validacion_motor" in out:
         val_v = out.pop("validacion_motor")
         out["validacion_motor_json"] = (
@@ -161,6 +164,18 @@ def _a_documento(r: Any, lineas: Sequence[LineaDocumento]) -> DocumentoComercial
         token_preview=str(getattr(r, "token_preview", None) or ""),
         lista_precios_id=str(getattr(r, "lista_precios_id", None) or "21"),
         lista_precios_nombre=str(getattr(r, "lista_precios_nombre", None) or "Pago VES Nov 2026"),
+        ruta_pago=str(
+            getattr(r, "ruta_pago", None)
+            or (
+                "binance"
+                if str(getattr(r, "moneda_lista", "VES") or "").upper() == "USD"
+                else "bcv"
+            )
+        ),
+        dias_credito=int(getattr(r, "dias_credito", 0) or 0),
+        descuentos_especiales=_cargar_json_lista(
+            getattr(r, "descuentos_especiales_json", "")
+        ),
         descuentos_elegidos=_cargar_json_lista(getattr(r, "descuentos_json", "")),
         validacion_motor=_cargar_json_dict(getattr(r, "validacion_motor_json", "")),
         total_descuentos=Decimal(str(getattr(r, "total_descuentos", None) or "0")),

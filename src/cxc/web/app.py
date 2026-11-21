@@ -142,8 +142,19 @@ from cxc.engine.reportes_historicos import (
 )
 from cxc.engine.reversadas import abono_implicito
 from cxc.engine.runner import EngineRunner
+from cxc.engine.rutas_pago import (
+    RUTA_BCV,
+    RUTA_BINANCE,
+    etiqueta_ruta,
+    inferir_ruta_por_nombre,
+    listas_por_ruta,
+    normalizar_ruta,
+    ruta_de_lista,
+    validar_compatibilidad_ruta_pago,
+)
 from cxc.engine.saldos import (
     ALCANCE_OBSEQUIOS,
+    saldo_pendiente_por_ruta,
     saldos_de_la_orden,
     saldos_deudores,
     valor_entregado_y_retenido,
@@ -1138,6 +1149,7 @@ def _sincronizar_aplicaciones_conciliadas(
         tasa_bcv, bcv_variante = resolver_tasa_bcv_vinculacion(
             repo, so_id, hora_pago, tasa_bcv_dia, serie_rows=tasas_rows
         )
+        ruta_ord_sync = _ruta_de_orden_repo(repo, so_id)
         if moneda == Moneda.USD:
             equiv_usd_bcv = equiv_usd_binance = monto
             equiv_ves_bcv = monto * tasa_bcv
@@ -1166,7 +1178,9 @@ def _sincronizar_aplicaciones_conciliadas(
                     timestamp_registro=datetime.now(),
                     estado=EstadoVinculacion.CONCILIADO,
                     moneda_abono=moneda,
-                    tipo_tasa_abono=TipoTasa.BCV,
+                    tipo_tasa_abono=(
+                        TipoTasa.BINANCE if ruta_ord_sync == RUTA_BINANCE else TipoTasa.BCV
+                    ),
                     bcv_variante=bcv_variante,
                 )
             )
@@ -2222,6 +2236,7 @@ class VinculacionRequest(BaseModel):
     # Positivo y finito en el modelo, no en el cuerpo del endpoint: `put_editar_
     # vinculacion` lo validaba a mano y `post_vincular` no lo validaba en absoluto.
     monto_aplicado: float = Field(gt=0, allow_inf_nan=False)
+    ruta_pago: str | None = None
 
 
 class VinculacionEditRequest(BaseModel):
@@ -2264,6 +2279,8 @@ class MetaRequest(BaseModel):
 class FilaMapeoRequest(BaseModel):
     moneda: str = ""  # "usd" | "ves" | ""
     categoria: str = ""  # "industrial" | "comercial" | ""
+    ruta: str = ""  # "bcv" | "binance" | "" (vacio = inferir por nombre/moneda)
+    nombre: str = ""
     vigente: bool = False
     # Período en que esta lista fue la referencia de su grupo, en ISO.
     # Con esto el teórico de una orden se compara contra las listas que
@@ -4883,6 +4900,81 @@ async def get_ordenes_pendientes(cliente_id: str):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _ruta_de_orden_repo(
+    repo: Any,
+    so_id: str,
+    *,
+    mapeo: dict[str, dict[str, Any]] | None = None,
+    pricelist_names: dict[str, str] | None = None,
+) -> str | None:
+    """Resuelve ``'bcv'`` o ``'binance'`` para ``so_id`` si tiene documento u orden legible."""
+    if repo is None or not so_id:
+        return None
+    try:
+        doc = (
+            repo.get_documento_por_codigo(so_id)
+            if hasattr(repo, "get_documento_por_codigo")
+            else None
+        )
+    except Exception:
+        doc = None
+    if isinstance(doc, dict):
+        ruta_doc = normalizar_ruta(doc.get("ruta_pago"))
+        if ruta_doc:
+            return ruta_doc
+        lp_doc = doc.get("lista_precios_id")
+        if isinstance(lp_doc, str | int) and str(lp_doc).strip() not in ("", "0", "None"):
+            names = dict(pricelist_names or {})
+            if doc.get("lista_precios_nombre"):
+                names[str(lp_doc)] = str(doc["lista_precios_nombre"])
+            return ruta_de_lista(
+                str(lp_doc),
+                mapeo if mapeo is not None else get_pricelist_mapeo(repo),
+                pricelist_names=names,
+            )
+    try:
+        orden = repo.get_orden(so_id) if hasattr(repo, "get_orden") else None
+    except Exception:
+        orden = None
+    if orden is None:
+        return None
+    lp = getattr(orden, "lista_precios", None)
+    if not isinstance(lp, str | int):
+        return None
+    lp_str = str(lp).strip()
+    if not lp_str or lp_str in ("0", "None"):
+        return None
+    return ruta_de_lista(
+        lp_str,
+        mapeo if mapeo is not None else get_pricelist_mapeo(repo),
+        pricelist_names=pricelist_names,
+    )
+
+
+def _metodo_info_pago(repo: Any, pago: Any) -> tuple[str, str | None]:
+    """Devuelve ``(metodo_nombre, tipo_tasa)`` de forma segura ante mocks."""
+    if repo is None or pago is None:
+        return "", None
+    met_id = getattr(pago, "metodo_pago", None)
+    if not isinstance(met_id, str | int) or not str(met_id).strip():
+        return "", None
+    try:
+        mp = repo.get_metodo_pago(str(met_id).strip()) if hasattr(repo, "get_metodo_pago") else None
+    except Exception:
+        return "", None
+    if mp is None:
+        return "", None
+    nombre = getattr(mp, "nombre", "")
+    tipo_tasa = getattr(mp, "tipo_tasa", None)
+    nombre_str = nombre if isinstance(nombre, str) else ""
+    tt_str = (
+        str(tipo_tasa.value if hasattr(tipo_tasa, "value") else tipo_tasa)
+        if isinstance(tipo_tasa, str | TipoTasa)
+        else None
+    )
+    return nombre_str, tt_str
+
+
 @app.post("/api/vincular")
 async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTasks):
     try:
@@ -4892,6 +4984,18 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
         pago = repo.get_pago(req.pago_id)
         if not pago:
             raise HTTPException(status_code=404, detail="Pago no encontrado.")
+
+        ruta_orden = _ruta_de_orden_repo(repo, req.so_id)
+        if ruta_orden:
+            met_nombre, met_tipo_tasa = _metodo_info_pago(repo, pago)
+            compatible, motivo_incomp = validar_compatibilidad_ruta_pago(
+                ruta_orden,
+                ruta_pago_declarada=req.ruta_pago,
+                metodo_pago_nombre=met_nombre,
+                tipo_tasa_metodo=met_tipo_tasa,
+            )
+            if not compatible:
+                raise HTTPException(status_code=400, detail=motivo_incomp)
 
         monto_dec = Decimal(str(req.monto_aplicado))
         hora_pago_confirmada = datetime.combine(pago.fecha_pago, datetime.min.time())
@@ -4939,7 +5043,9 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             timestamp_registro=datetime.now(),
             estado=EstadoVinculacion.PENDIENTE,
             moneda_abono=Moneda(pago.moneda),
-            tipo_tasa_abono=TipoTasa.BCV,
+            tipo_tasa_abono=(
+                TipoTasa.BINANCE if ruta_orden == RUTA_BINANCE else TipoTasa.BCV
+            ),
             bcv_variante=bcv_variante,
         )
 
@@ -5008,6 +5114,16 @@ async def put_editar_vinculacion(
         so_id_nuevo = req.so_id.strip()
         if not so_id_nuevo:
             raise HTTPException(status_code=400, detail="Debes indicar una orden.")
+        ruta_orden_nueva = _ruta_de_orden_repo(repo, so_id_nuevo)
+        if ruta_orden_nueva:
+            met_nombre, met_tipo_tasa = _metodo_info_pago(repo, pago)
+            compatible, motivo_incomp = validar_compatibilidad_ruta_pago(
+                ruta_orden_nueva,
+                metodo_pago_nombre=met_nombre,
+                tipo_tasa_metodo=met_tipo_tasa,
+            )
+            if not compatible:
+                raise HTTPException(status_code=400, detail=motivo_incomp)
         monto_dec = Decimal(str(req.monto_aplicado))
         # Redundante desde el 11-sep-2026: ``VinculacionEditRequest.monto_aplicado``
         # ya es ``Field(gt=0, ...)``, así que Pydantic rechaza un monto no positivo
@@ -5050,6 +5166,10 @@ async def put_editar_vinculacion(
         vinc.tasa_bcv_aplicada = tasa_bcv
         vinc.tasa_binance_aplicada = tasa_binance
         vinc.bcv_variante = bcv_variante
+        if ruta_orden_nueva:
+            vinc.tipo_tasa_abono = (
+                TipoTasa.BINANCE if ruta_orden_nueva == RUTA_BINANCE else TipoTasa.BCV
+            )
         vinc.equiv_usd_bcv = equiv_usd_bcv
         vinc.equiv_usd_binance = equiv_usd_binance
         vinc.equiv_ves_bcv = equiv_ves_bcv
@@ -5843,6 +5963,7 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         # amount_total - amount_residual de cada factura. Ese campo siempre es exacto.
 
         # Del mapeo unificado, que es el que manda (decision del 11-sep-2026).
+        _mapeo_listas_rep = get_pricelist_mapeo(repo)
         usd_ids, ves_ids = listas_configuradas(repo)
         pares_listas = get_pares_listas(repo)
         rules_usd = _get_pricelist_items_fixed(execute, usd_ids)
@@ -6179,13 +6300,17 @@ def _get_reporte_saldos_sync(refresh: bool = False):
             subtotal = monto_entregado_neto_usd
 
             lista_id_str = str(o.lista_precios or "").strip()
-            is_historical = (
-                not lista_id_str
-                or lista_id_str in ("0", "None", "")
-                or (
-                    historical_enabled
-                    and HISTORICAL_PRICE_LIST_START <= o.fecha < HISTORICAL_PRICE_LIST_END_EXCLUSIVE
-                )
+            is_historical = es_orden_historica(
+                o.fecha,
+                lista_id_str,
+                enabled=historical_enabled,
+                lista_es_usd_valida=lista_id_str in [str(x) for x in usd_ids],
+            )
+            ruta_orden = ruta_de_lista(
+                o.lista_precios,
+                _mapeo_listas_rep,
+                moneda_lista=("USD" if lista_id_str in {str(x) for x in usd_ids} else ""),
+                es_historica=is_historical,
             )
 
             # Compute projected USD subtotal and total using UI candidate USD pricelists
@@ -6417,10 +6542,9 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                 teorico_usd_pagado=saldo_con_descuento_lista_usd <= 1.0,
                 factura_real_pagada=bool(o.facturada)
                 and (saldo_factura_odoo if saldo_factura_odoo is not None else 0.0) <= 1.0,
-                nacio_en_lista_usd=(
-                    not is_historical and lista_id_str in [str(x) for x in usd_ids]
-                ),
+                nacio_en_lista_usd=(ruta_orden == RUTA_BINANCE),
                 venta_real_pagada=(not o.facturada) and saldo_deudor_bcv <= 1.0,
+                ruta_orden=ruta_orden,
             )
 
             if clasificacion_cxc.sale_de_cxc:
@@ -6435,6 +6559,8 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                         "saldo_con_descuento_bcv": round(saldo_con_descuento_bcv, 2),
                         "saldo_con_descuento_lista_usd": round(saldo_con_descuento_lista_usd, 2),
                         "saldo_factura_odoo": saldo_factura_odoo,
+                        "ruta_pago": ruta_orden,
+                        "ruta_pago_label": etiqueta_ruta(ruta_orden),
                         "bandeja_destino": clasificacion_cxc.bandeja_destino.value
                         if clasificacion_cxc.bandeja_destino
                         else None,
@@ -6586,6 +6712,8 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                     "factura_odoo_nombre": factura_odoo_nombre,
                     "descuentos_desglose": descuentos_desglose,
                     "facturada": o.facturada,
+                    "ruta_pago": ruta_orden,
+                    "ruta_pago_label": etiqueta_ruta(ruta_orden),
                     # Tarea 4, Caso B ("Listo para Cierre"): SOLO ordenes SIN
                     # factura cuyo saldo segun el motor ya es 0 (pagada, lista
                     # para que Administracion facture). El otro escenario de
@@ -6593,7 +6721,11 @@ def _get_reporte_saldos_sync(refresh: bool = False):
                     # no en Odoo -> falta aplicar NC) nunca llega a esta lista:
                     # ya sale del reporte general por el umbral de la Tarea 3.
                     "candidata_a_cierre": (not o.facturada)
-                    and (saldo_con_descuento_bcv <= 0.05 or saldo_con_descuento_lista_usd <= 0.05),
+                    and (
+                        saldo_con_descuento_lista_usd <= 0.05
+                        if ruta_orden == RUTA_BINANCE
+                        else saldo_con_descuento_bcv <= 0.05
+                    ),
                     "pago_desde_odoo": pago_desde_odoo,
                     "descuentos_odoo_orden": {
                         "monto_usd": round(desc_orden_odoo_monto, 2),
@@ -8066,21 +8198,37 @@ def sincronizar_vigencia_listas(repo: Any, execute: Any) -> int:
             "product.pricelist",
             "search_read",
             [[]],
-            {"fields": ["id", "active"], "context": {"active_test": False}},
+            {"fields": ["id", "active", "name"], "context": {"active_test": False}},
         )
     except Exception as e:
         logger.warning("No se pudo leer la vigencia de las listas en Odoo: %s", e)
         return 0
     if not listas:
         return 0
-    activa_en_odoo = {str(x["id"]): bool(x.get("active")) for x in listas}
+    info_odoo = {str(x["id"]): x for x in listas}
     mapeo = dict(get_pricelist_mapeo(repo))
     cambios = 0
     for pid, entrada in mapeo.items():
-        esperado = activa_en_odoo.get(str(pid))
-        if esperado is None or bool(entrada.get("vigente")) == esperado:
+        x_odoo = info_odoo.get(str(pid))
+        if x_odoo is None:
             continue
-        mapeo[pid] = {**entrada, "vigente": esperado}
+        esperado = bool(x_odoo.get("active"))
+        nombre_odoo = str(x_odoo.get("name") or "").strip()
+        nueva = dict(entrada)
+        cambio_fila = bool(entrada.get("vigente")) != esperado
+        nueva["vigente"] = esperado
+        if nombre_odoo:
+            if nueva.get("nombre") != nombre_odoo:
+                nueva["nombre"] = nombre_odoo
+                cambio_fila = True
+            if not normalizar_ruta(nueva.get("ruta")):
+                ruta_inf = inferir_ruta_por_nombre(nombre_odoo, str(nueva.get("moneda") or ""))
+                if ruta_inf:
+                    nueva["ruta"] = ruta_inf
+                    cambio_fila = True
+        if not cambio_fila:
+            continue
+        mapeo[pid] = nueva
         cambios += 1
     if cambios:
         set_pricelist_mapeo(mapeo, repo)
@@ -9022,9 +9170,10 @@ def get_valid_pricelists_usd_and_ves(repo=None) -> tuple[list[str], list[str]]:
     resolver precios (ver ``_primer_id_activo``/``OdooPriceResolver``).
     """
     mapeo = get_pricelist_mapeo(repo)
-    usd_list = [pid for pid, m in mapeo.items() if m.get("moneda") == "usd"]
-    ves_list = [pid for pid, m in mapeo.items() if m.get("moneda") == "ves"]
-    if usd_list:
+    ves_set, usd_set = listas_por_ruta(mapeo)
+    usd_list = sorted(usd_set)
+    ves_list = sorted(ves_set)
+    if usd_list or ves_list:
         return usd_list, ves_list
     usd_env = os.environ.get("ODOO_PRICELIST_USD", "4")
     ves_env = os.environ.get("ODOO_PRICELIST_BCV", "5")
@@ -9118,6 +9267,9 @@ async def get_config_pricelist_mapeo():
         _diag_huecos = diagnostico_de_huecos(_mapeo, _huecos)
         return {
             "mapeo": _mapeo,
+            "rutas_por_lista": {
+                str(pid): ruta_de_lista(pid, _mapeo) for pid in _mapeo
+            },
             # Tramos sin lista de referencia -- la pantalla los muestra
             # arriba de la tabla para que no haya que salir a buscarlos.
             "huecos_cobertura": _huecos,
@@ -9148,9 +9300,15 @@ async def get_config_pricelist_mapeo():
 @app.post("/api/config/pricelist-mapeo")
 async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
     try:
-        mapeo = {
-            str(pid): {
-                "moneda": fila.moneda if fila.moneda in ("usd", "ves") else "",
+        mapeo: dict[str, dict[str, Any]] = {}
+        for pid, fila in req.mapeo.items():
+            moneda_norm = fila.moneda if fila.moneda in ("usd", "ves") else ""
+            nombre_clean = (fila.nombre or "").strip()
+            ruta_norm = normalizar_ruta(fila.ruta) or inferir_ruta_por_nombre(
+                nombre_clean, moneda_norm
+            )
+            entry: dict[str, Any] = {
+                "moneda": moneda_norm,
                 "categoria": (
                     fila.categoria if fila.categoria in ("industrial", "comercial") else ""
                 ),
@@ -9158,10 +9316,35 @@ async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
                 "desde": (fila.desde or "").strip(),
                 "hasta": (fila.hasta or "").strip(),
             }
-            for pid, fila in req.mapeo.items()
-        }
+            if ruta_norm:
+                entry["ruta"] = ruta_norm
+            if nombre_clean:
+                entry["nombre"] = nombre_clean
+            mapeo[str(pid)] = entry
         repo = get_repo()
         set_pricelist_mapeo(mapeo, repo)
+        try:
+            usd_ids = [
+                pid
+                for pid, m in mapeo.items()
+                if normalizar_ruta(m.get("ruta")) == RUTA_BINANCE
+                or (not normalizar_ruta(m.get("ruta")) and m.get("moneda") == "usd")
+            ]
+            ves_ids = [
+                pid
+                for pid, m in mapeo.items()
+                if normalizar_ruta(m.get("ruta")) == RUTA_BCV
+                or (not normalizar_ruta(m.get("ruta")) and m.get("moneda") == "ves")
+            ]
+            if usd_ids:
+                repo.set_config("valid_pricelists_usd", ",".join(usd_ids))
+                repo.set_config("valid_pricelists_binance", ",".join(usd_ids))
+            if ves_ids:
+                repo.set_config("valid_pricelists_ves", ",".join(ves_ids))
+                repo.set_config("valid_pricelists_bcv", ",".join(ves_ids))
+        except Exception as sync_err:
+            logger.debug("Sync claves legadas de listas tras mapeo: %s", sync_err)
+        _SALDOS_REALES_CACHE["timestamp"] = 0
         try:
             repo.set_config(
                 "historical_pricelist_enabled",
@@ -9173,6 +9356,7 @@ async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
             "status": "success",
             "message": "Mapeo de listas de precios actualizado correctamente.",
             "mapeo": mapeo,
+            "rutas_por_lista": {str(pid): ruta_de_lista(pid, mapeo) for pid in mapeo},
             "historical_pricelist_enabled": req.historical_pricelist_enabled,
         }
     except Exception as e:
@@ -9472,9 +9656,17 @@ def _get_saldos_reales_por_so_sync() -> dict[str, float] | None:
 
     saldos: dict[str, float] = {}
     for item in reporte.get("items", []):
-        saldos[item["so_id"]] = item["saldo_con_descuento_bcv"]
+        saldos[item["so_id"]] = (
+            item["saldo_con_descuento_lista_usd"]
+            if item.get("ruta_pago") == RUTA_BINANCE
+            else item["saldo_con_descuento_bcv"]
+        )
     for item in reporte.get("saldo_minimo_pendientes", []):
-        saldos[item["so_id"]] = item["saldo_con_descuento_bcv"]
+        saldos[item["so_id"]] = (
+            item["saldo_con_descuento_lista_usd"]
+            if item.get("ruta_pago") == RUTA_BINANCE
+            else item["saldo_con_descuento_bcv"]
+        )
 
     _SALDOS_REALES_CACHE["data"] = saldos
     _SALDOS_REALES_CACHE["timestamp"] = now_ts
@@ -9823,6 +10015,24 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     or f"Cliente {cliente_id}"
                 )
 
+                mp_sug = None
+                if repo and hasattr(repo, "get_metodo_pago") and p.get("metodo_pago"):
+                    try:
+                        mp_sug = repo.get_metodo_pago(str(p.get("metodo_pago") or "").strip())
+                    except Exception:
+                        mp_sug = None
+                mp_nombre_sug = (
+                    mp_sug.nombre
+                    if (mp_sug is not None and isinstance(getattr(mp_sug, "nombre", None), str))
+                    else str(p.get("metodo_pago_nombre") or p.get("metodo_pago") or "")
+                )
+                mp_tt_raw = getattr(mp_sug, "tipo_tasa", None) if mp_sug is not None else None
+                mp_tt_sug = (
+                    str(mp_tt_raw.value if hasattr(mp_tt_raw, "value") else mp_tt_raw)
+                    if isinstance(mp_tt_raw, str | TipoTasa)
+                    else None
+                )
+
                 unallocated_pagos.append(
                     {
                         "pago_id": pid,
@@ -9843,6 +10053,8 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                         "tasa_bcv_real": bcv_rate_real,
                         "tasa_binance": binance_rate,
                         "vendedor": vendedor,
+                        "metodo_pago_nombre": mp_nombre_sug,
+                        "tipo_tasa_metodo": mp_tt_sug,
                         "posible_duplicado": pid in pagos_duplicados,
                         "duplicado_de": pagos_duplicados.get(pid, []),
                     }
@@ -9850,6 +10062,10 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
 
         saldos_reales = _get_saldos_reales_por_so_sync()
         salidas_cxc = _get_salidas_cxc_sync()
+        _mapeo_sug = get_pricelist_mapeo(repo)
+        _hist_sug_enabled = is_historical_pricelist_enabled(repo)
+        _usd_sug_ids, _ = get_valid_pricelists_usd_and_ves(repo)
+        _usd_sug_set = {str(x).strip() for x in _usd_sug_ids}
 
         open_orders_by_client = {}
         for o in ordenes:
@@ -9892,6 +10108,18 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
 
             if o.cliente_id not in open_orders_by_client:
                 open_orders_by_client[o.cliente_id] = []
+            _is_hist_sug = es_orden_historica(
+                o.fecha,
+                str(o.lista_precios or "").strip(),
+                enabled=_hist_sug_enabled,
+                lista_es_usd_valida=str(o.lista_precios or "").strip() in _usd_sug_set,
+            )
+            _ruta_sug = ruta_de_lista(
+                o.lista_precios,
+                _mapeo_sug,
+                moneda_lista=("USD" if str(o.lista_precios or "").strip() in _usd_sug_set else ""),
+                es_historica=_is_hist_sug,
+            )
             open_orders_by_client[o.cliente_id].append(
                 {
                     "so_id": o.so_id,
@@ -9899,6 +10127,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     "monto_total": o.monto_total,
                     "saldo_pendiente": saldo,
                     "vendedor": o.vendedor_email,
+                    "ruta_pago": _ruta_sug,
                 }
             )
 
@@ -9917,7 +10146,15 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
         sugerencias = []
         for p in unallocated_pagos:
             cid = p["cliente_id"]
-            client_orders = open_orders_by_client.get(cid, [])
+            client_orders = [
+                ord_cand
+                for ord_cand in open_orders_by_client.get(cid, [])
+                if validar_compatibilidad_ruta_pago(
+                    ord_cand.get("ruta_pago", RUTA_BCV),
+                    metodo_pago_nombre=p.get("metodo_pago_nombre", ""),
+                    tipo_tasa_metodo=p.get("tipo_tasa_metodo"),
+                )[0]
+            ]
             bcv_rate, binance_rate, moneda_p = p["tasa_bcv"], p["tasa_binance"], p["moneda"]
 
             def saldo_fields(
@@ -9963,8 +10200,21 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                 _base=base_item,
                 _sf=saldo_fields,
                 _bcv_rate=bcv_rate,
+                _binance_rate=binance_rate,
                 _moneda_p=moneda_p,
             ):
+                ruta_ord_f = normalizar_ruta(o.get("ruta_pago")) or RUTA_BCV
+                if _moneda_p == "VES":
+                    if ruta_ord_f == RUTA_BINANCE and _binance_rate > Decimal("0"):
+                        nativo_ves = min(
+                            restante_antes * _bcv_rate,
+                            monto_aplicar * _binance_rate,
+                        )
+                    else:
+                        nativo_ves = monto_aplicar * _bcv_rate
+                    monto_nativo_val = float(nativo_ves)
+                else:
+                    monto_nativo_val = float(monto_aplicar)
                 item = {
                     **_base,
                     # Residual del pago justo ANTES de aplicar esta sugerencia
@@ -9979,6 +10229,8 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     else str(o["fecha"]),
                     "so_monto_total": float(o["monto_total"]),
                     "so_saldo_pendiente": float(o["saldo_pendiente"]),
+                    "so_ruta_pago": ruta_ord_f,
+                    "so_ruta_pago_label": etiqueta_ruta(ruta_ord_f),
                     "monto_sugerido": float(monto_aplicar),
                     # Bug real (reportado por el usuario, 27-sep-2026, pago
                     # 1187/cliente Inversiones La Bendición del Nazareno):
@@ -9997,9 +10249,7 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
                     # ``scripts/corregir_vinculaciones_monto_usd_en_ves.py``).
                     # Este campo es el monto correcto para escribir en
                     # ``monto_aplicado``: en la moneda del pago, no en USD.
-                    "monto_sugerido_nativo": float(
-                        monto_aplicar * _bcv_rate if _moneda_p == "VES" else monto_aplicar
-                    ),
+                    "monto_sugerido_nativo": monto_nativo_val,
                     "vendedor": _p["vendedor"] or o["vendedor"],
                 }
                 return item if visible_to_user(item["vendedor"]) else None
@@ -10268,6 +10518,7 @@ async def get_bandeja_facturacion():
                 teorico_usd_pagado_incl_pendiente=teorico_usd_pagado_incl_pendiente,
                 factura_real_pagada_incl_pendiente=factura_real_pagada_incl_pendiente,
                 venta_real_pagada_incl_pendiente=venta_real_pagada_incl_pendiente,
+                ruta_orden=item.get("ruta_pago"),
             )
 
             if clasificacion.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO:
@@ -10790,6 +11041,18 @@ def _vincular_masivo_sync(
             )
             continue
 
+        ruta_orden = _ruta_de_orden_repo(repo, so_id)
+        if ruta_orden:
+            met_nombre, met_tipo_tasa = _metodo_info_pago(repo, pago)
+            compatible, motivo_incomp = validar_compatibilidad_ruta_pago(
+                ruta_orden,
+                metodo_pago_nombre=met_nombre,
+                tipo_tasa_metodo=met_tipo_tasa,
+            )
+            if not compatible:
+                omitidos.append({"pago_id": pago_id, "so_id": so_id, "motivo": motivo_incomp})
+                continue
+
         monto_dec = Decimal(str(monto_aplicado))
         if monto_dec <= Decimal("0"):
             continue
@@ -10851,7 +11114,9 @@ def _vincular_masivo_sync(
             timestamp_registro=datetime.now(),
             estado=EstadoVinculacion.PENDIENTE,
             moneda_abono=Moneda(pago.moneda),
-            tipo_tasa_abono=TipoTasa.BCV,
+            tipo_tasa_abono=(
+                TipoTasa.BINANCE if ruta_orden == RUTA_BINANCE else TipoTasa.BCV
+            ),
             bcv_variante=bcv_variante,
         )
 
@@ -15648,6 +15913,17 @@ def _get_ventas_sync(
             except Exception as e_pl:
                 logger.warning("No se pudieron leer nombres de pricelist en get_ventas: %s", e_pl)
 
+        ruta_orden_map = {
+            o.so_id: ruta_de_lista(
+                o.lista_precios,
+                _mapeo_listas_clasif,
+                moneda_lista=("USD" if str(o.lista_precios or "").strip() in usd_ids_str else ""),
+                pricelist_names=pricelist_name_map,
+                es_historica=es_historica_map.get(o.so_id, False),
+            )
+            for o in ordenes
+        }
+
         def _lista_label(lista_id: str | None) -> str | None:
             if not lista_id:
                 return None
@@ -15906,9 +16182,7 @@ def _get_ventas_sync(
             # comportamiento anterior como red de seguridad).
             _teorico_row_diff = teoricos_map.get(o.so_id)
             if _teorico_row_diff is not None:
-                _es_usd_nac_diff = str(o.lista_precios) in usd_ids_str and not es_historica_map.get(
-                    o.so_id, False
-                )
+                _es_usd_nac_diff = ruta_orden_map.get(o.so_id, RUTA_BCV) == RUTA_BINANCE
                 if _es_usd_nac_diff:
                     venta_bruta_teorica = float(_teorico_row_diff.teorico_usd)
                     _desc_diff = float(_teorico_row_diff.descuentos_teorico_usd)
@@ -16113,9 +16387,7 @@ def _get_ventas_sync(
             #      S00457 es el caso desnudo: 410,80 ocultos contra 410,80
             #      del motor, que es exactamente el 35 % del diferencial
             #      cambiario. Emitir esa NC le daba el 35 % dos veces.
-            _nace_usd = str(o.lista_precios) in usd_ids_str and not es_historica_map.get(
-                o.so_id, False
-            )
+            _nace_usd = ruta_orden_map.get(o.so_id, RUTA_BCV) == RUTA_BINANCE
             bruto_nativo_teorico = usd_bruta_teorica if _nace_usd else ves_bruta_teorica
             base_facturada_sin_iva = (
                 total_facturado_antes_impuestos if tiene_factura else venta_bruta_real
@@ -16228,13 +16500,9 @@ def _get_ventas_sync(
             else:
                 val_bcv_incl_pendiente = val_bcv
                 val_binance_incl_pendiente = val_binance
-            es_historica_o = es_orden_historica(
-                o.fecha,
-                o.lista_precios,
-                historical_enabled,
-                lista_es_usd_valida=str(o.lista_precios or "").strip() in usd_ids_str,
-            )
-            es_lista_usd_nacimiento = str(o.lista_precios) in usd_ids_str and not es_historica_o
+            es_historica_o = es_historica_map.get(o.so_id, False)
+            ruta_orden_o = ruta_orden_map.get(o.so_id, RUTA_BCV)
+            es_lista_usd_nacimiento = ruta_orden_o == RUTA_BINANCE
             val_ref_nacimiento = val_binance if es_lista_usd_nacimiento else val_bcv
             val_ref_nacimiento_incl_pendiente = (
                 val_binance_incl_pendiente if es_lista_usd_nacimiento else val_bcv_incl_pendiente
@@ -16436,6 +16704,7 @@ def _get_ventas_sync(
                 ),
                 subtotal_pagado=subtotal_pagado_confirmado,
                 subtotal_pagado_incl_pendiente=subtotal_pagado_incl_pendiente,
+                ruta_orden=ruta_orden_o,
             )
 
             # El remanente se mide contra LO QUE EL CLIENTE DEBIO PAGAR:
@@ -16697,6 +16966,8 @@ def _get_ventas_sync(
                     # orden USD exige el Teórico USD específicamente pagado,
                     # no le basta el Teórico BS).
                     "nacio_en_lista_usd": es_lista_usd_nacimiento,
+                    "ruta_pago": ruta_orden_o,
+                    "ruta_pago_label": etiqueta_ruta(ruta_orden_o),
                     "lista_aplicada": b.lista_aplicada if b else o.lista_precios,
                     "lista_aplicada_label": _lista_label_hist(
                         b.lista_aplicada if b else o.lista_precios, es_historica_o
@@ -17019,6 +17290,7 @@ def _get_ventas_sync(
             _s = _saldos_4_columnas_item(_it)
             _it["por_cobrar_real"] = round(float(_s["venta_real"] or 0.0), 2)
             _it["por_cobrar_teorico_usd"] = round(float(_s["teorico_usd"] or 0.0), 2)
+            _it["por_cobrar_ruta"] = saldo_pendiente_por_ruta(_it)[1]
 
         res = {
             "items": items,

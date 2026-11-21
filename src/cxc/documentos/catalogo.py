@@ -20,6 +20,14 @@ from typing import Any, Protocol
 from sqlalchemy import Engine, select
 
 from cxc.db.schema import catalogo
+from cxc.engine.rutas_pago import (
+    RUTA_BCV,
+    RUTA_BINANCE,
+    etiqueta_ruta,
+    inferir_ruta_por_nombre,
+    normalizar_ruta,
+    ruta_de_lista,
+)
 
 logger = logging.getLogger("cxc.documentos.catalogo")
 
@@ -61,12 +69,22 @@ class ListaComercialActiva:
     lista_id: str
     nombre: str
     moneda: str = "VES"
+    ruta_pago: str = ""
+
+    @property
+    def ruta_efectiva(self) -> str:
+        return normalizar_ruta(self.ruta_pago) or (
+            inferir_ruta_por_nombre(self.nombre, self.moneda) or RUTA_BCV
+        )
 
     def a_dict(self) -> dict[str, Any]:
+        ruta = self.ruta_efectiva
         return {
             "id": self.lista_id,
             "nombre": self.nombre,
             "moneda": self.moneda,
+            "ruta_pago": ruta,
+            "ruta_pago_label": etiqueta_ruta(ruta),
         }
 
 
@@ -74,6 +92,7 @@ LISTA_POR_DEFECTO_FALLBACK = ListaComercialActiva(
     lista_id="21",
     nombre="Pago VES Nov 2026",
     moneda="VES",
+    ruta_pago=RUTA_BCV,
 )
 
 
@@ -88,6 +107,19 @@ class ItemCatalogo:
     precio_usd: Decimal = Decimal("0")
     precio_ves: Decimal = Decimal("0")
     stock_disponible: Decimal | None = None
+    precios_por_lista: Mapping[str, Decimal] = field(
+        default_factory=dict, hash=False, compare=False
+    )
+
+    def precio_para_lista(
+        self, lista_id: str | int | None = None, moneda_fallback: str = "VES"
+    ) -> Decimal:
+        lid = str(lista_id or "").strip()
+        if lid and lid in self.precios_por_lista:
+            return Decimal(str(self.precios_por_lista[lid]))
+        if str(moneda_fallback or "").strip().upper() == "USD":
+            return self.precio_usd
+        return self.precio_ves
 
     def estado_stock(self) -> str | None:
         if self.stock_disponible is None:
@@ -110,6 +142,7 @@ class ItemCatalogo:
             "litros": float(self.litros),
             "precio_usd": float(self.precio_usd),
             "precio_ves": float(self.precio_ves),
+            "precios_por_lista": {str(k): float(v) for k, v in self.precios_por_lista.items()},
             "stock_disponible": (
                 float(self.stock_disponible) if self.stock_disponible is not None else None
             ),
@@ -283,6 +316,8 @@ class DatosPreciosOdoo:
     lista_defecto: ListaComercialActiva
     precios: dict[str, tuple[Decimal, Decimal]]
     stock: dict[str, Decimal] = field(default_factory=dict)
+    listas_activas: list[ListaComercialActiva] = field(default_factory=list)
+    precios_por_lista: dict[str, dict[str, Decimal]] = field(default_factory=dict)
 
 
 class CatalogoSQLOdoo:
@@ -332,17 +367,38 @@ class CatalogoSQLOdoo:
     def lista_comercial_defecto(self, *, refresh: bool = False) -> ListaComercialActiva:
         return self._cargar_datos(refresh=refresh).lista_defecto
 
+    def listas_activas(self, *, refresh: bool = False) -> list[ListaComercialActiva]:
+        datos = self._cargar_datos(refresh=refresh)
+        return list(datos.listas_activas) if datos.listas_activas else [datos.lista_defecto]
+
+    def lista_por_id(
+        self, lista_id: str | int, *, refresh: bool = False
+    ) -> ListaComercialActiva | None:
+        lid = str(lista_id or "").strip()
+        if not lid:
+            return None
+        for la in self.listas_activas(refresh=refresh):
+            if str(la.lista_id) == lid:
+                return la
+        return None
+
     def listar(self, *, refresh: bool = False) -> list[ItemCatalogo]:
         with self._engine.connect() as conn:
             filas = conn.execute(select(catalogo)).mappings().all()
         datos = self._cargar_datos(refresh=refresh)
         precios = datos.precios
         stock_map = datos.stock
+        precios_por_lista_all = datos.precios_por_lista
         items: list[ItemCatalogo] = []
         for f in filas:
             pid = str(f["producto_id"])
             nombre = str(f["nombre"] or "").strip()
             p_usd, p_ves = precios.get(pid, (Decimal("0"), Decimal("0")))
+            p_listas = {
+                str(lid): pmap[pid]
+                for lid, pmap in precios_por_lista_all.items()
+                if pid in pmap
+            }
             items.append(
                 ItemCatalogo(
                     producto_id=pid,
@@ -354,6 +410,7 @@ class CatalogoSQLOdoo:
                     precio_usd=p_usd,
                     precio_ves=p_ves,
                     stock_disponible=stock_map.get(pid),
+                    precios_por_lista=p_listas,
                 )
             )
         items.sort(key=lambda x: (x.nombre.lower(), x.codigo.lower()))
@@ -366,8 +423,9 @@ def cargar_datos_precios_odoo(
     ves_pricelist_ids: Sequence[int],
     *,
     preferida_ves_id: str | None = None,
+    pricelist_mapeo: Mapping[str, Any] | None = None,
 ) -> DatosPreciosOdoo:
-    """Resuelve la lista comercial VES por defecto (ej. Pago VES Nov 2026) y sus precios."""
+    """Resuelve las listas comerciales activas en Odoo (VES/BCV y USD/Binance) y sus precios."""
     pricelists = execute(
         "product.pricelist",
         "search_read",
@@ -384,10 +442,13 @@ def cargar_datos_precios_odoo(
     ves_activas = [int(x) for x in ves_pricelist_ids if int(x) in activas_ids]
     usd_activas = [int(x) for x in usd_pricelist_ids if int(x) in activas_ids]
 
+    listas_activas_out: list[ListaComercialActiva] = []
     # También detecta par activo «Pago USD ...» si aún no estaba en valid_pricelists_usd
     for p in sorted(pricelists or [], key=lambda x: int(x.get("id") or 0), reverse=True):
-        nom = _sin_acentos(str(p.get("name") or ""))
+        nom_raw = str(p.get("name") or "").strip()
+        nom = _sin_acentos(nom_raw)
         pid_int = int(p["id"])
+        pid_str = str(pid_int)
         if (
             "pago" in nom
             and "usd" in nom
@@ -395,6 +456,29 @@ def cargar_datos_precios_odoo(
             and pid_int not in usd_activas
         ):
             usd_activas.append(pid_int)
+        mon_l = (
+            "USD"
+            if (
+                pid_int in usd_activas
+                or inferir_ruta_por_nombre(nom_raw) == RUTA_BINANCE
+                or ("usd" in nom and "ves" not in nom)
+            )
+            else "VES"
+        )
+        ruta_l = ruta_de_lista(
+            pid_str,
+            pricelist_mapeo,
+            lista_nombre=nom_raw,
+            moneda_lista=mon_l,
+        )
+        listas_activas_out.append(
+            ListaComercialActiva(
+                lista_id=pid_str,
+                nombre=nom_raw or f"Lista #{pid_str}",
+                moneda=mon_l,
+                ruta_pago=ruta_l,
+            )
+        )
 
     prods = None
     for fields_try in (
@@ -445,11 +529,13 @@ def cargar_datos_precios_odoo(
         dict.fromkeys(
             [*(usd_activas or usd_pricelist_ids), *(ves_activas or ves_pricelist_ids)]
             + ([defecto_id] if defecto_id is not None else [])
+            + sorted(activas_ids)
         )
     )
     prices_usd: dict[int, Decimal] = {}
     prices_ves: dict[int, Decimal] = {}
     prices_ves_defecto: dict[int, Decimal] = {}
+    prices_by_pl: dict[int, dict[int, Decimal]] = {}
 
     if listas_consulta:
         rules = execute(
@@ -473,6 +559,7 @@ def cargar_datos_precios_odoo(
             if pt_id is None:
                 continue
             val = Decimal(str(r.get("fixed_price") or "0"))
+            prices_by_pl.setdefault(pl_id, {})[pt_id] = val
             if defecto_id is not None and pl_id == defecto_id:
                 prices_ves_defecto[pt_id] = val
             if pl_id in ves_set and pt_id not in prices_ves:
@@ -481,12 +568,25 @@ def cargar_datos_precios_odoo(
                 prices_usd[pt_id] = val
 
     salida: dict[str, tuple[Decimal, Decimal]] = {}
+    precios_por_lista_out: dict[str, dict[str, Decimal]] = {}
     for pid, tid in tmpl_por_prod.items():
         fb = fallback_por_tmpl.get(tid, Decimal("0"))
         p_ves = prices_ves_defecto.get(tid, prices_ves.get(tid, fb))
         p_usd = prices_usd.get(tid, fb * Decimal("0.65") if fb > 0 else Decimal("0"))
         salida[pid] = (p_usd, p_ves)
-    return DatosPreciosOdoo(lista_defecto=lista_defecto, precios=salida, stock=stock_por_prod)
+        for la in listas_activas_out:
+            lid_int = int(la.lista_id)
+            val_l = prices_by_pl.get(lid_int, {}).get(tid)
+            if val_l is None:
+                val_l = p_usd if la.moneda == "USD" else p_ves
+            precios_por_lista_out.setdefault(la.lista_id, {})[pid] = val_l
+    return DatosPreciosOdoo(
+        lista_defecto=lista_defecto,
+        precios=salida,
+        stock=stock_por_prod,
+        listas_activas=listas_activas_out,
+        precios_por_lista=precios_por_lista_out,
+    )
 
 
 def cargar_precios_odoo_por_producto(

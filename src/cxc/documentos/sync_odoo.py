@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import Any
 
 from cxc.decimal_utils import q2
+from cxc.engine.rutas_pago import ruta_de_lista
 from cxc.models import LineaOrden, OrdenVenta, Producto
 from cxc.repositories import Repository
 
@@ -204,6 +205,12 @@ def sincronizar_documentos_desde_odoo(
                 cambios_cab["lista_precios_nombre"] = nombre_lista
             if mon_lista in ("USD", "VES"):
                 cambios_cab["moneda_lista"] = mon_lista
+            cambios_cab["ruta_pago"] = ruta_de_lista(
+                lista_odoo_id,
+                pricelist_mapeo if isinstance(pricelist_mapeo, Mapping) else None,
+                lista_nombre=nombre_lista,
+                moneda_lista=mon_lista,
+            )
 
         if lineas_cambio:
             if prod_map is None:

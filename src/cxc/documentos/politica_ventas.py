@@ -7,6 +7,7 @@ retenido en ``PENDIENTE_APROBACION`` con motivos explícitos de revisión.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -17,7 +18,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from cxc.db.schema import documentos_operativos, politica_credito_cliente
 from cxc.decimal_utils import q2
-from cxc.engine.equivalents import valor_pagado_usd
+from cxc.engine.equivalents import valor_pagado_bcv_usd, valor_pagado_binance_usd
+from cxc.engine.rutas_pago import RUTA_BINANCE, normalizar_ruta, ruta_de_lista
 from cxc.models import EstadoVinculacion, OrdenVenta
 from cxc.repositories import Repository
 
@@ -347,7 +349,24 @@ def calcular_metricas_cartera_cliente(
             "max_dias_mora": 0,
         }
 
+    mapeo_pl: dict[str, Any] = {}
+    try:
+        raw_pl = repo_cxc.get_config("pricelist_mapeo_unificado")
+        if raw_pl and isinstance(raw_pl, str):
+            parsed = json.loads(raw_pl)
+            if isinstance(parsed, dict):
+                mapeo_pl = parsed
+    except Exception:
+        mapeo_pl = {}
     valid_usd = {
+        pid
+        for pid, m in mapeo_pl.items()
+        if isinstance(m, dict)
+        and (
+            normalizar_ruta(m.get("ruta")) == RUTA_BINANCE
+            or (not normalizar_ruta(m.get("ruta")) and m.get("moneda") == "usd")
+        )
+    } or {
         x.strip()
         for x in (repo_cxc.get_config("valid_pricelists_usd") or "").split(",")
         if x.strip()
@@ -370,16 +389,27 @@ def calcular_metricas_cartera_cliente(
             continue
         if isinstance(o, OrdenVenta):
             t = teoricos_map.get(o.so_id)
+            ruta_o = ruta_de_lista(o.lista_precios, mapeo_pl)
+            es_usd = (
+                ruta_o == RUTA_BINANCE
+                or str(o.lista_precios or "").strip() in valid_usd
+            )
             objetivo = Decimal(str(o.monto_total or "0"))
             if t is not None:
-                es_usd = str(o.lista_precios or "").strip() in valid_usd
                 bruto = t.teorico_usd if es_usd else t.teorico_ves
                 desc = t.descuentos_teorico_usd if es_usd else t.descuentos_teorico_ves
                 neto = Decimal(str(bruto)) - Decimal(str(desc))
                 if neto > Decimal("0"):
                     objetivo = q2(neto * Decimal("1.16"))
             vincs_o = vincs_por_so.get(o.so_id, [])
-            abonado = q2(valor_pagado_usd(vincs_o)) if vincs_o else Decimal("0")
+            if vincs_o:
+                abonado = q2(
+                    valor_pagado_binance_usd(vincs_o)
+                    if es_usd
+                    else valor_pagado_bcv_usd(vincs_o)
+                )
+            else:
+                abonado = Decimal("0")
             estado_f = str(getattr(o, "estado_factura", "") or "").lower()
             pagada_odoo = estado_f in ("paid", "in_payment", "pagado")
             if pagada_odoo:
@@ -489,9 +519,29 @@ def evaluar_politica_auto_envio(
             "del catálogo de Odoo o sin precio de lista."
         )
 
-    # 2. Descuentos manuales en línea (fuera del catálogo del motor)
+    # 2. Descuentos manuales en línea y descuentos especiales fuera del motor
     if any(ln.descuento_pct > Decimal("0") for ln in doc.lineas):
         motivos.append("Contiene descuento(s) manual(es) en línea fuera del catálogo del motor.")
+    especs = getattr(doc, "descuentos_especiales", ()) or ()
+    tiene_alerta_espec = isinstance(doc.validacion_motor, dict) and any(
+        str(a or "").startswith("[ESPECIAL]") for a in (doc.validacion_motor.get("alertas") or [])
+    )
+    if especs and not tiene_alerta_espec:
+        motivos.append(
+            f"Incluye {len(especs)} descuento(s) especial(es) comercial(es): "
+            "requiere aprobación en CxC."
+        )
+    dias_cred_doc = int(getattr(doc, "dias_credito", 0) or 0)
+    if dias_cred_doc > 0 and doc.partner_odoo_id is None:
+        tiene_alerta_cred_nuevo = isinstance(doc.validacion_motor, dict) and any(
+            "cliente nuevo" in str(a or "").lower()
+            for a in (doc.validacion_motor.get("alertas") or [])
+        )
+        if not tiene_alerta_cred_nuevo:
+            motivos.append(
+                f"Plazo de crédito ({dias_cred_doc} días) solicitado para cliente "
+                "sin ficha verificada en Odoo."
+            )
 
     # 3. Alertas del motor de descuentos
     codigos_con_alerta: set[str] = set()

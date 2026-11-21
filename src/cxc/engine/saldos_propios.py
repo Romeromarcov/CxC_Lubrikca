@@ -13,6 +13,7 @@ confirmados y cobros de efectivo confirmados en CxC (CxC-first).
 
 from __future__ import annotations
 
+import json
 import unicodedata
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
@@ -28,8 +29,10 @@ from ..models import (
     EstadoBandeja,
     EstadoVinculacion,
     OrdenVenta,
+    TipoTasa,
 )
 from ..repositories import Repository
+from .rutas_pago import RUTA_BCV, RUTA_BINANCE, normalizar_ruta, ruta_de_lista
 
 ESTADOS_ORDEN_CONFIRMADA = ("sale", "done")
 ESTADOS_VINC_CONFIRMADA = frozenset(
@@ -128,6 +131,75 @@ def _a_usd_local(
     return q2(monto / tasa)
 
 
+def _indice_tasas_binance_local(repo: Repository) -> tuple[dict[date, Decimal], Decimal]:
+    """Construye mapa ``fecha -> tasa_binance`` y tasa fallback más reciente solo desde BD CxC."""
+    por_fecha: dict[date, Decimal] = {}
+    ultima_tasa = Decimal("0")
+    ultima_fecha: date | None = None
+
+    try:
+        hist = repo.all_tasas_historicas_auditoria()
+    except Exception:
+        hist = []
+    for row in hist:
+        f_raw = str(row.get("fecha") or "")[:10]
+        t_val = _dec(
+            row.get("tasa_binance")
+            or row.get("tasa_binance_tarde")
+            or row.get("tasa_binance_manana")
+        )
+        if f_raw and t_val > 0:
+            try:
+                f_d = date.fromisoformat(f_raw)
+                por_fecha[f_d] = t_val
+                if ultima_fecha is None or f_d >= ultima_fecha:
+                    ultima_fecha = f_d
+                    ultima_tasa = t_val
+            except ValueError:
+                continue
+
+    try:
+        series = repo.all_serie_tasas()
+    except Exception:
+        series = []
+    for s in sorted(series, key=lambda x: x.timestamp):
+        if s.tasa_binance and s.tasa_binance > 0:
+            f_d = s.timestamp.date()
+            por_fecha[f_d] = Decimal(str(s.tasa_binance))
+            if ultima_fecha is None or f_d >= ultima_fecha:
+                ultima_fecha = f_d
+                ultima_tasa = Decimal(str(s.tasa_binance))
+
+    return por_fecha, ultima_tasa
+
+
+def _a_usd_por_ruta(
+    monto: Decimal,
+    moneda: str,
+    fecha_doc: date,
+    ruta: str,
+    por_fecha_bcv: dict[date, Decimal],
+    fallback_bcv: Decimal,
+    por_fecha_binance: dict[date, Decimal],
+    fallback_binance: Decimal,
+) -> Decimal:
+    if normalizar_ruta(ruta) == RUTA_BINANCE and (por_fecha_binance or fallback_binance > 0):
+        return _a_usd_local(monto, moneda, fecha_doc, por_fecha_binance, fallback_binance)
+    return _a_usd_local(monto, moneda, fecha_doc, por_fecha_bcv, fallback_bcv)
+
+
+def _cargar_mapeo_listas_repo(repo: Repository) -> dict[str, Any]:
+    try:
+        raw = repo.get_config("pricelist_mapeo_unificado") if hasattr(repo, "get_config") else None
+        if raw and isinstance(raw, str):
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+    except Exception:
+        pass
+    return {}
+
+
 def _so_ids_csv(so_id_raw: str | None) -> list[str]:
     return [s.strip() for s in str(so_id_raw or "").split(",") if s.strip()]
 
@@ -183,10 +255,14 @@ def _bucket_cliente(cid: str, nombre: str, vendedor: str) -> dict[str, Any]:
         "cliente_nombre": nombre or f"Cliente #{cid}",
         "vendedor_email": vendedor,
         "ventas_confirmadas_usd": Decimal("0"),
+        "ventas_bcv_usd": Decimal("0"),
+        "ventas_binance_usd": Decimal("0"),
         "descuentos_sistema_usd": Decimal("0"),
         "notas_credito_usd": Decimal("0"),
         "descuentos_confirmados_usd": Decimal("0"),
         "pagos_odoo_usd": Decimal("0"),
+        "pagos_bcv_usd": Decimal("0"),
+        "pagos_binance_usd": Decimal("0"),
         "pagos_zelle_tercero_usd": Decimal("0"),
         "pagos_efectivo_cxc_usd": Decimal("0"),
         "pagos_otros_cxc_usd": Decimal("0"),
@@ -208,6 +284,9 @@ def _recolectar_estado_bd(
 ) -> dict[str, Any]:
     hoy_d = hoy or date.today()
     por_fecha_tasa, fallback_tasa = _indice_tasas_bcv_local(repo)
+    por_fecha_binance, fallback_binance = _indice_tasas_binance_local(repo)
+    mapeo_listas = _cargar_mapeo_listas_repo(repo)
+    ruta_por_so: dict[str, str] = {}
 
     if ajustes_descuentos_por_so is None:
         eng_repo = getattr(repo, "_engine", None)
@@ -259,9 +338,15 @@ def _recolectar_estado_bd(
         monto = q2(_dec(o.monto_total))
         if monto <= 0:
             continue
+        ruta_o = ruta_de_lista(o.lista_precios, mapeo_listas)
+        ruta_por_so[o.so_id] = ruta_o
         f_base = o.fecha_entrega or o.fecha
         f_venc = f_base + timedelta(days=int(o.dias_credito or 0))
         b["ventas_confirmadas_usd"] += monto
+        if ruta_o == RUTA_BINANCE:
+            b["ventas_binance_usd"] += monto
+        else:
+            b["ventas_bcv_usd"] += monto
         b["n_ordenes"] += 1
         b["ordenes_fifo"].append((o.fecha, f_venc, monto, o.so_id))
         b["movimientos"].append(
@@ -296,7 +381,21 @@ def _recolectar_estado_bd(
         f_cre = getattr(dc, "creado_en", None)
         f_doc = f_ent or (f_cre.date() if isinstance(f_cre, datetime) else hoy_d)
         ref_doc = so_name or str(getattr(dc, "numero", ""))
+        ruta_dc = normalizar_ruta(getattr(dc, "ruta_pago", "")) or ruta_de_lista(
+            getattr(dc, "lista_precios_id", None),
+            mapeo_listas,
+            lista_nombre=str(getattr(dc, "lista_precios_nombre", "") or ""),
+            moneda_lista=str(getattr(dc, "moneda_lista", "") or ""),
+        )
+        if ref_doc:
+            ruta_por_so[ref_doc] = ruta_dc
+        if getattr(dc, "numero", None):
+            ruta_por_so[str(dc.numero)] = ruta_dc
         b["ventas_confirmadas_usd"] += monto
+        if ruta_dc == RUTA_BINANCE:
+            b["ventas_binance_usd"] += monto
+        else:
+            b["ventas_bcv_usd"] += monto
         b["n_ordenes"] += 1
         b["ordenes_fifo"].append((f_doc, f_doc, monto, ref_doc))
         b["movimientos"].append(
@@ -453,16 +552,67 @@ def _recolectar_estado_bd(
         aplicado_nativo = Decimal("0")
         for v in vincs:
             aplicado_nativo += _dec(v.monto_aplicado)
-            if v.equiv_usd_bcv is not None:
-                vinc_congelado += q2(_dec(v.equiv_usd_bcv))
+            ruta_v = ruta_por_so.get(str(v.so_id), "")
+            usa_binance = (
+                ruta_v == RUTA_BINANCE
+                or getattr(v, "tipo_tasa_abono", None) == TipoTasa.BINANCE
+            )
+            if usa_binance and getattr(v, "equiv_usd_binance", None) is not None:
+                eq_v = q2(_dec(v.equiv_usd_binance))
+            elif usa_binance:
+                eq_v = _a_usd_por_ruta(
+                    _dec(v.monto_aplicado),
+                    p.moneda.value,
+                    f_p,
+                    RUTA_BINANCE,
+                    por_fecha_tasa,
+                    fallback_tasa,
+                    por_fecha_binance,
+                    fallback_binance,
+                )
+            elif v.equiv_usd_bcv is not None:
+                eq_v = q2(_dec(v.equiv_usd_bcv))
             else:
-                vinc_congelado += _a_usd_local(
+                eq_v = _a_usd_local(
                     _dec(v.monto_aplicado), p.moneda.value, f_p, por_fecha_tasa, fallback_tasa
                 )
+            vinc_congelado += eq_v
+            if usa_binance:
+                b["pagos_binance_usd"] += eq_v
+            else:
+                b["pagos_bcv_usd"] += eq_v
         remanente_nativo = max(Decimal("0"), _dec(p.monto) - aplicado_nativo)
-        remanente_usd = _a_usd_local(
-            remanente_nativo, p.moneda.value, f_p, por_fecha_tasa, fallback_tasa
+        met_p = None
+        if getattr(p, "metodo_pago", None) and hasattr(repo, "get_metodo_pago"):
+            try:
+                met_p = repo.get_metodo_pago(str(p.metodo_pago))
+            except Exception:
+                met_p = None
+        ruta_rem = (
+            RUTA_BINANCE
+            if (
+                met_p is not None
+                and (
+                    getattr(met_p, "tipo_tasa", None) == TipoTasa.BINANCE
+                    or "binance" in str(getattr(met_p, "nombre", "") or "").lower()
+                )
+            )
+            else RUTA_BCV
         )
+        remanente_usd = _a_usd_por_ruta(
+            remanente_nativo,
+            p.moneda.value,
+            f_p,
+            ruta_rem,
+            por_fecha_tasa,
+            fallback_tasa,
+            por_fecha_binance,
+            fallback_binance,
+        )
+        if ruta_rem == RUTA_BINANCE:
+            b["pagos_binance_usd"] += remanente_usd
+        else:
+            b["pagos_bcv_usd"] += remanente_usd
         monto_usd = q2(vinc_congelado + remanente_usd)
         if monto_usd <= 0:
             continue
@@ -586,10 +736,14 @@ def _recolectar_estado_bd(
             "n_ordenes": int(b["n_ordenes"]),
             "n_pagos": int(b["n_pagos"]),
             "ventas_confirmadas_usd": _f(ventas),
+            "ventas_bcv_usd": _f(b["ventas_bcv_usd"]),
+            "ventas_binance_usd": _f(b["ventas_binance_usd"]),
             "descuentos_sistema_usd": _f(b["descuentos_sistema_usd"]),
             "notas_credito_usd": _f(b["notas_credito_usd"]),
             "descuentos_confirmados_usd": _f(descuentos),
             "pagos_odoo_usd": _f(b["pagos_odoo_usd"]),
+            "pagos_bcv_usd": _f(b["pagos_bcv_usd"]),
+            "pagos_binance_usd": _f(b["pagos_binance_usd"]),
             "pagos_zelle_tercero_usd": _f(b["pagos_zelle_tercero_usd"]),
             "pagos_efectivo_cxc_usd": _f(b["pagos_efectivo_cxc_usd"]),
             "pagos_otros_cxc_usd": _f(b["pagos_otros_cxc_usd"]),
@@ -655,6 +809,7 @@ def _recolectar_estado_bd(
         "generado_en": datetime.now().isoformat(),
         "ultimo_sync_bd": last_sync.isoformat() if last_sync else None,
         "tasa_bcv_referencia": float(fallback_tasa),
+        "tasa_binance_referencia": float(fallback_binance),
         "clientes": clientes_out,
         "vendedores": vendedores_out,
         "tramos_globales": {k: _f(v) for k, v in tot_tramos.items()},
@@ -757,6 +912,7 @@ def calcular_saldos_propios(
         "generado_en": base["generado_en"],
         "ultimo_sync_bd": base["ultimo_sync_bd"],
         "tasa_bcv_referencia": base["tasa_bcv_referencia"],
+        "tasa_binance_referencia": base["tasa_binance_referencia"],
         "kpis": _resumir_kpis(filtrados),
         "kpis_globales": _resumir_kpis(clientes_limpios),
         "vendedores": base["vendedores"],

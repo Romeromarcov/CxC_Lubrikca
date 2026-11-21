@@ -52,7 +52,8 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
 
     descuentos_html = ""
     descuentos_lista: list[dict[str, Any]] = d.get("descuentos") or []
-    if descuentos_lista:
+    especiales_lista: list[dict[str, Any]] = d.get("descuentos_especiales") or []
+    if descuentos_lista or especiales_lista:
         items_d: list[str] = []
         for desc in descuentos_lista:
             cod = _esc(desc.get("codigo"))
@@ -81,6 +82,21 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
                   </div>
                   <div class="desc-cond">{cond}</div>
                   {alerta_div}
+                </div>
+                """
+            )
+        for esp in especiales_lista:
+            mot_e = _esc(esp.get("motivo") or "Descuento especial comercial")
+            pct_e = float(esp.get("porcentaje") or 0)
+            mto_e = float(esp.get("monto_estimado_usd") or esp.get("monto_usd") or 0)
+            items_d.append(
+                f"""
+                <div class="desc-item">
+                  <div class="desc-head">
+                    <div><strong>[ESPECIAL] {mot_e}</strong> <span class="pill-warn">⚠ Aprobación especial CxC</span></div>
+                    <div class="desc-val">-{pct_e:.2f}% (-${mto_e:,.2f})</div>
+                  </div>
+                  <div class="desc-cond">Negociación comercial especial fuera de tabla</div>
                 </div>
                 """
             )
@@ -379,9 +395,9 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
         <div style="font-size:12.5px;color:#475569;">{_esc(doc.direccion or "—")}</div>
       </div>
       <div>
-        <div class="meta-label">Lista Comercial Aplicada</div>
-        <div class="meta-val">{_esc(doc.lista_precios_nombre)}</div>
-        <div style="font-size:12.5px;color:#475569;">Vendedor: {_esc(doc.vendedor_email or "Comercial")} · Volumen: {d["total_litros"]:.2f} L</div>
+        <div class="meta-label">Lista Comercial, Ruta y Plazo</div>
+        <div class="meta-val">{_esc(doc.lista_precios_nombre)} · {_esc(d.get("ruta_pago_label") or "Ruta BCV")}</div>
+        <div style="font-size:12.5px;color:#475569;">Plazo: {"Contado (0 días)" if int(d.get("dias_credito") or 0) <= 0 else f"Crédito {int(d.get('dias_credito') or 0)} día(s)"} · Vendedor: {_esc(doc.vendedor_email or "Comercial")} · Volumen: {d["total_litros"]:.2f} L</div>
       </div>
     </div>
 

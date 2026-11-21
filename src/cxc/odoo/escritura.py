@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import unicodedata
 import xmlrpc.client
 from collections.abc import Callable
@@ -444,6 +445,49 @@ class EscritorOdoo:
             {"body": texto, "message_type": "comment", "subtype_xmlid": "mail.mt_note"},
         )
 
+    def payment_term_id_por_dias(self, dias: int) -> int | None:
+        """Busca un término de pago activo en Odoo acorde a ``dias`` (best-effort)."""
+        try:
+            terms = self._call(
+                "account.payment.term",
+                "search_read",
+                [[["active", "=", True]]],
+                {"fields": ["id", "name"], "limit": 100},
+            )
+        except Exception:
+            return None
+        if not terms:
+            return None
+        target = int(dias or 0)
+        if target <= 0:
+            for t in terms:
+                nom = str(t.get("name") or "").lower()
+                if any(k in nom for k in ("inmediato", "contado", "immediate", "cash", "0 d")):
+                    return int(t["id"])
+            return None
+        pat_exact = re.compile(rf"(?<!\d){target}(?!\d)")
+        for t in terms:
+            nom = str(t.get("name") or "").lower()
+            if pat_exact.search(nom):
+                return int(t["id"])
+        try:
+            lines = self._call(
+                "account.payment.term.line",
+                "search_read",
+                [[["payment_id", "in", [int(t["id"]) for t in terms]]]],
+                {"fields": ["payment_id", "nb_days"], "limit": 300},
+            )
+            for ln in lines or []:
+                if int(ln.get("nb_days") or -1) == target:
+                    pid = ln.get("payment_id")
+                    if isinstance(pid, list | tuple) and pid:
+                        return int(pid[0])
+                    if pid:
+                        return int(pid)
+        except Exception:
+            pass
+        return None
+
     def crear_pedido(
         self,
         *,
@@ -455,6 +499,7 @@ class EscritorOdoo:
         shipping_id: int | None = None,
         fecha_entrega: str | None = None,
         pricelist_id: int | None = None,
+        payment_term_id: int | None = None,
     ) -> int:
         """``sale.order`` en borrador. Sin ``price_unit`` Odoo aplica la lista del cliente."""
         previo = self._buscar("sale.order", [["client_order_ref", "=", marca]], 1)
@@ -480,9 +525,15 @@ class EscritorOdoo:
             if pricelist_id is not None and "pricelist_id" in self.campos("sale.order")
             else None
         )
+        pt_val = (
+            payment_term_id
+            if payment_term_id is not None and "payment_term_id" in self.campos("sale.order")
+            else None
+        )
         vals = _vals(
             partner_id=partner_id,
             pricelist_id=pl_val,
+            payment_term_id=pt_val,
             client_order_ref=marca,
             note=nota or None,
             user_id=vendedor_id,

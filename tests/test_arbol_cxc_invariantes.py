@@ -85,6 +85,7 @@ def test_un_pago_confirmado_gana_sobre_uno_pendiente() -> None:
         facturada=True,
         teorico_usd_pagado=True,
         factura_real_pagada_incl_pendiente=True,
+        nacio_en_lista_usd=True,
     )
     assert r.confirmado is True
     assert r.bandeja_destino is BandejaDestino.FACTURACION_2

@@ -3121,7 +3121,7 @@ def test_e2e_29_sugerencias_convierte_ves_a_usd_antes_de_sugerir():
             # min(5181.27, 60.0) = 60.0 -- igual que con la conversion
             # correcta, por eso el saldo/residual es la aserción clave.
             monto_total=Decimal("60.00"),
-            lista_precios="4",
+            lista_precios="2",
             es_primera_compra=False,
         ),
     ]

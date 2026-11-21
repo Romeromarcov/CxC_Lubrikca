@@ -62,7 +62,10 @@ def _clasificar(**kw):
 
 
 def test_cada_rama_dice_por_cual_referencia_salio() -> None:
-    assert _clasificar(teorico_usd_pagado=True).referencia == ReferenciaCxC.TEORICO_USD
+    assert (
+        _clasificar(teorico_usd_pagado=True, nacio_en_lista_usd=True).referencia
+        == ReferenciaCxC.TEORICO_USD
+    )
     assert _clasificar(teorico_bs_pagado=True).referencia == ReferenciaCxC.TEORICO_BS
     assert _clasificar(venta_real_pagada=True).referencia == ReferenciaCxC.VENTA_REAL
     assert (
@@ -84,7 +87,7 @@ def test_una_orden_que_sigue_en_cobranza_no_tiene_referencia() -> None:
 def test_la_segunda_pasada_nombra_la_misma_referencia_pero_sin_confirmar() -> None:
     """"En proceso de pago": antes de facturar es la única señal posible,
     y la bandeja tiene que poder distinguirla de un pago confirmado."""
-    r = _clasificar(teorico_usd_pagado_incl_pendiente=True)
+    r = _clasificar(teorico_usd_pagado_incl_pendiente=True, nacio_en_lista_usd=True)
     assert r.referencia == ReferenciaCxC.TEORICO_USD
     assert r.confirmado is False
     assert r.sale_de_cxc is True
@@ -119,12 +122,12 @@ def test_es_la_unica_rama_que_enruta_sin_salir_de_cxc() -> None:
     """Fija la excepción para que un cambio futuro no la borre por
     parecer una inconsistencia."""
     combinaciones = [
-        {"teorico_usd_pagado": True},
+        {"teorico_usd_pagado": True, "nacio_en_lista_usd": True},
         {"teorico_bs_pagado": True},
         {"venta_real_pagada": True},
         {"facturada": True, "factura_real_pagada": True},
         {"facturada": True, "factura_pagada_confirmada_odoo": True},
-        {"teorico_usd_pagado_incl_pendiente": True},
+        {"teorico_usd_pagado_incl_pendiente": True, "nacio_en_lista_usd": True},
     ]
     for kw in combinaciones:
         r = _clasificar(**kw)
@@ -134,7 +137,7 @@ def test_es_la_unica_rama_que_enruta_sin_salir_de_cxc() -> None:
 def test_un_pago_completo_no_pasa_por_la_rama_del_subtotal() -> None:
     """Va al final del árbol: solo actúa si ninguna referencia completa
     alcanzó. Cubrir el total con IVA sale por su rama normal."""
-    r = _clasificar(teorico_usd_pagado=True, subtotal_pagado=True)
+    r = _clasificar(teorico_usd_pagado=True, subtotal_pagado=True, nacio_en_lista_usd=True)
     assert r.sale_de_cxc is True
     assert r.referencia == ReferenciaCxC.TEORICO_USD
 

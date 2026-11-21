@@ -53,6 +53,32 @@ CAMPO_PAGADO_BINANCE = "pagado_teorico_binance_incl_pendiente"
 CAMPO_PAGADO_REFERENCIA = "monto_pagado_factura_odoo_incl_pendiente"
 
 
+def saldo_pendiente_por_ruta(item: dict[str, Any]) -> tuple[str, float]:
+    """Devuelve ``(ruta_pago, saldo_pendiente)`` respetando la ruta nativa de la orden."""
+    from .rutas_pago import RUTA_BCV, RUTA_BINANCE, normalizar_ruta, ruta_de_lista
+
+    ruta = normalizar_ruta(item.get("ruta_pago"))
+    if not ruta:
+        if item.get("nacio_en_lista_usd") is True:
+            ruta = RUTA_BINANCE
+        elif item.get("nacio_en_lista_usd") is False and item.get("lista_nacimiento"):
+            ruta = ruta_de_lista(
+                item.get("lista_nacimiento"),
+                lista_nombre=str(item.get("lista_nacimiento_label") or ""),
+            )
+        else:
+            ruta = RUTA_BCV
+
+    saldos = saldos_de_la_orden(item)
+    campo_teorico = CAMPO_TEORICO_USD if ruta == RUTA_BINANCE else CAMPO_TEORICO_VES
+    key_teorico = "teorico_usd" if ruta == RUTA_BINANCE else "teorico_bs"
+    if item.get(campo_teorico) is not None:
+        return ruta, round(float(saldos[key_teorico] or 0.0), 2)
+    if saldos["factura_real"] is not None:
+        return ruta, round(float(saldos["factura_real"]), 2)
+    return ruta, round(float(saldos["venta_real"] or 0.0), 2)
+
+
 def _num(item: dict[str, Any], campo: str) -> float:
     try:
         return float(item.get(campo) or 0.0)
