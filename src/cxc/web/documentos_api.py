@@ -840,6 +840,15 @@ def listar_ventas_unificadas(
     except Exception:
         pricelists_map = {}
 
+    listas_activas_map: dict[str, dict[str, Any]] = {}
+    try:
+        for lst_act in servicio.listas_precio_activas() or []:
+            lid_act = str(lst_act.get("id") or "").strip()
+            if lid_act:
+                listas_activas_map[lid_act] = lst_act
+    except Exception:
+        listas_activas_map = {}
+
     clientes_map = {str(c.cliente_id): c for c in repo_cxc.all_clientes()}
     vinculados_so: set[str] = {
         d.odoo_order_name.strip().upper()
@@ -850,6 +859,17 @@ def listar_ventas_unificadas(
     filas: list[dict[str, Any]] = []
     for d in docs_cxc:
         item = d.a_dict(incluir_lineas=True)
+        lp_doc_id = str(getattr(d, "lista_precios_id", "") or "").strip()
+        cfg_doc = pricelists_map.get(lp_doc_id) if lp_doc_id else None
+        if isinstance(cfg_doc, dict) and cfg_doc.get("ruta"):
+            ruta_doc_cfg = ruta_de_lista(
+                lp_doc_id,
+                pricelists_map,
+                lista_nombre=str(getattr(d, "lista_precios_nombre", "") or ""),
+                moneda_lista=str(getattr(d, "moneda_lista", "") or ""),
+            )
+            item["ruta_pago"] = ruta_doc_cfg
+            item["ruta_pago_label"] = etiqueta_ruta(ruta_doc_cfg)
         so_key = (d.odoo_order_name or "").strip().upper()
         ord_esp = ordenes_por_so.get(so_key)
         confirmado = orden_confirmada_en_odoo(ord_esp, d) or d.estado == ENVIADO_ODOO
@@ -908,11 +928,28 @@ def listar_ventas_unificadas(
         else:
             sub_o = round(tot_con_imp / 1.16, 2) if tot_con_imp > 0 else 0.0
         iva_o = max(0.0, round(tot_con_imp - sub_o, 2))
-        pl_info = pricelists_map.get(str(o.lista_precios or ""), {})
-        pl_nombre = str(pl_info.get("name") or pl_info.get("nombre") or o.lista_precios or "—")
-        pl_mon = str(pl_info.get("moneda") or "USD").upper()
-        if pl_mon not in ("USD", "VES"):
-            pl_mon = "USD"
+        pl_id_str = str(o.lista_precios or "").strip()
+        pl_info = pricelists_map.get(pl_id_str, {})
+        pl_act = listas_activas_map.get(pl_id_str, {})
+        pl_nombre = str(
+            pl_info.get("name")
+            or pl_info.get("nombre")
+            or pl_act.get("nombre")
+            or pl_id_str
+            or "—"
+        )
+        pl_mon_raw = str(pl_info.get("moneda") or pl_act.get("moneda") or "").strip().upper()
+        ruta_ord = ruta_de_lista(
+            pl_id_str,
+            pricelists_map,
+            lista_nombre=pl_nombre,
+            moneda_lista=(pl_mon_raw if pl_mon_raw in ("USD", "VES") else ""),
+        )
+        pl_mon = (
+            pl_mon_raw
+            if pl_mon_raw in ("USD", "VES")
+            else ("USD" if ruta_ord == RUTA_BINANCE else "VES")
+        )
         oid_od = getattr(o, "odoo_order_id", None)
         ajs_od = ajustes_por_so.get(o.so_id, [])
         filas.append(
@@ -940,22 +977,10 @@ def listar_ventas_unificadas(
                 "telefono": "",
                 "direccion": "",
                 "moneda_lista": pl_mon,
-                "lista_precios_id": str(o.lista_precios or ""),
+                "lista_precios_id": pl_id_str,
                 "lista_precios_nombre": pl_nombre,
-                "ruta_pago": ruta_de_lista(
-                    o.lista_precios,
-                    pricelists_map,
-                    lista_nombre=pl_nombre,
-                    moneda_lista=pl_mon,
-                ),
-                "ruta_pago_label": etiqueta_ruta(
-                    ruta_de_lista(
-                        o.lista_precios,
-                        pricelists_map,
-                        lista_nombre=pl_nombre,
-                        moneda_lista=pl_mon,
-                    )
-                ),
+                "ruta_pago": ruta_ord,
+                "ruta_pago_label": etiqueta_ruta(ruta_ord),
                 "dias_credito": int(getattr(o, "dias_credito", 0) or 0),
                 "descuentos_especiales": [],
                 "vendedor_email": o.vendedor_email,
