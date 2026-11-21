@@ -43,6 +43,9 @@ router = APIRouter()
 PERMISOS_DIRECTORIO = (
     "contactos",
     "compras",
+    "pagos",
+    "cobranza",
+    "configuracion",
     "reportes",
     "capturas.ver",
     "capturas.gestionar",

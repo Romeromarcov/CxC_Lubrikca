@@ -15,7 +15,7 @@
         try {
             const [rDir, rCtas] = await Promise.all([
                 fetch("/api/config/diarios-generales"),
-                fetch("/api/directorio/cuentas?limit=300"),
+                fetch("/api/odoo/plan-cuentas"),
             ]);
             if (rDir.ok) {
                 const d = await rDir.json().catch(() => ({}));
@@ -28,7 +28,7 @@
             }
             if (rCtas.ok) {
                 const c = await rCtas.json().catch(() => ({}));
-                _ztCuentasOdoo = c.items || [];
+                _ztCuentasOdoo = c.cuentas || c.items || [];
                 const selCxp = document.getElementById("zt-cxp-override");
                 const selCxc = document.getElementById("zt-cxc-override");
                 const optsCxp = _ztCuentasOdoo

@@ -224,6 +224,10 @@ class ServicioContactos:
         por_odoo: dict[int, ContactoMaestro] = {
             c.odoo_partner_id: c for c in actuales if c.odoo_partner_id is not None
         }
+        por_rif_sin_odoo: dict[str, ContactoMaestro] = {}
+        for c in actuales:
+            if c.odoo_partner_id is None and len(c.rif_normalizado) >= 6:
+                por_rif_sin_odoo.setdefault(c.rif_normalizado, c)
         # Incluye inactivos duplicados/descartados por su odoo_partner_id para respetar unique key
         todos, _, _ = self.repo.listar(incluir_inactivos=True, limit=5000, offset=0)
         for c in todos:
@@ -246,6 +250,12 @@ class ServicioContactos:
             lat_o, lon_o, pc_o = _extraer_gps(d)
 
             existente = por_odoo.get(partner_id)
+            if existente is None:
+                rn_odoo = normalizar_rif_canonico(str(d.get("rif") or ""))
+                if len(rn_odoo) >= 6 and rn_odoo in por_rif_sin_odoo:
+                    existente = por_rif_sin_odoo.pop(rn_odoo)
+                    por_odoo[partner_id] = existente
+
             if existente is None:
                 c = ContactoMaestro(
                     contacto_id=None,
@@ -279,6 +289,8 @@ class ServicioContactos:
                 ):
                     continue
                 antes = (
+                    existente.odoo_partner_id,
+                    existente.estado_validacion,
                     existente.nombre,
                     existente.rif,
                     existente.telefono,
@@ -288,6 +300,9 @@ class ServicioContactos:
                     existente.vendedor_email,
                     existente.es_borrador_telegram,
                 )
+                if existente.odoo_partner_id is None:
+                    existente.odoo_partner_id = partner_id
+                    existente.estado_validacion = "ENVIADO_ODOO"
                 existente.nombre = str(d.get("nombre") or existente.nombre)
                 if d.get("rif"):
                     existente.rif = str(d["rif"])
@@ -308,10 +323,14 @@ class ServicioContactos:
                     existente.vendedor_email = str(d["vendedor"])
                 existente.rol = rol
                 existente.es_borrador_telegram = existente.es_borrador_telegram or es_bot
-                if existente.estado_validacion == "PENDIENTE" and not es_bot:
+                if existente.estado_validacion == "PENDIENTE" and (
+                    not es_bot or existente.odoo_partner_id is not None
+                ):
                     existente.estado_validacion = "ENVIADO_ODOO"
                 _recalcular_normalizados_y_completitud(existente)
                 despues = (
+                    existente.odoo_partner_id,
+                    existente.estado_validacion,
                     existente.nombre,
                     existente.rif,
                     existente.telefono,
@@ -589,6 +608,10 @@ class ServicioContactos:
             if pid is not None and existente.odoo_partner_id is None:
                 existente.odoo_partner_id = pid
                 existente.estado_validacion = "ENVIADO_ODOO"
+                existente = self.repo.actualizar(existente)
+                if not cambios:
+                    self._recalcular_alertas_duplicados()
+                    return self.repo.obtener(existente.contacto_id or 0) or existente
             return self.editar(
                 existente.contacto_id or 0,
                 cambios,

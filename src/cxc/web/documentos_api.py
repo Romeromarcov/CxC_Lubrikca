@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException
@@ -50,9 +52,11 @@ from cxc.documentos.sync_odoo import (
     orden_confirmada_en_odoo,
     sincronizar_documentos_desde_odoo,
 )
+from cxc.odoo.client import OdooReader, OdooXmlRpcReader
 from cxc.odoo.directorio import filtrar_contactos
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
 from cxc.permisos import tiene
+from cxc.sync.incremental import IncrementalSync
 from cxc.web.capturas_api import exigir_bot_key
 from cxc.web.directorio_api import LectorDep, _obtener_contactos
 
@@ -560,6 +564,58 @@ def _estado_unificado_odoo(estado_orden: str) -> str:
     return ENVIADO_ODOO
 
 
+def _crear_reader_ventas_odoo() -> OdooReader | None:
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+    if not (os.environ.get("ODOO_URL") and os.environ.get("ODOO_PASSWORD")):
+        return None
+    try:
+        cfg = AppConfig.from_env()
+    except KeyError:
+        return None
+    return OdooXmlRpcReader(cfg.odoo)
+
+
+def _refrescar_espejo_ventas_desde_odoo(
+    repo_cxc: Any, *, reader: OdooReader | None = None
+) -> dict[str, Any]:
+    """Consulta delta rápido de clientes/órdenes/líneas en Odoo para el espejo local."""
+    lector = reader if reader is not None else _crear_reader_ventas_odoo()
+    if lector is None:
+        return {"odoo_refrescado": False}
+    try:
+        ultimo = repo_cxc.get_last_sync() if hasattr(repo_cxc, "get_last_sync") else None
+        since = ultimo or (datetime.now() - timedelta(hours=48))
+        clientes = lector.changed_clientes(since)
+        ordenes = lector.changed_ordenes(since)
+        lineas = lector.changed_lineas(since)
+        repo_cxc.upsert_clientes(clientes)
+        repo_cxc.upsert_ordenes(ordenes)
+        repo_cxc.upsert_lineas(lineas)
+        IncrementalSync(repo_cxc, lector).reconciliar_lineas_borradas(ordenes, lineas)
+        return {
+            "odoo_refrescado": True,
+            "clientes_odoo": len(clientes),
+            "ordenes_odoo": len(ordenes),
+            "lineas_odoo": len(lineas),
+        }
+    except Exception as exc:
+        logger.warning("No se pudo refrescar delta de ventas desde Odoo: %s", exc)
+        return {"odoo_refrescado": False, "odoo_sync_error": str(exc)}
+
+
+def _invalidar_caches_ventas() -> None:
+    try:
+        from cxc.web import app as _app
+
+        _app._VENTAS_CACHE["data"] = None
+        _app._VENTAS_CACHE["timestamp"] = 0.0
+        _app._SALDOS_REALES_CACHE["data"] = None
+        _app._SALDOS_REALES_CACHE["timestamp"] = 0.0
+    except Exception:
+        pass
+
+
 def _sincronizar_desde_espejo_seguro(servicio: ServicioDocumentos, repo_cxc: Any) -> dict[str, int]:
     from cxc.web.app import get_pricelist_mapeo
 
@@ -585,8 +641,10 @@ def sincronizar_ventas_desde_odoo_api(
 ) -> dict[str, Any]:
     _usuario_doc(cxc_session, *PERMISOS_VER_DOCS)
     repo_cxc, _ = _repo_y_engine(servicio)
+    delta = _refrescar_espejo_ventas_desde_odoo(repo_cxc)
     res = _sincronizar_desde_espejo_seguro(servicio, repo_cxc)
-    return {"ok": True, **res}
+    _invalidar_caches_ventas()
+    return {"ok": True, **res, **delta}
 
 
 @router.get("/api/ventas/unificadas")
