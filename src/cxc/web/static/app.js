@@ -324,8 +324,11 @@ document.addEventListener("DOMContentLoaded", () => {
             btn.classList.toggle("active", btn.getAttribute("data-pagos-subpage") === target);
         });
         if (target === "recibidos") {
-            if (typeof loadCobranzaUnificado === "function") loadCobranzaUnificado();
-            if (typeof loadOperativosCobranza === "function") loadOperativosCobranza();
+            if (typeof window.loadPagosRecibidosUnificados === "function") {
+                window.loadPagosRecibidosUnificados();
+            } else if (typeof loadOperativosCobranza === "function") {
+                loadOperativosCobranza();
+            }
         } else if (target === "enviados") {
             if (typeof window.loadOperativosPagosEnviados === "function") window.loadOperativosPagosEnviados();
         } else if (target === "conciliacion") {
@@ -4625,31 +4628,58 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    // --- INVENTARIO (Fase D, agosto 2026) ---
+    // --- INVENTARIO (Fase D + Stock Libre free_qty) ---
     let _inventarioCatalogoData = [];
+    let _inventarioRefreshStock = false;
+
+    function _badgeStockLibreInv(qty, estadoStock) {
+        if (qty == null) return '<span class="cap-sub">—</span>';
+        const n = Number(qty);
+        if (!Number.isFinite(n)) return '<span class="cap-sub">—</span>';
+        const txt = Number.isInteger(n) ? String(n) : n.toFixed(1);
+        if (estadoStock === "agotado" || n <= 0) {
+            return `<span style="background:#fee2e2; color:#991b1b; padding:2px 8px; border-radius:99px; font-size:0.74rem; font-weight:700;">🔴 ${txt} (Agotado)</span>`;
+        }
+        if (estadoStock === "bajo" || n <= 5) {
+            return `<span style="background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:99px; font-size:0.74rem; font-weight:700;">🟡 ${txt} (Bajo)</span>`;
+        }
+        return `<span style="background:#dcfce7; color:#166534; padding:2px 8px; border-radius:99px; font-size:0.74rem; font-weight:700;">🟢 ${txt}</span>`;
+    }
+
+    function _coincideFiltroStockInv(p, filtroStock) {
+        if (!filtroStock || filtroStock === "*") return true;
+        const n = p.stock_disponible != null ? Number(p.stock_disponible) : null;
+        if (n == null || !Number.isFinite(n)) return false;
+        if (filtroStock === "agotado") return n <= 0;
+        if (filtroStock === "bajo") return n > 0 && n <= 5;
+        if (filtroStock === "disponible") return n > 5;
+        return true;
+    }
 
     function _renderInventarioCatalogo(filtro) {
         const body = document.getElementById("inventario-catalogo-table-body");
         if (!body) return;
         const f = (filtro || "").trim().toLowerCase();
-        const filas = f
-            ? _inventarioCatalogoData.filter(p =>
-                (p.codigo || "").toLowerCase().includes(f) || (p.nombre || "").toLowerCase().includes(f))
-            : _inventarioCatalogoData;
+        const stFiltro = (document.getElementById("inventario-stock-filter") || {}).value || "*";
+        const filas = _inventarioCatalogoData.filter((p) => {
+            const matchTxt = !f || (p.codigo || "").toLowerCase().includes(f) || (p.nombre || "").toLowerCase().includes(f);
+            return matchTxt && _coincideFiltroStockInv(p, stFiltro);
+        });
 
         if (filas.length === 0) {
-            body.innerHTML = '<tr><td colspan="7" class="table-empty">No hay productos que coincidan.</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" class="table-empty">No hay productos que coincidan.</td></tr>';
             return;
         }
         body.innerHTML = filas.map(p => `
             <tr>
-                <td><strong>${p.codigo || 'N/A'}</strong></td>
-                <td>${p.nombre}</td>
-                <td>${p.marca || '—'}</td>
-                <td>${p.presentacion || '—'}</td>
+                <td><strong>${_capEsc(p.codigo || 'N/A')}</strong></td>
+                <td>${_capEsc(p.nombre)}</td>
+                <td>${_capEsc(p.marca || '—')}</td>
+                <td>${_capEsc(p.presentacion || '—')}</td>
                 <td>${(p.litros || 0).toFixed(2)} L</td>
                 <td>${(p.peso || 0).toFixed(2)}</td>
                 <td>${p.unidades_por_paleta > 0 ? p.unidades_por_paleta : '—'}</td>
+                <td>${_badgeStockLibreInv(p.stock_disponible, p.estado_stock)}</td>
             </tr>
         `).join('');
     }
@@ -4664,17 +4694,18 @@ document.addEventListener("DOMContentLoaded", () => {
             panel.style.display = (panel.dataset.invSubtabPanel === name) ? "block" : "none";
         });
         if (!_inventarioComparativoCargado[name]) {
-            _loadInventarioComparativo(name);
+            _loadInventarioComparativo(name, _inventarioRefreshStock);
         }
     };
 
-    async function _loadInventarioComparativo(categoria) {
+    async function _loadInventarioComparativo(categoria, refreshStock = false) {
         const header = document.getElementById(`inventario-comparativo-${categoria}-header`);
         const body = document.getElementById(`inventario-comparativo-${categoria}-body`);
         if (!body) return;
         const fmt = (v) => v == null ? '—' : new Intl.NumberFormat('es-US', { style: 'currency', currency: 'USD' }).format(v);
         try {
-            const res = await fetch(`/api/inventario/comparativo?categoria=${categoria}`);
+            const qs = refreshStock ? "&refresh_stock=true" : "";
+            const res = await fetch(`/api/inventario/comparativo?categoria=${categoria}${qs}`);
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || 'Error al cargar');
 
@@ -4685,13 +4716,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 header.textContent = `Comparando: ${usdTxt} vs. ${vesTxt} -- precios con IVA (${(data.iva_rate * 100).toFixed(0)}%) incluido.`;
             }
             if (data.items.length === 0) {
-                body.innerHTML = '<tr><td colspan="4" class="table-empty">Sin productos con precio en las listas vigentes de esta categoría -- revisa el Mapeo de Listas en Configuración.</td></tr>';
+                body.innerHTML = '<tr><td colspan="5" class="table-empty">Sin productos con precio en las listas vigentes de esta categoría -- revisa el Mapeo de Listas en Configuración.</td></tr>';
                 return;
             }
             body.innerHTML = data.items.map(it => `
                 <tr>
-                    <td><strong>${it.codigo || 'N/A'}</strong></td>
-                    <td>${it.nombre}</td>
+                    <td><strong>${_capEsc(it.codigo || 'N/A')}</strong></td>
+                    <td>${_capEsc(it.nombre)}</td>
+                    <td>${_badgeStockLibreInv(it.stock_disponible, it.estado_stock)}</td>
                     <td>${fmt(it.precio_usd_con_iva)}</td>
                     <td>${fmt(it.precio_ves_con_iva)}</td>
                 </tr>
@@ -4699,28 +4731,28 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (err) {
             console.error(`Error cargando comparativo Inventario (${categoria}):`, err);
             if (header) header.textContent = 'Error al cargar.';
-            body.innerHTML = '<tr><td colspan="4" class="table-empty" style="color:#dc2626;">Error de red al cargar el comparativo.</td></tr>';
+            body.innerHTML = '<tr><td colspan="5" class="table-empty" style="color:#dc2626;">Error de red al cargar el comparativo.</td></tr>';
         }
     }
 
-    window.loadInventario = async function() {
+    window.loadInventario = async function(refreshStock = false) {
         const catalogoBody = document.getElementById("inventario-catalogo-table-body");
         if (!catalogoBody && !document.getElementById("inventario-comparativo-industrial-body")) return;
 
-        // Sub-pestaña activa (default "industrial") + catálogo se cargan en paralelo.
+        _inventarioRefreshStock = Boolean(refreshStock);
         _inventarioComparativoCargado.industrial = false;
         _inventarioComparativoCargado.comercial = false;
         const activeSubtab = document.querySelector(".subtab-btn[data-inv-subtab].active")?.dataset.invSubtab || "industrial";
-        _loadInventarioComparativo(activeSubtab);
+        _loadInventarioComparativo(activeSubtab, _inventarioRefreshStock);
 
         if (catalogoBody) {
             try {
-                const res = await fetch('/api/inventario/catalogo');
+                const res = await fetch(`/api/inventario/catalogo${_inventarioRefreshStock ? "?refresh_stock=true" : ""}`);
                 _inventarioCatalogoData = await res.json();
                 _renderInventarioCatalogo(document.getElementById("inventario-catalogo-search")?.value);
             } catch (err) {
                 console.error("Error cargando catálogo de Inventario:", err);
-                catalogoBody.innerHTML = '<tr><td colspan="7" class="table-empty">Error de red al cargar el catálogo.</td></tr>';
+                catalogoBody.innerHTML = '<tr><td colspan="8" class="table-empty">Error de red al cargar el catálogo.</td></tr>';
             }
         }
     };
@@ -4728,6 +4760,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const _inventarioSearchEl = document.getElementById("inventario-catalogo-search");
     if (_inventarioSearchEl) {
         _inventarioSearchEl.addEventListener("input", () => _renderInventarioCatalogo(_inventarioSearchEl.value));
+    }
+    const _inventarioStockEl = document.getElementById("inventario-stock-filter");
+    if (_inventarioStockEl) {
+        _inventarioStockEl.addEventListener("change", () => _renderInventarioCatalogo(document.getElementById("inventario-catalogo-search")?.value));
     }
 
     // --- PAGOS PENDIENTES POR ASOCIAR (fusiona sugerencias FIFO + vinculación manual) ---
@@ -4818,6 +4854,9 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     async function loadCobranzaUnificado() {
+        if (typeof window.loadPagosRecibidosUnificados === "function" && !document.getElementById("cobranza-table-body")) {
+            return window.loadPagosRecibidosUnificados();
+        }
         const tbody = document.getElementById("cobranza-table-body");
         const vSelect = document.getElementById("cobranza-vendedor-filter");
         if (!tbody) return;
@@ -4866,12 +4905,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function descargarCobranzaExcel() {
         const params = new URLSearchParams();
-        const selVend = (document.getElementById("cobranza-vendedor-filter") || {}).value || "*";
-        const selEstado = (document.getElementById("cobranza-estado-filter") || {}).value || "*";
-        const selMoneda = (document.getElementById("cobranza-moneda-filter") || {}).value || "*";
-        const soloDup = (document.getElementById("cobranza-solo-duplicados") || {}).checked;
-        const soloAlertas = (document.getElementById("cobranza-solo-alertas") || {}).checked;
-        const search = ((document.getElementById("cobranza-search") || {}).value || "").trim();
+        const selVend = (document.getElementById("op-cob-vendedor") || document.getElementById("cobranza-vendedor-filter") || {}).value || "*";
+        const appRaw = (document.getElementById("op-cob-aplicacion") || {}).value || "";
+        const appMap = { pendiente_vincular: "pendiente", vinculado_cxc: "vinculado_local", conciliado_odoo: "conciliado_odoo" };
+        const selEstado = appRaw ? (appMap[appRaw] || "*") : ((document.getElementById("cobranza-estado-filter") || {}).value || "*");
+        const selMoneda = (document.getElementById("op-cob-moneda") || document.getElementById("cobranza-moneda-filter") || {}).value || "*";
+        const soloDup = Boolean((document.getElementById("op-cob-solo-duplicados") || document.getElementById("cobranza-solo-duplicados") || {}).checked);
+        const soloAlertas = Boolean((document.getElementById("cobranza-solo-alertas") || {}).checked);
+        const search = ((document.getElementById("op-cob-buscar") || document.getElementById("cobranza-search") || {}).value || "").trim();
 
         if (selVend !== "*") params.set("vendedor", selVend);
         if (selEstado !== "*") params.set("estado", selEstado);
@@ -7899,9 +7940,20 @@ document.addEventListener("DOMContentLoaded", () => {
             const alertaSku = !(ln.producto_id && /^\d+$/.test(String(ln.producto_id)))
                 ? `<div style="color:#dc2626; font-size:0.74rem;">⚠️ Sin vincular al catálogo: busca arriba y reemplázala</div>`
                 : "";
+            let stockAviso = "";
+            if (ln.stock_disponible != null && Number.isFinite(Number(ln.stock_disponible))) {
+                const stDisp = Number(ln.stock_disponible);
+                if (stDisp <= 0) {
+                    stockAviso = `<div style="color:#b45309; font-size:0.74rem; font-weight:600;">ℹ️ Stock libre Odoo: 0 und (informativo, no bloquea el pedido)</div>`;
+                } else if (cant > stDisp) {
+                    stockAviso = `<div style="color:#b45309; font-size:0.74rem; font-weight:600;">⚠️ Stock libre: ${stDisp} und (pides ${cant}) · informativo</div>`;
+                } else {
+                    stockAviso = `<div style="color:#15803d; font-size:0.72rem;">🟢 Stock libre: ${stDisp} und</div>`;
+                }
+            }
             return `<tr>
                 <td><code>${_capEsc(ln.codigo || "—")}</code></td>
-                <td><strong>${_capEsc(ln.descripcion)}</strong>${alertaSku}</td>
+                <td><strong>${_capEsc(ln.descripcion)}</strong>${alertaSku}${stockAviso}</td>
                 <td>${_capEsc(ln.presentacion || "—")}</td>
                 <td><input type="number" min="0.01" step="any" value="${cant}" ${soloLectura ? "disabled" : ""} data-doc-ln="${i}" data-doc-campo="cantidad" style="width:82px; padding:4px 6px;"></td>
                 <td><input type="number" min="0" step="0.01" value="${precio.toFixed(2)}" ${soloLectura ? "disabled" : ""} data-doc-ln="${i}" data-doc-campo="precio_unitario" style="width:105px; padding:4px 6px;"></td>
@@ -8391,8 +8443,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 const mon = document.getElementById("doc-f-moneda").value;
                 const precio = Number(mon === "VES" ? p.precio_ves : p.precio_usd) || 0;
                 const existente = _docsLineasEdit.find((x) => String(x.producto_id) === String(p.producto_id));
+                const stockDispPick = p.stock_disponible != null ? Number(p.stock_disponible) : null;
                 if (existente) {
                     existente.cantidad = (Number(existente.cantidad) || 0) + 1;
+                    if (stockDispPick != null) existente.stock_disponible = stockDispPick;
                 } else {
                     _docsLineasEdit.push({
                         producto_id: String(p.producto_id),
@@ -8403,6 +8457,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         cantidad: 1,
                         precio_unitario: precio,
                         descuento_pct: 0,
+                        stock_disponible: stockDispPick,
                     });
                 }
                 inpProd.value = "";
@@ -8432,17 +8487,24 @@ document.addEventListener("DOMContentLoaded", () => {
     let _opValidTimer = null;
 
     function applyCobranzaSubpage(subpage) {
+        const target = (subpage === "odoo" || subpage === "aprobacion" || !subpage) ? "recibidos" : subpage;
         document.querySelectorAll("#tab-pagos [data-cobranza-panel], #tab-cobranza [data-cobranza-panel]").forEach((panel) => {
             panel.classList.toggle(
                 "config-subpage-hidden",
-                panel.getAttribute("data-cobranza-panel") !== subpage
+                panel.getAttribute("data-cobranza-panel") !== target
             );
         });
         document.querySelectorAll(".cobranza-subnav-btn").forEach((btn) => {
-            btn.classList.toggle("active", btn.getAttribute("data-cobranza-subpage") === subpage);
+            btn.classList.toggle("active", btn.getAttribute("data-cobranza-subpage") === target);
         });
-        if (subpage === "aprobacion") loadOperativosCobranza();
-        if (subpage === "lotes-efectivo" && typeof window.loadRecibosLoteEfectivo === "function") {
+        if (target === "recibidos") {
+            if (typeof window.loadPagosRecibidosUnificados === "function") {
+                window.loadPagosRecibidosUnificados();
+            } else {
+                loadOperativosCobranza();
+            }
+        }
+        if (target === "lotes-efectivo" && typeof window.loadRecibosLoteEfectivo === "function") {
             window.loadRecibosLoteEfectivo();
         }
     }
@@ -8962,11 +9024,17 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".cobranza-subnav-btn").forEach((btn) => {
             btn.addEventListener("click", () => applyCobranzaSubpage(btn.getAttribute("data-cobranza-subpage")));
         });
-        document.getElementById("op-cob-estado")?.addEventListener("change", () => loadOperativosCobranza());
+        document.getElementById("op-cob-estado")?.addEventListener("change", () => {
+            if (typeof window.loadPagosRecibidosUnificados === "function") window.loadPagosRecibidosUnificados(true);
+            else loadOperativosCobranza();
+        });
         let tCob = null;
         document.getElementById("op-cob-buscar")?.addEventListener("input", () => {
             clearTimeout(tCob);
-            tCob = setTimeout(() => loadOperativosCobranza(), 280);
+            tCob = setTimeout(() => {
+                if (typeof window.loadPagosRecibidosUnificados === "function") window.loadPagosRecibidosUnificados(true);
+                else loadOperativosCobranza();
+            }, 280);
         });
 
         document.getElementById("op-cmp-tipo")?.addEventListener("change", loadOperativosCompras);

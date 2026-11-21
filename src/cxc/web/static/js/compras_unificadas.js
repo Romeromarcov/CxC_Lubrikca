@@ -3,6 +3,7 @@
     "use strict";
 
     let _gastosConfigCache = null;
+    let _comprasCache = [];
 
     function _cxc() {
         return window.CxC || {};
@@ -117,13 +118,14 @@
             }
 
             const items = data.items || [];
+            _comprasCache = items;
             if (!items.length) {
                 tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay facturas de proveedor ni gastos con estos filtros.</td></tr>';
                 return;
             }
 
             const alertFn = typeof _cxc().alertasHtml === "function" ? _cxc().alertasHtml : () => "";
-            tbody.innerHTML = items.map((d) => {
+            tbody.innerHTML = items.map((d, idx) => {
                 const docRef = d.numero_documento || (d.sin_factura ? "S/N (Sin factura)" : (d.referencia || "—"));
                 const subRef = d.numero_control
                     ? `Ctrl: ${d.numero_control}`
@@ -134,9 +136,13 @@
                         ? `<div class="cap-sub">${_esc(d.cuenta_contable_codigo)} · ${_esc(d.cuenta_contable_nombre || "")}</div>`
                         : "");
 
+                const btnPagosCmp = d.estado !== "RECHAZADO"
+                    ? `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; background:#f0fdf4; color:#166534; border-color:#bbf7d0;" data-vinc-compra="${idx}">🔗 Pagos${d.vinculaciones_count ? " (" + d.vinculaciones_count + ")" : ""}</button>`
+                    : "";
+
                 let accionesHtml;
                 if (d.solo_lectura || d.origen_sistema === "odoo") {
-                    accionesHtml = `<span class="cap-sub">Solo lectura (Odoo)</span>` +
+                    accionesHtml = `${btnPagosCmp}<span class="cap-sub">Solo lectura (Odoo)</span>` +
                         (d.odoo_ref ? `<div class="cap-sub">${_esc(d.odoo_ref)}</div>` : "");
                 } else {
                     const btnPrev = d.preview_path
@@ -149,8 +155,12 @@
                     const btnRec = (d.puede_rechazar && puedeAprobar)
                         ? `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem; color:#991b1b;" onclick="rechazarOperativo(${d.id})">✖</button>`
                         : "";
-                    accionesHtml = `${btnPrev}${btnEdit}${btnApr}${btnRec}`;
+                    accionesHtml = `${btnPrev}${btnEdit}${btnPagosCmp}${btnApr}${btnRec}`;
                 }
+
+                const vincSub = Number(d.vinculaciones_count || 0) > 0
+                    ? `<div class="cap-sub" style="color:#0369a1; font-weight:600;">🔗 Pagos: $${_monto(d.monto_vinculado_usd || 0)} · Saldo: $${_monto(d.saldo_pendiente_vinc_usd || 0)}</div>`
+                    : "";
 
                 const trazColC = (typeof _cxc().trazabilidadHtml === "function")
                     ? _cxc().trazabilidadHtml(d)
@@ -162,7 +172,7 @@
                     <td>${_esc(d.fecha_documento || "—")}</td>
                     <td><strong>${_esc(d.contraparte_nombre || "Sin proveedor")}</strong><div class="cap-sub">${_esc(provSub)}</div></td>
                     <td><strong>${_esc(docRef)}</strong>${subRef ? `<div class="cap-sub">${_esc(subRef)}</div>` : ""}</td>
-                    <td><strong>${d.monto != null ? _monto(d.monto) : "—"} ${_esc(d.moneda)}</strong></td>
+                    <td><strong>${d.monto != null ? _monto(d.monto) : "—"} ${_esc(d.moneda)}</strong>${vincSub}</td>
                     <td>${diarioCta}</td>
                     <td>${_estadoBadge(d)}${alertFn(d)}</td>
                     <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${accionesHtml}</td>
@@ -628,6 +638,23 @@
                 await loadConfigGastosContabilidad();
             } catch (err) {
                 if (st) { st.style.color = "#dc2626"; st.textContent = `❌ ${err.message}`; }
+            }
+        });
+
+        document.getElementById("op-compras-table-body")?.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-vinc-compra]");
+            if (!btn) return;
+            const d = _comprasCache[Number(btn.getAttribute("data-vinc-compra"))];
+            const vApi = _cxc().vinculaciones;
+            if (d && vApi && typeof vApi.abrirCompra === "function") {
+                vApi.abrirCompra(
+                    {
+                        compraId: d.documento_id || (d.origen_sistema === "cxc" ? d.id : null),
+                        moveId: d.odoo_res_id || d.odoo_id || null,
+                        titulo: `🔗 Vincular Pagos a ${d.numero || d.numero_documento || "Compra/Gasto"}`,
+                    },
+                    loadComprasUnificadas,
+                );
             }
         });
     });

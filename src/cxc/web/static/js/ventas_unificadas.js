@@ -5,6 +5,7 @@
     let _pvPuedeEditar = false;
     let _pvOverrides = [];
     let _pvCargado = false;
+    let _ventasCache = [];
 
     function _esc(v) {
         if (window.CxC && typeof window.CxC.esc === "function") return window.CxC.esc(v);
@@ -101,11 +102,12 @@
     function _renderTablaUnificada(items, puedeAprobar) {
         const tbody = document.getElementById("docs-table-body");
         if (!tbody) return;
+        _ventasCache = items || [];
         if (!items.length) {
             tbody.innerHTML = `<tr><td colspan="10" class="table-empty">No hay cotizaciones ni pedidos con los filtros actuales.</td></tr>`;
             return;
         }
-        tbody.innerHTML = items.map((d) => {
+        tbody.innerHTML = items.map((d, idx) => {
             const esOdooNativo = d.origen_sistema === "odoo";
             const bloqueadoOdoo = Boolean(d.solo_lectura || d.confirmado_odoo || d.estado === "ENVIADO_ODOO");
             const origenBadge = esOdooNativo
@@ -159,6 +161,11 @@
                 ? `<div class="cap-sub">IVA: $${_monto(d.monto_iva)}</div>`
                 : "";
 
+            const esConfirmadoVinc = (d.estado === "ENVIADO_ODOO" || d.confirmado_odoo || esOdooNativo) && d.estado !== "RECHAZADO";
+            const btnPagosVinc = esConfirmadoVinc
+                ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem; background:#f0fdf4; color:#166534; border-color:#bbf7d0;" data-vinc-venta="${idx}">🔗 Pagos${d.vinculaciones_count ? " (" + d.vinculaciones_count + ")" : ""}</button>`
+                : "";
+
             let accionesHtml = "";
             if (esOdooNativo) {
                 const soRef = _esc(d.odoo_order_name || d.numero);
@@ -168,7 +175,7 @@
                 const btnAj = (d.puede_ajustar_descuentos && typeof window.abrirModalAjustesDescuentos === "function")
                     ? `<button type="button" class="btn-secondary" style="padding:0.32rem 0.6rem; font-size:0.78rem; background:#ede9fe; color:#5b21b6; border-color:#c4b5fd;" onclick="abrirModalAjustesDescuentos('${soRef}')">✏️ Ajustar Desc.</button>`
                     : "";
-                accionesHtml = `${btnVerSo}${btnAj}`;
+                accionesHtml = `${btnVerSo}${btnPagosVinc}${btnAj}`;
             } else {
                 const editable = !bloqueadoOdoo;
                 const btnPreview = d.preview_path
@@ -184,6 +191,7 @@
                 accionesHtml = `
                     ${btnPreview}
                     <button type="button" class="btn-secondary" style="padding:0.32rem 0.55rem; font-size:0.78rem;" onclick="editarDocumentoPorId(${d.id})">${editable ? "✏️ Editar" : "🔒 Ver"}</button>
+                    ${btnPagosVinc}
                     ${btnConv}
                     ${btnAprobar}
                 `;
@@ -200,6 +208,10 @@
                 ? `<div style="margin-top:2px;"><span class="state-badge" style="background:#ede9fe; color:#5b21b6; font-size:0.7rem;">✏️ Desc. Ajustado</span></div>`
                 : "";
 
+            const pagosVincSub = Number(d.vinculaciones_count || 0) > 0
+                ? `<div class="cap-sub" style="color:#0369a1; font-weight:600;">🔗 Pagos: $${_monto(d.monto_vinculado_usd || 0)} · Saldo: $${_monto(d.saldo_pendiente_vinc_usd || 0)}</div>`
+                : "";
+
             return `<tr>
                 <td>${trazColV}${syncChip}${ajBadgeV}</td>
                 <td>${badgeTipo}</td>
@@ -207,7 +219,7 @@
                 <td><strong>${_esc(d.lista_precios_nombre || d.moneda_lista || "—")}</strong></td>
                 <td>${lineasCell}</td>
                 <td><strong>$${_monto(d.subtotal || 0)}</strong>${descSub}</td>
-                <td><strong>$${_monto(d.total_con_iva || d.subtotal || 0)}</strong>${ivaSub}${avisoMotor}</td>
+                <td><strong>$${_monto(d.total_con_iva || d.subtotal || 0)}</strong>${ivaSub}${pagosVincSub}${avisoMotor}</td>
                 <td>${estadoHtml}${motivosHtml}${d.aprobado_por ? `<div class="cap-sub">Por: ${_esc(d.aprobado_por)}</div>` : ""}${d.error_odoo ? `<div class="cap-sub" style="color:#dc2626;">${_esc(d.error_odoo)}</div>` : ""}</td>
                 <td style="font-size:0.8rem;">${_fechaCorta(d.actualizado_en)}</td>
                 <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap; align-items:center;">${accionesHtml}</td>
@@ -423,6 +435,24 @@
                 }
             });
         }
+
+        document.getElementById("docs-table-body")?.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-vinc-venta]");
+            if (!btn) return;
+            const d = _ventasCache[Number(btn.getAttribute("data-vinc-venta"))];
+            const vApi = window.CxC && window.CxC.vinculaciones;
+            if (d && vApi && typeof vApi.abrirVenta === "function") {
+                const soId = d.odoo_order_name || (d.origen_sistema === "odoo" ? d.numero : null);
+                vApi.abrirVenta(
+                    {
+                        soId,
+                        docId: d.id || null,
+                        titulo: `🔗 Vincular Pagos Recibidos a ${soId || d.numero || "Orden"}`,
+                    },
+                    loadVentasUnificadas,
+                );
+            }
+        });
 
         if (!_pvCargado) {
             const card = document.getElementById("politica-ventas-card");

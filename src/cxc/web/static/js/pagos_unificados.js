@@ -3,6 +3,8 @@
     "use strict";
 
     let _recibidosCache = [];
+    let _pagosOffset = 0;
+    let _pagosLimit = 100;
 
     function _cxc() {
         return window.CxC || {};
@@ -220,14 +222,126 @@
         return btns.join("");
     }
 
-    async function loadPagosRecibidosUnificados() {
+    function aplicacionPagoHtml(d, idx) {
+        const docs = Array.isArray(d.documentos_vinculados) ? d.documentos_vinculados : [];
+        const docsHtml = docs.length
+            ? `<div style="display:flex; gap:3px; flex-wrap:wrap; margin-bottom:2px;">${docs.map((s) => `<span class="state-badge" style="background:#eff6ff; color:#1d4ed8; font-size:0.71rem;">${_esc(s)}</span>`).join("")}</div>`
+            : "";
+
+        let appBadge = '<span class="semaphore amarillo">🟡 Por vincular</span>';
+        if (d.estado_aplicacion === "conciliado_odoo") {
+            appBadge = '<span class="semaphore verde">🟣 Conciliado Odoo</span>';
+        } else if (d.estado_aplicacion === "vinculado_cxc") {
+            appBadge = '<span class="semaphore verde" style="background:#dbeafe; color:#1e40af;">🔗 Vinculado CxC</span>';
+        } else if (d.estado_aplicacion === "cerrado_empresa") {
+            appBadge = '<span class="semaphore amarillo" style="background:#fef3c7; color:#92400e;">💰 Cerrado empresa</span>';
+        }
+
+        const fifo = d.sugerencia_fifo;
+        const fifoHtml = fifo && fifo.so_id
+            ? `<div class="cap-sub" style="color:#15803d; font-weight:600;">⚡ FIFO: ${_esc(fifo.so_id)} (${_usd(fifo.saldo_pendiente_usd)})</div>`
+            : "";
+
+        const dispHtml = (d.monto_aplicado_usd > 0 && d.monto_disponible_original > 0.01)
+            ? `<div class="cap-sub">Disp: ${_monto(d.monto_disponible_original)} ${_esc(d.moneda || "USD")}</div>`
+            : "";
+
+        const puedeVinc = d.estado !== "RECHAZADO" && d.estado_aplicacion !== "cerrado_empresa";
+        const btnVinc = puedeVinc
+            ? `<div style="margin-top:3px;"><button type="button" class="btn-secondary" style="padding:2px 7px; font-size:0.74rem; background:${fifo ? "#dcfce7" : "#f8fafc"}; color:${fifo ? "#166534" : "#1e293b"};" data-vinc-pago-recibido="${idx}">🔗 ${docs.length ? "Gestionar" : "Vincular"}</button></div>`
+            : "";
+
+        return `${docsHtml}${appBadge}${dispHtml}${fifoHtml}${btnVinc}`;
+    }
+
+    function alertasPagosExtraHtml(d) {
+        let extra = "";
+        if (d.posible_duplicado) {
+            const lista = Array.isArray(d.duplicado_de) ? d.duplicado_de.join(", ") : "";
+            extra += `<div style="margin-top:3px;"><span class="semaphore rojo" style="font-size:0.71rem;" title="${_esc(lista)}">⚠️ Posible duplicado</span></div>`;
+        }
+        if (d.reasignado_por_odoo) {
+            const det = d.reasignado_detalle || d.reasignado_fecha || "Reasignado en Odoo";
+            extra += `<div style="margin-top:3px;"><span class="state-badge" style="background:#ede9fe; color:#5b21b6; font-size:0.71rem;" title="${_esc(det)}">🔄 Reasignado Odoo</span></div>`;
+        }
+        return extra;
+    }
+
+    function _renderCerradosEmpresa(cerrados) {
+        const tbody = document.getElementById("cobranza-cerrados-table-body");
+        const countBadge = document.getElementById("badge-cobranza-cerrados-count");
+        const lista = Array.isArray(cerrados) ? cerrados : [];
+        if (countBadge) countBadge.textContent = `${lista.length} Pagos`;
+        if (!tbody) return;
+        if (!lista.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay pagos cerrados a favor de la empresa.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = lista.map((item) => {
+            const pid = item.odoo_pago_id || item.pago_id || item.numero || "—";
+            const mon = String(item.moneda || "USD").toUpperCase();
+            const mTxt = mon === "VES" ? `Bs. ${_monto(item.monto)}` : _usd(item.monto);
+            const fCierre = String(item.cerrado_timestamp || "").slice(0, 19).replace("T", " ") || "—";
+            return `<tr>
+                <td><strong>${_esc(pid)}</strong>${odooLinkHtml(item)}</td>
+                <td>${_esc(item.contraparte_nombre || "—")}</td>
+                <td>${mTxt}</td>
+                <td>${_esc(item.cerrado_motivo || "—")}</td>
+                <td>${_esc(item.cerrado_por || "—")}</td>
+                <td>${_esc(fCierre)}</td>
+            </tr>`;
+        }).join("");
+    }
+
+    function _renderPagosPagination(total) {
+        const el = document.getElementById("op-pagos-pagination");
+        if (!el) return;
+        if (total <= 0) {
+            el.innerHTML = "";
+            return;
+        }
+        const totalPages = Math.max(1, Math.ceil(total / _pagosLimit));
+        const page = Math.min(totalPages, Math.floor(_pagosOffset / _pagosLimit) + 1);
+        const startIdx = _pagosOffset + 1;
+        const endIdx = Math.min(total, _pagosOffset + _pagosLimit);
+        el.innerHTML = `
+            <div>Mostrando <strong>${startIdx}–${endIdx}</strong> de <strong>${total}</strong> pago(s)</div>
+            <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                <label style="font-size:0.8rem;">Por página:
+                    <select id="op-pagos-page-size" class="filter-select" style="padding:3px 6px;">
+                        ${[50, 100, 250].map((n) => `<option value="${n}" ${n === _pagosLimit ? "selected" : ""}>${n}</option>`).join("")}
+                    </select>
+                </label>
+                <button type="button" class="btn-secondary" style="padding:3px 10px;" data-op-page="prev" ${page <= 1 ? "disabled" : ""}>← Ant</button>
+                <span>Pág. <strong>${page}</strong> / ${totalPages}</span>
+                <button type="button" class="btn-secondary" style="padding:3px 10px;" data-op-page="next" ${page >= totalPages ? "disabled" : ""}>Sig →</button>
+            </div>`;
+    }
+
+    async function loadPagosRecibidosUnificados(resetOffset = false) {
         const tbody = document.getElementById("op-pagos-table-body");
         if (!tbody) return;
+        if (resetOffset === true) _pagosOffset = 0;
+
         const origen = (document.getElementById("op-cob-origen") || {}).value || "todos";
         const estado = (document.getElementById("op-cob-estado") || {}).value || "";
+        const aplicacion = (document.getElementById("op-cob-aplicacion") || {}).value || "";
+        const vendedor = (document.getElementById("op-cob-vendedor") || {}).value || "*";
+        const moneda = (document.getElementById("op-cob-moneda") || {}).value || "*";
+        const soloDup = Boolean((document.getElementById("op-cob-solo-duplicados") || {}).checked);
         const q = ((document.getElementById("op-cob-buscar") || {}).value || "").trim();
-        const qs = new URLSearchParams({ direccion: "recibidos", origen, limit: "150" });
+
+        const qs = new URLSearchParams({
+            direccion: "recibidos",
+            origen,
+            limit: String(Math.min(_pagosLimit, 300)),
+            offset: String(_pagosOffset),
+        });
         if (estado) qs.set("estado", estado);
+        if (aplicacion) qs.set("aplicacion", aplicacion);
+        if (vendedor && vendedor !== "*") qs.set("vendedor", vendedor);
+        if (moneda && moneda !== "*") qs.set("moneda", moneda);
+        if (soloDup) qs.set("solo_duplicados", "true");
         if (q) qs.set("q", q);
 
         try {
@@ -240,16 +354,31 @@
             if (typeof _cxc().setPuedeAprobarPagos === "function") {
                 _cxc().setPuedeAprobarPagos(puedeAprobar);
             }
+
+            const vSelect = document.getElementById("op-cob-vendedor");
+            if (vSelect && Array.isArray(data.vendedores_disponibles)) {
+                const prevV = vSelect.value || "*";
+                vSelect.innerHTML = '<option value="*">🧑‍💼 Todos los vendedores</option>' +
+                    data.vendedores_disponibles.map((v) => `<option value="${_esc(v)}">${_esc(v)}</option>`).join("");
+                if (prevV !== "*" && data.vendedores_disponibles.includes(prevV)) {
+                    vSelect.value = prevV;
+                } else if (prevV !== "*" && prevV) {
+                    vSelect.value = "*";
+                }
+            }
+
             const r = data.resumen || {};
             const badge = document.getElementById("badge-op-pagos-pend");
             if (badge) badge.textContent = String((r.pendientes_aprobacion || 0) + (r.confirmados_cxc || 0));
 
             for (const [idEl, val] of [
+                ["op-cob-n-TOTAL", r.total || 0],
                 ["op-cob-n-PENDIENTE_APROBACION", r.pendientes_aprobacion || 0],
                 ["op-cob-n-CONFIRMADO_CXC", r.confirmados_cxc || 0],
-                ["op-cob-n-INCOMPLETO", r.incompletos || 0],
+                ["op-cob-n-POR_VINCULAR", r.pendientes_vincular || 0],
                 ["op-cob-n-ENVIADO_ODOO", (r.enviados_odoo || 0) + (r.confirmados_odoo || 0)],
                 ["op-cob-n-ZELLE_TERCERO", r.zelle_terceros || 0],
+                ["op-cob-n-DUPLICADOS", r.duplicados || 0],
                 ["op-cob-n-RECHAZADO", r.rechazados || 0],
             ]) {
                 const el = document.getElementById(idEl);
@@ -258,13 +387,19 @@
 
             const resEl = document.getElementById("op-cob-resumen");
             if (resEl) {
-                resEl.textContent = `${data.total || 0} pago(s) mostrado(s) · Origen: ${r.origen_cxc || 0} CxC · ${r.origen_odoo || 0} Odoo · ${r.zelle_terceros || 0} Zelle 3ros`;
+                resEl.textContent =
+                    `${data.total || 0} pago(s) encontrado(s) · Origen: ${r.origen_cxc || 0} CxC · ` +
+                    `${r.origen_odoo || 0} Odoo · ${r.zelle_terceros || 0} Zelle 3ros · ` +
+                    `${r.pendientes_vincular || 0} por vincular`;
             }
+
+            _renderCerradosEmpresa(data.cerrados_empresa || []);
+            _renderPagosPagination(Number(data.total || 0));
 
             const items = data.items || [];
             _recibidosCache = items;
             if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="9" class="table-empty">No hay pagos recibidos con estos filtros.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" class="table-empty">No hay pagos recibidos con estos filtros.</td></tr>';
                 return;
             }
 
@@ -291,12 +426,13 @@
                     <td><strong>${montoOrig}</strong></td>
                     <td>${equivalentesHtml(d)}</td>
                     <td>${diarioTxt}<div class="cap-sub">${refTxt}${d.metodo_pago ? " · " + _esc(d.metodo_pago) : ""}</div></td>
-                    <td>${estadoBadgeUnificado(d)}${alertasHtml(d)}</td>
+                    <td>${aplicacionPagoHtml(d, idx)}</td>
+                    <td>${estadoBadgeUnificado(d)}${alertasHtml(d)}${alertasPagosExtraHtml(d)}</td>
                     <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${accionesHtml(d, puedeAprobar, puedeRecibo, idx, "recibidos")}</td>
                 </tr>`;
             }).join("");
         } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="9" class="table-empty">❌ ${_esc(err.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="table-empty">❌ ${_esc(err.message)}</td></tr>`;
         }
     }
 
@@ -418,7 +554,23 @@
     window.abrirModalNuevoZelleTercero = abrirModalNuevoZelleTercero;
 
     document.addEventListener("DOMContentLoaded", () => {
-        document.getElementById("op-cob-origen")?.addEventListener("change", loadPagosRecibidosUnificados);
+        for (const idSel of ["op-cob-origen", "op-cob-aplicacion", "op-cob-vendedor", "op-cob-moneda", "op-cob-solo-duplicados"]) {
+            document.getElementById(idSel)?.addEventListener("change", () => loadPagosRecibidosUnificados(true));
+        }
+        document.getElementById("op-pagos-pagination")?.addEventListener("change", (e) => {
+            if (e.target && e.target.id === "op-pagos-page-size") {
+                _pagosLimit = Math.min(300, Math.max(25, Number(e.target.value) || 100));
+                loadPagosRecibidosUnificados(true);
+            }
+        });
+        document.getElementById("op-pagos-pagination")?.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-op-page]");
+            if (!btn || btn.disabled) return;
+            const dir = btn.getAttribute("data-op-page");
+            if (dir === "prev") _pagosOffset = Math.max(0, _pagosOffset - _pagosLimit);
+            if (dir === "next") _pagosOffset += _pagosLimit;
+            loadPagosRecibidosUnificados(false);
+        });
         document.getElementById("op-f-es-zelle-tercero")?.addEventListener("change", () => {
             const chk = document.getElementById("op-f-es-zelle-tercero");
             if (chk && chk.checked) {
@@ -454,18 +606,50 @@
             k.addEventListener("click", () => {
                 const estSel = document.getElementById("op-cob-estado");
                 const oriSel = document.getElementById("op-cob-origen");
+                const appSel = document.getElementById("op-cob-aplicacion");
+                const dupChk = document.getElementById("op-cob-solo-duplicados");
                 if (k.dataset.opOrigen && oriSel) {
                     oriSel.value = k.dataset.opOrigen;
                     if (estSel) estSel.value = "";
+                    if (appSel) appSel.value = "";
+                    if (dupChk) dupChk.checked = false;
+                } else if (k.dataset.opAplicacion && appSel) {
+                    appSel.value = k.dataset.opAplicacion;
+                    if (estSel) estSel.value = "";
+                    if (dupChk) dupChk.checked = false;
+                } else if (k.dataset.opDuplicado && dupChk) {
+                    dupChk.checked = true;
+                    if (estSel) estSel.value = "";
+                    if (appSel) appSel.value = "";
                 } else if (estSel) {
                     estSel.value = k.dataset.opEstado || "";
                     if (oriSel && oriSel.value === "zelle_tercero") oriSel.value = "todos";
+                    if (appSel && k.dataset.opEstado === "") appSel.value = "";
+                    if (dupChk && k.dataset.opEstado === "") dupChk.checked = false;
                 }
-                loadPagosRecibidosUnificados();
+                loadPagosRecibidosUnificados(true);
             });
         });
 
         document.getElementById("op-pagos-table-body")?.addEventListener("click", (e) => {
+            const btnVinc = e.target.closest("[data-vinc-pago-recibido]");
+            if (btnVinc) {
+                const d = _recibidosCache[Number(btnVinc.getAttribute("data-vinc-pago-recibido"))];
+                const vApi = _cxc().vinculaciones;
+                if (d && vApi && typeof vApi.abrirDesdePagoRecibido === "function") {
+                    const pagoId = d.odoo_pago_id || d.pago_id || null;
+                    const pagoOpId = d.documento_id || (d.origen_sistema === "cxc" ? d.id : null);
+                    vApi.abrirDesdePagoRecibido(
+                        {
+                            pagoId,
+                            pagoOpId,
+                            titulo: `🔗 Vincular Pago ${d.numero || pagoId || ""} a Pedidos (FIFO)`,
+                        },
+                        () => loadPagosRecibidosUnificados(false),
+                    );
+                }
+                return;
+            }
             const btn = e.target.closest("[data-unif-detalle][data-unif-dir='recibidos']");
             if (!btn) return;
             const d = _recibidosCache[Number(btn.getAttribute("data-unif-detalle"))];

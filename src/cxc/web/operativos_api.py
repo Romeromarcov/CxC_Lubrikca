@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -20,6 +21,8 @@ from cxc.capturas.modelos import es_efectivo as op_es_efectivo
 from cxc.capturas.repositorio import RepoCapturasSQL
 from cxc.config import AppConfig
 from cxc.engine.equivalents import equivalente_usd_a_tasa
+from cxc.engine.pagos_duplicados import detectar_pagos_duplicados
+from cxc.engine.reasignaciones import pago_reasignado_mas_reciente
 from cxc.odoo.directorio import ContactoOdoo, CuentaContable
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
 from cxc.operativos.contabilidad_gastos import (
@@ -61,6 +64,17 @@ from cxc.operativos.preview_html import (
 from cxc.operativos.repositorio import RepoLotesCajaChicaSQL, RepoOperativosSQL
 from cxc.operativos.servicio import ServicioOperativos
 from cxc.operativos.terceros import RepoCuentasTerceros, RepoCuentasTercerosSQL
+from cxc.operativos.vinculaciones_docs import (
+    VinculacionInvalida,
+    VinculacionNoEncontrada,
+    candidatos_compras_para_pago,
+    candidatos_pagos_para_compra,
+    candidatos_ventas_para_pago,
+    desvincular_pago_compra,
+    mapa_vinculaciones_compras,
+    mapa_vinculaciones_ventas,
+    vincular_pago_compra,
+)
 from cxc.permisos import tiene
 from cxc.rates import Tasas
 from cxc.web.capturas_api import _diarios_env, exigir_bot_key
@@ -931,6 +945,224 @@ def _odoo_enviado_a_item(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _enriquecer_aplicaciones_recibidos(
+    todos: list[dict[str, Any]],
+    repo_cxc: Any,
+    engine: Any,
+) -> dict[str, int]:
+    """Agrega vinculaciones, estado de aplicación, FIFO, duplicados y reasignaciones."""
+    try:
+        mapa_v = mapa_vinculaciones_ventas(engine, repo_cxc)
+    except Exception:
+        mapa_v = {"por_pago_id": {}, "por_pago_op_id": {}, "por_so_id": {}}
+
+    # Duplicados en todo el universo por (cliente, monto, moneda, método/diario, fecha)
+    dup_inputs: list[dict[str, Any]] = []
+    claves_item: list[str] = []
+    for idx, it in enumerate(todos):
+        pid_k = str(
+            it.get("odoo_pago_id") or it.get("pago_id") or f"op-{it.get('id') or idx}"
+        ).strip()
+        claves_item.append(pid_k)
+        dup_inputs.append(
+            {
+                "pago_id": pid_k,
+                "cliente_id": str(it.get("partner_odoo_id") or ""),
+                "monto": it.get("monto") or 0,
+                "moneda": it.get("moneda") or "",
+                "metodo_pago": it.get("diario_nombre") or it.get("metodo_pago") or "",
+                "fecha_pago": str(it.get("fecha_documento") or "")[:10],
+            }
+        )
+    try:
+        dups_map = detectar_pagos_duplicados(dup_inputs)
+    except Exception:
+        dups_map = {}
+
+    try:
+        reasig_map = pago_reasignado_mas_reciente(repo_cxc.all_auditoria())
+    except Exception:
+        reasig_map = {}
+
+    cerrados_map: dict[str, dict[str, str]] = {}
+    try:
+        cerrados_rows = repo_cxc.all_pagos_huerfanos_cerrados()
+        for r in cerrados_rows or []:
+            es_dict = isinstance(r, dict)
+            pid_c = str(r.get("pago_id") if es_dict else getattr(r, "pago_id", "")).strip()
+            if pid_c:
+                cerrados_map[pid_c] = {
+                    "motivo": str(r.get("motivo") if es_dict else getattr(r, "motivo", "") or ""),
+                    "cerrado_por": str(
+                        r.get("cerrado_por") if es_dict else getattr(r, "cerrado_por", "") or ""
+                    ),
+                    "timestamp_cierre": str(
+                        r.get("timestamp_cierre")
+                        if es_dict
+                        else getattr(r, "timestamp_cierre", "") or ""
+                    ),
+                }
+    except Exception:
+        pass
+
+    # Órdenes abiertas por cliente para sugerencia FIFO O(1) (sin llamadas a Odoo)
+    ordenes_abiertas_cli: dict[str, list[tuple[str, str, float, str | None]]] = {}
+    por_so = mapa_v.get("por_so_id", {})
+    try:
+        for o in repo_cxc.all_ordenes():
+            if str(getattr(o, "estado_orden", "") or "").lower() not in ("sale", "done"):
+                continue
+            vincs_so = por_so.get(o.so_id, [])
+            vinc_u = sum(float(v.get("equiv_usd_bcv") or 0) for v in vincs_so)
+            sal = max(0.0, round(float(o.monto_total or 0) - vinc_u, 2))
+            if sal <= 0.01:
+                continue
+            cid = str(o.cliente_id or "").strip()
+            if cid:
+                ordenes_abiertas_cli.setdefault(cid, []).append(
+                    (o.fecha.isoformat(), o.so_id, sal, getattr(o, "factura_id", None))
+                )
+        for lst in ordenes_abiertas_cli.values():
+            lst.sort(key=lambda x: (x[0], x[1]))
+    except Exception:
+        ordenes_abiertas_cli = {}
+
+    pend_vinc = 0
+    vinc_cxc = 0
+    conc_odoo_app = 0
+    dups_cnt = 0
+    cerrados_cnt = 0
+
+    for idx, it in enumerate(todos):
+        pid_k = claves_item[idx]
+        pid_od = str(it.get("odoo_pago_id") or it.get("pago_id") or "").strip()
+        doc_id = it.get("documento_id") or it.get("id")
+
+        vincs: list[dict[str, Any]] = []
+        vistos_v: set[tuple[Any, Any]] = set()
+        for v in (
+            *(mapa_v["por_pago_id"].get(pid_od, []) if pid_od else ()),
+            *(mapa_v["por_pago_op_id"].get(int(doc_id), []) if doc_id else ()),
+        ):
+            vk = (v.get("origen_registro"), v.get("vinc_id"))
+            if vk not in vistos_v:
+                vistos_v.add(vk)
+                vincs.append(v)
+
+        monto_orig = float(it.get("monto") or 0)
+        usado_orig = round(sum(float(v.get("monto_aplicado") or 0) for v in vincs), 2)
+        disp_orig = max(0.0, round(monto_orig - usado_orig, 2))
+        ap_usd = round(sum(float(v.get("equiv_usd_bcv") or 0) for v in vincs), 2)
+
+        if pid_od and pid_od in cerrados_map:
+            est_app = "cerrado_empresa"
+            cerrados_cnt += 1
+            c_info = cerrados_map[pid_od]
+            it["cerrado_motivo"] = c_info.get("motivo") or ""
+            it["cerrado_por"] = c_info.get("cerrado_por") or ""
+            it["cerrado_timestamp"] = c_info.get("timestamp_cierre") or ""
+        elif vincs and any(v.get("conciliado_odoo") for v in vincs):
+            est_app = "conciliado_odoo"
+            conc_odoo_app += 1
+        elif vincs:
+            est_app = "vinculado_cxc"
+            vinc_cxc += 1
+        else:
+            est_app = "pendiente_vincular"
+            if it.get("estado") != RECHAZADO:
+                pend_vinc += 1
+
+        sug_fifo = None
+        cid_cli = str(it.get("partner_odoo_id") or "").strip()
+        if (
+            est_app == "pendiente_vincular"
+            and it.get("estado") != RECHAZADO
+            and cid_cli in ordenes_abiertas_cli
+        ):
+            f_ord, so_sug, sal_sug, fac_sug = ordenes_abiertas_cli[cid_cli][0]
+            sug_fifo = {
+                "so_id": so_sug,
+                "fecha": f_ord,
+                "saldo_pendiente_usd": sal_sug,
+                "factura_id": fac_sug,
+            }
+
+        dups = dups_map.get(pid_k) or []
+        if dups:
+            dups_cnt += 1
+        reasig = reasig_map.get(pid_od) if pid_od else None
+
+        it["vinculaciones"] = vincs
+        it["documentos_vinculados"] = list(
+            dict.fromkeys(str(v["so_id"]) for v in vincs if v.get("so_id"))
+        )
+        it["monto_aplicado_usd"] = ap_usd
+        it["monto_disponible_original"] = disp_orig
+        it["estado_aplicacion"] = est_app
+        it["sugerencia_fifo"] = sug_fifo
+        it["posible_duplicado"] = bool(dups)
+        it["duplicado_de"] = dups
+        it["reasignado_por_odoo"] = reasig is not None
+        it["reasignado_detalle"] = reasig.get("detalle_odoo") if reasig else None
+        it["reasignado_fecha"] = str(reasig.get("timestamp_audit") or "")[:10] if reasig else None
+
+    return {
+        "pendientes_vincular": pend_vinc,
+        "vinculados_cxc": vinc_cxc,
+        "conciliados_odoo_app": conc_odoo_app,
+        "duplicados": dups_cnt,
+        "cerrados_empresa": cerrados_cnt,
+    }
+
+
+def _enriquecer_aplicaciones_enviados(todos: list[dict[str, Any]], engine: Any) -> dict[str, int]:
+    """Agrega vinculaciones de compras/gastos sobre pagos enviados."""
+    try:
+        mapa_c = mapa_vinculaciones_compras(engine)
+    except Exception:
+        mapa_c = {"por_pago_op_id": {}, "por_pago_odoo_id": {}}
+
+    vinc_cxc = 0
+    conc_odoo = 0
+    for it in todos:
+        pid_od = str(it.get("odoo_pago_id") or it.get("pago_id") or "").strip()
+        doc_id = it.get("documento_id") or it.get("id")
+        vincs: list[dict[str, Any]] = []
+        vistos: set[Any] = set()
+        for v in (
+            *(mapa_c["por_pago_odoo_id"].get(pid_od, []) if pid_od else ()),
+            *(mapa_c["por_pago_op_id"].get(int(doc_id), []) if doc_id else ()),
+        ):
+            if v["vinc_id"] not in vistos:
+                vistos.add(v["vinc_id"])
+                vincs.append(v)
+
+        monto_orig = float(it.get("monto") or 0)
+        usado_orig = round(sum(float(v.get("monto_aplicado") or 0) for v in vincs), 2)
+        disp_orig = max(0.0, round(monto_orig - usado_orig, 2))
+        ap_usd = round(sum(float(v.get("equiv_usd_bcv") or 0) for v in vincs), 2)
+        if vincs and any(v.get("conciliado_odoo") for v in vincs):
+            est_app = "conciliado_odoo"
+            conc_odoo += 1
+        elif vincs:
+            est_app = "vinculado_cxc"
+            vinc_cxc += 1
+        else:
+            est_app = "pendiente_vincular"
+
+        it["vinculaciones"] = vincs
+        it["documentos_vinculados"] = list(
+            dict.fromkeys(str(v["compra_ref"]) for v in vincs if v.get("compra_ref"))
+        )
+        it["monto_aplicado_usd"] = ap_usd
+        it["monto_disponible_original"] = disp_orig
+        it["estado_aplicacion"] = est_app
+    return {
+        "vinculados_cxc": vinc_cxc,
+        "conciliados_odoo_app": conc_odoo,
+    }
+
+
 def _construir_items_pagos_unificados(
     servicio: ServicioOperativos,
     repo_terceros: RepoCuentasTerceros,
@@ -1032,6 +1264,11 @@ def _construir_items_pagos_unificados(
         )
 
     todos = items_cxc + items_odoo
+    if direccion == "recibidos":
+        app_stats = _enriquecer_aplicaciones_recibidos(todos, repo_cxc, engine)
+    else:
+        app_stats = _enriquecer_aplicaciones_enviados(todos, engine)
+
     resumen = {
         "total": len(todos),
         "origen_cxc": len(items_cxc),
@@ -1048,6 +1285,7 @@ def _construir_items_pagos_unificados(
         "pendientes_efectivo": sum(
             1 for x in todos if x.get("estado_confirmacion_pago") == "PENDIENTE_EFECTIVO"
         ),
+        **app_stats,
     }
     return items_cxc, items_odoo, resumen, repo_cxc, engine
 
@@ -1059,8 +1297,12 @@ def listar_pagos_unificados(
     direccion: str = "recibidos",
     origen: str = "todos",
     estado: str | None = None,
+    aplicacion: str | None = None,
+    vendedor: str | None = None,
+    moneda: str | None = None,
+    solo_duplicados: bool = False,
     q: str | None = None,
-    limit: int = 150,
+    limit: int = 100,
     offset: int = 0,
     cxc_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
@@ -1079,7 +1321,44 @@ def listar_pagos_unificados(
     )
     todos = items_cxc + items_odoo
 
+    # Regla de alcance para rol vendedor comercial en recibidos
+    if direccion == "recibidos" and user.get("rol") == "ventas":
+        u_email = str(user.get("email") or "").strip().lower()
+        u_nom = str(user.get("nombre") or "").strip().lower()
+        todos = [
+            x
+            for x in todos
+            if any(
+                (u_email and u_email in str(x.get(c) or "").lower())
+                or (u_nom and u_nom in str(x.get(c) or "").lower())
+                for c in ("vendedor", "vendedor_nombre", "registrado_por", "registrado_por_nombre")
+            )
+        ]
+
+    vendedores_disponibles = sorted(
+        {
+            v_nom
+            for x in todos
+            if (
+                v_nom := str(
+                    x.get("vendedor_nombre")
+                    or x.get("vendedor")
+                    or x.get("registrado_por_nombre")
+                    or ""
+                ).strip()
+            )
+        }
+    )
+
+    cerrados_items = (
+        [x for x in todos if x.get("estado_aplicacion") == "cerrado_empresa"]
+        if direccion == "recibidos"
+        else []
+    )
     filtrados = todos
+    if direccion == "recibidos" and not aplicacion:
+        filtrados = [x for x in filtrados if x.get("estado_aplicacion") != "cerrado_empresa"]
+
     if origen == "cxc":
         filtrados = [x for x in filtrados if x.get("origen_sistema") == "cxc"]
     elif origen == "odoo":
@@ -1089,6 +1368,28 @@ def listar_pagos_unificados(
 
     if estado:
         filtrados = [x for x in filtrados if x.get("estado") == estado]
+
+    if aplicacion:
+        filtrados = [x for x in filtrados if x.get("estado_aplicacion") == aplicacion]
+
+    if vendedor and vendedor.strip() and vendedor.strip() != "*":
+        vn = vendedor.strip().lower()
+        filtrados = [
+            x
+            for x in filtrados
+            if vn
+            in (
+                f"{x.get('vendedor_nombre', '')} {x.get('vendedor', '')} "
+                f"{x.get('registrado_por_nombre', '')}"
+            ).lower()
+        ]
+
+    if moneda and moneda.strip() and moneda.strip() != "*":
+        mn = moneda.strip().upper()
+        filtrados = [x for x in filtrados if str(x.get("moneda") or "").upper() == mn]
+
+    if solo_duplicados:
+        filtrados = [x for x in filtrados if x.get("posible_duplicado")]
 
     if q and q.strip():
         qn = q.strip().lower()
@@ -1114,6 +1415,7 @@ def listar_pagos_unificados(
                     "cuenta_tercero_alias",
                 )
             )
+            or any(qn in str(s).lower() for s in (x.get("documentos_vinculados") or []))
         ]
 
     filtrados.sort(
@@ -1134,6 +1436,8 @@ def listar_pagos_unificados(
         "puede_recibo": tiene(user, "cobranza.recibo") or tiene(user, PERMISO_APROBAR_PAGOS),
         "escritura_odoo_activa": EscrituraConfig.from_env() is not None,
         "resumen": resumen,
+        "vendedores_disponibles": vendedores_disponibles,
+        "cerrados_empresa": cerrados_items,
         "total": len(filtrados),
         "items": pagina,
     }
@@ -1276,6 +1580,47 @@ def listar_compras_unificadas(
         items_odoo.append(_odoo_compra_gasto_a_item(r))
 
     todos = items_cxc + items_odoo
+    engine_cmp = getattr(servicio._repo, "_engine", None) or getattr(repo_cxc, "_engine", None)
+    try:
+        mapa_c = mapa_vinculaciones_compras(engine_cmp)
+    except Exception:
+        mapa_c = {"por_compra_op_id": {}, "por_compra_move_id": {}}
+    tasas_cmp = _tasas_para_pagos(repo_cxc)
+    for it in todos:
+        cid_op = it.get("documento_id") or it.get("id")
+        mid_od = str(it.get("odoo_res_id") or it.get("odoo_id") or "").strip()
+        vincs: list[dict[str, Any]] = []
+        vistos_v: set[Any] = set()
+        for v in (
+            *(mapa_c["por_compra_op_id"].get(int(cid_op), []) if cid_op else ()),
+            *(mapa_c["por_compra_move_id"].get(mid_od, []) if mid_od else ()),
+        ):
+            if v["vinc_id"] not in vistos_v:
+                vistos_v.add(v["vinc_id"])
+                vincs.append(v)
+        eq_cmp = _equivalentes_pago(
+            it.get("monto"),
+            it.get("moneda"),
+            it.get("fecha_documento") or it.get("creado_en"),
+            tasas_cmp,
+        )
+        tot_usd = float(eq_cmp.get("monto_bcv_usd") or it.get("monto") or 0)
+        vinc_usd = round(sum(float(v.get("equiv_usd_bcv") or 0) for v in vincs), 2)
+        it["vinculaciones_count"] = len(vincs)
+        it["monto_vinculado_usd"] = vinc_usd
+        it["saldo_pendiente_vinc_usd"] = max(0.0, round(tot_usd - vinc_usd, 2))
+        it["pagos_vinculados"] = [
+            {
+                "vinc_id": v.get("vinc_id"),
+                "pago_ref": v.get("pago_ref"),
+                "monto_aplicado": v.get("monto_aplicado"),
+                "moneda": v.get("moneda"),
+                "equiv_usd_bcv": v.get("equiv_usd_bcv"),
+                "conciliado_odoo": bool(v.get("conciliado_odoo")),
+            }
+            for v in vincs[:6]
+        ]
+
     resumen = {
         "total": len(todos),
         "origen_cxc": len(items_cxc),
@@ -1769,3 +2114,148 @@ def ver_recibo_lote_efectivo(
     if lote is None:
         raise HTTPException(status_code=404, detail="Recibo por lote no encontrado.")
     return HTMLResponse(content=render_recibo_lote_html(lote))
+
+
+# ── Vinculación bidireccional Pagos ↔ Ventas y Compras/Gastos ─────────────────
+
+
+class VincularCompraIn(BaseModel):
+    compra_operativo_id: int | None = None
+    compra_odoo_move_id: str | None = None
+    pago_operativo_id: int | None = None
+    pago_odoo_id: str | None = None
+    monto_aplicado: float | str | None = None
+    origen_vinculacion: str = "manual"
+
+
+def _escritor_vinc_op() -> EscritorOdoo | None:
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+    try:
+        return _fabrica_escritor_op()
+    except Exception:
+        return None
+
+
+@router.get("/api/pagos/vinculaciones/ordenes-candidatas")
+def listar_ordenes_candidatas_para_pago(
+    servicio: ServicioOpDep,
+    pago_id: str | None = None,
+    pago_operativo_id: int | None = None,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    engine = getattr(servicio._repo, "_engine", None) or getattr(repo_cxc, "_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Base de datos SQL no disponible.")
+    try:
+        res = candidatos_ventas_para_pago(
+            engine, repo_cxc, pago_id=pago_id, pago_operativo_id=pago_operativo_id
+        )
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "escritura_odoo_activa": EscrituraConfig.from_env() is not None,
+        **res,
+    }
+
+
+@router.get("/api/compras/vinculaciones/candidatos")
+def listar_candidatos_vinculacion_compra(
+    servicio: ServicioOpDep,
+    compra_operativo_id: int | None = None,
+    compra_odoo_move_id: str | None = None,
+    pago_operativo_id: int | None = None,
+    pago_odoo_id: str | None = None,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    from cxc.web.app import get_repo
+
+    _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    engine = getattr(servicio._repo, "_engine", None) or getattr(repo_cxc, "_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Base de datos SQL no disponible.")
+    try:
+        if compra_operativo_id is not None or compra_odoo_move_id:
+            res = candidatos_pagos_para_compra(
+                engine,
+                repo_cxc,
+                compra_operativo_id=compra_operativo_id,
+                compra_odoo_move_id=compra_odoo_move_id,
+            )
+        elif pago_operativo_id is not None or pago_odoo_id:
+            res = candidatos_compras_para_pago(
+                engine,
+                repo_cxc,
+                pago_operativo_id=pago_operativo_id,
+                pago_odoo_id=pago_odoo_id,
+            )
+        else:
+            raise HTTPException(
+                status_code=422, detail="Indica compra o pago para consultar candidatos."
+            )
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "escritura_odoo_activa": EscrituraConfig.from_env() is not None,
+        **res,
+    }
+
+
+@router.post("/api/compras/vinculaciones")
+def crear_vinculacion_compra_api(
+    body: VincularCompraIn,
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    from cxc.web.app import get_repo
+
+    user = _usuario_op(cxc_session, *PERMISOS_GESTIONAR_OPERATIVOS)
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    engine = getattr(servicio._repo, "_engine", None) or getattr(repo_cxc, "_engine", None)
+    if engine is None:
+        return JSONResponse(status_code=503, content={"error": "Base de datos SQL no disponible."})
+    try:
+        res = vincular_pago_compra(
+            engine,
+            repo_cxc,
+            compra_operativo_id=body.compra_operativo_id,
+            compra_odoo_move_id=body.compra_odoo_move_id,
+            pago_operativo_id=body.pago_operativo_id,
+            pago_odoo_id=body.pago_odoo_id,
+            monto_aplicado=body.monto_aplicado,
+            origen_vinculacion=body.origen_vinculacion or "manual",
+            actor=_actor_op(user),
+            escritor=_escritor_vinc_op(),
+        )
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except VinculacionInvalida as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    return JSONResponse(status_code=200, content=res)
+
+
+@router.delete("/api/compras/vinculaciones/{vinc_id}")
+def eliminar_vinculacion_compra_api(
+    vinc_id: int,
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    from cxc.web.app import get_repo
+
+    _usuario_op(cxc_session, *PERMISOS_GESTIONAR_OPERATIVOS)
+    repo_cxc = servicio._repo_cxc if servicio._repo_cxc is not None else get_repo()
+    engine = getattr(servicio._repo, "_engine", None) or getattr(repo_cxc, "_engine", None)
+    if engine is None:
+        return JSONResponse(status_code=503, content={"error": "Base de datos SQL no disponible."})
+    try:
+        res = desvincular_pago_compra(engine, vinc_id)
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except VinculacionInvalida as exc:
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    return JSONResponse(status_code=200, content=res)
