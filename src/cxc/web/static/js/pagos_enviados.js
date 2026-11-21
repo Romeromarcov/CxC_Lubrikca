@@ -95,6 +95,18 @@
                 const actHtml = typeof pagosApi.accionesHtml === "function"
                     ? pagosApi.accionesHtml(d, puedeAprobar, puedeAprobar, idx, "enviados")
                     : "";
+                const docsVinc = Array.isArray(d.documentos_vinculados) ? d.documentos_vinculados : [];
+                const docsEnvHtml = docsVinc.length
+                    ? `<div style="display:flex; gap:3px; flex-wrap:wrap; margin-top:3px;">${docsVinc.map((s) => `<span class="state-badge" style="background:#eff6ff; color:#1d4ed8; font-size:0.7rem;">${_esc(s)}</span>`).join("")}</div>`
+                    : "";
+                const appEnvBadge = d.estado_aplicacion === "conciliado_odoo"
+                    ? '<div class="cap-sub" style="color:#6b21a8; font-weight:600;">🟣 Conciliado Odoo</div>'
+                    : (d.estado_aplicacion === "vinculado_cxc"
+                        ? `<div class="cap-sub" style="color:#0369a1; font-weight:600;">🔗 Aplicado: ${_usd(d.monto_aplicado_usd)}</div>`
+                        : "");
+                const btnVincEnv = d.estado !== "RECHAZADO"
+                    ? `<button type="button" class="btn-secondary" style="padding:0.3rem 0.5rem; font-size:0.78rem;" data-vinc-pago-env="${idx}">🔗 ${docsVinc.length ? "Pagos/Compras" : "Vincular"}</button>`
+                    : "";
                 const colDocEnv = typeof _cxc().trazabilidadHtml === "function"
                     ? _cxc().trazabilidadHtml(d)
                     : `<strong>${_esc(d.numero)}</strong>${odooHtml}<div>${origHtml}</div>`;
@@ -105,9 +117,9 @@
                     <td>${usrHtml}</td>
                     <td><strong>${montoOrig}</strong></td>
                     <td>${eqHtml}</td>
-                    <td>${_esc(d.diario_nombre || d.banco || "Por definir")}<div class="cap-sub">${refTxt}${subRef ? " · " + subRef : ""}</div></td>
+                    <td>${_esc(d.diario_nombre || d.banco || "Por definir")}<div class="cap-sub">${refTxt}${subRef ? " · " + subRef : ""}</div>${docsEnvHtml}${appEnvBadge}</td>
                     <td>${estHtml}${alHtml}</td>
-                    <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${actHtml}</td>
+                    <td style="white-space:nowrap; display:flex; gap:4px; flex-wrap:wrap;">${actHtml}${btnVincEnv}</td>
                 </tr>`;
             }).join("");
         } catch (err) {
@@ -136,6 +148,22 @@
         });
 
         document.getElementById("op-pagos-enviados-table-body")?.addEventListener("click", (e) => {
+            const btnVinc = e.target.closest("[data-vinc-pago-env]");
+            if (btnVinc) {
+                const d = _enviadosCache[Number(btnVinc.getAttribute("data-vinc-pago-env"))];
+                const vApi = _cxc().vinculaciones;
+                if (d && vApi && typeof vApi.abrirDesdePagoEnviado === "function") {
+                    vApi.abrirDesdePagoEnviado(
+                        {
+                            pagoOdooId: d.odoo_pago_id || d.pago_id || null,
+                            pagoOpId: d.documento_id || (d.origen_sistema === "cxc" ? d.id : null),
+                            titulo: `🔗 Vincular Pago Enviado ${d.numero || ""} a Compras (FIFO)`,
+                        },
+                        loadOperativosPagosEnviados,
+                    );
+                }
+                return;
+            }
             const btn = e.target.closest("[data-unif-detalle][data-unif-dir='enviados']");
             if (!btn) return;
             const d = _enviadosCache[Number(btn.getAttribute("data-unif-detalle"))];

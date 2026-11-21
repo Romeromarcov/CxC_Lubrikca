@@ -24,6 +24,7 @@ from cxc.engine.saldos_propios import (
 from cxc.odoo.client import OdooXmlRpcReader
 from cxc.operativos.repositorio import RepoOperativosSQL
 from cxc.operativos.terceros import RepoCuentasTercerosSQL
+from cxc.operativos.vinculaciones_docs import mapa_vinculaciones_compras
 from cxc.permisos import tiene
 from cxc.sync.siembra_odoo import SiembraOdooService
 
@@ -234,8 +235,9 @@ def obtener_estado_cuenta_cxp(
 
     _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
     _docs_com, docs_op = extras
+    repo = get_repo()
     res = estado_cuenta_proveedor(
-        get_repo(),
+        repo,
         proveedor_id,
         docs_operativos=docs_op,
         cuentas_terceros=terceros,
@@ -243,6 +245,35 @@ def obtener_estado_cuenta_cxp(
     )
     if res is None:
         raise HTTPException(status_code=404, detail="Proveedor sin movimientos en BD propia.")
+
+    vincs_prov: list[dict[str, Any]] = []
+    engine = getattr(repo, "_engine", None)
+    if engine is not None:
+        try:
+            mapa_c = mapa_vinculaciones_compras(engine)
+            prov_nom = str((res.get("resumen") or {}).get("proveedor_nombre") or "").strip().lower()
+            vistos_vc: set[int] = set()
+            for bucket in (
+                *(mapa_c.get("por_compra_op_id") or {}).values(),
+                *(mapa_c.get("por_compra_move_id") or {}).values(),
+            ):
+                for v in bucket:
+                    vid = int(v.get("vinc_id") or 0)
+                    if vid in vistos_vc:
+                        continue
+                    v_pid = str(v.get("proveedor_odoo_id") or "").strip()
+                    v_pnom = str(v.get("proveedor_nombre") or "").strip().lower()
+                    if (v_pid and v_pid == str(proveedor_id).strip()) or (
+                        prov_nom and v_pnom == prov_nom
+                    ):
+                        vistos_vc.add(vid)
+                        vincs_prov.append(v)
+            vincs_prov.sort(
+                key=lambda x: (str(x.get("creado_en") or ""), int(x.get("vinc_id") or 0))
+            )
+        except Exception:
+            vincs_prov = []
+    res["vinculaciones_compras"] = vincs_prov
     return res
 
 

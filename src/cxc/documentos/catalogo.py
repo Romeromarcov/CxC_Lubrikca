@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import unicodedata
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -396,21 +396,23 @@ def cargar_datos_precios_odoo(
         ):
             usd_activas.append(pid_int)
 
-    try:
-        prods = execute(
-            "product.product",
-            "search_read",
-            [[["sale_ok", "=", True], ["active", "=", True]]],
-            {"fields": ["id", "product_tmpl_id", "qty_available"], "limit": 5000},
-        )
-    except Exception:
-        logger.warning("No pude leer qty_available en product.product; reintento sin stock.")
-        prods = execute(
-            "product.product",
-            "search_read",
-            [[["sale_ok", "=", True], ["active", "=", True]]],
-            {"fields": ["id", "product_tmpl_id"], "limit": 5000},
-        )
+    prods = None
+    for fields_try in (
+        ["id", "product_tmpl_id", "free_qty", "qty_available"],
+        ["id", "product_tmpl_id", "qty_available"],
+        ["id", "product_tmpl_id"],
+    ):
+        try:
+            prods = execute(
+                "product.product",
+                "search_read",
+                [[["sale_ok", "=", True], ["active", "=", True]]],
+                {"fields": fields_try, "limit": 5000},
+            )
+            break
+        except Exception:
+            if fields_try[-1] == "product_tmpl_id":
+                raise
     tmpl_por_prod: dict[str, int] = {}
     stock_por_prod: dict[str, Decimal] = {}
     tmpl_ids: set[int] = set()
@@ -421,9 +423,12 @@ def cargar_datos_precios_odoo(
             pid_str = str(p["id"])
             tmpl_por_prod[pid_str] = tid
             tmpl_ids.add(tid)
-            if "qty_available" in p and p.get("qty_available") not in (None, False, ""):
+            raw_qty = p.get("free_qty")
+            if raw_qty in (None, False, ""):
+                raw_qty = p.get("qty_available")
+            if raw_qty not in (None, False, ""):
                 with suppress(Exception):
-                    stock_por_prod[pid_str] = Decimal(str(p["qty_available"]))
+                    stock_por_prod[pid_str] = Decimal(str(raw_qty))
 
     fallback_por_tmpl: dict[int, Decimal] = {}
     if tmpl_ids:
@@ -491,3 +496,118 @@ def cargar_precios_odoo_por_producto(
 ) -> dict[str, tuple[Decimal, Decimal]]:
     """Compatibilidad directa: devuelve solo el mapa ``producto_id -> (usd, ves)``."""
     return cargar_datos_precios_odoo(execute, usd_pricelist_ids, ves_pricelist_ids).precios
+
+
+def consultar_stock_vivo_odoo(
+    execute: ExecuteFn,
+    *,
+    producto_ids: Sequence[str | int] | None = None,
+) -> dict[str, Decimal]:
+    """Consulta stock libre (``free_qty``, fallback ``qty_available``) en vivo en Odoo."""
+    ids_int = sorted(
+        {int(str(x).strip()) for x in (producto_ids or []) if str(x).strip().isdigit()}
+    )
+    dominio: list[Any] = (
+        [["id", "in", ids_int]] if ids_int else [["sale_ok", "=", True], ["active", "=", True]]
+    )
+    rows: Any = None
+    for fields_try in (
+        ["id", "free_qty", "qty_available"],
+        ["id", "qty_available"],
+    ):
+        try:
+            rows = execute(
+                "product.product",
+                "search_read",
+                [dominio],
+                {"fields": fields_try, "limit": max(len(ids_int), 5000) if ids_int else 5000},
+            )
+            break
+        except Exception:
+            rows = None
+    out: dict[str, Decimal] = {}
+    for p in rows or []:
+        pid = str(p.get("id") or "").strip()
+        if not pid:
+            continue
+        raw = p.get("free_qty")
+        if raw in (None, False, ""):
+            raw = p.get("qty_available")
+        if raw not in (None, False, ""):
+            with suppress(Exception):
+                out[pid] = Decimal(str(raw))
+    return out
+
+
+def verificar_stock_lineas_catalogo(
+    items: Sequence[ItemCatalogo],
+    lineas: Sequence[Mapping[str, Any]],
+    *,
+    stock_vivo: Mapping[str, Decimal] | None = None,
+) -> dict[str, Any]:
+    """Compara cantidades solicitadas vs stock disponible (solo informativo, no bloquea)."""
+    por_id = {it.producto_id: it for it in items}
+    por_cod = {it.codigo.strip().lower(): it for it in items if it.codigo}
+    resultado_lineas: list[dict[str, Any]] = []
+    alertas: list[str] = []
+    todo_disponible = True
+
+    for idx, ln in enumerate(lineas):
+        pid = str(ln.get("producto_id") or "").strip()
+        cod = str(ln.get("codigo") or "").strip()
+        desc = str(ln.get("descripcion") or ln.get("producto") or cod or f"Ítem {idx + 1}").strip()
+        it = por_id.get(pid) or (por_cod.get(cod.lower()) if cod else None)
+        if it and not pid:
+            pid = it.producto_id
+        try:
+            cant = Decimal(str(ln.get("cantidad") or "0"))
+        except Exception:
+            cant = Decimal("0")
+
+        disp: Decimal | None = None
+        if stock_vivo is not None and pid in stock_vivo:
+            disp = stock_vivo[pid]
+        elif it is not None:
+            disp = it.stock_disponible
+
+        estado: str | None = None
+        suficiente: bool | None = None
+        if disp is not None:
+            if disp <= Decimal("0"):
+                estado = "agotado"
+            elif disp <= Decimal("5"):
+                estado = "bajo"
+            else:
+                estado = "disponible"
+            if cant > Decimal("0"):
+                suficiente = disp >= cant
+                if not suficiente:
+                    todo_disponible = False
+                    disp_txt = f"{disp:.0f}" if disp == disp.to_integral_value() else f"{disp:.2f}"
+                    cant_txt = f"{cant:.0f}" if cant == cant.to_integral_value() else f"{cant:.2f}"
+                    nom_lbl = (it.nombre if it else desc) or pid
+                    if disp <= Decimal("0"):
+                        alertas.append(f"{nom_lbl}: agotado en Odoo (pides {cant_txt}).")
+                    else:
+                        alertas.append(
+                            f"{nom_lbl}: solo {disp_txt} libre(s) en Odoo (pides {cant_txt})."
+                        )
+
+        resultado_lineas.append(
+            {
+                "orden": idx,
+                "producto_id": pid,
+                "codigo": (it.codigo if it else cod) or "",
+                "descripcion": (it.nombre if it else desc) or "",
+                "cantidad_solicitada": float(cant),
+                "stock_disponible": float(disp) if disp is not None else None,
+                "estado_stock": estado,
+                "suficiente": suficiente,
+            }
+        )
+
+    return {
+        "todo_disponible": todo_disponible,
+        "alertas": alertas,
+        "lineas": resultado_lineas,
+    }

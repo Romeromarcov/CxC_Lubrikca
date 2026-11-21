@@ -9180,23 +9180,56 @@ async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@app.get("/api/inventario/catalogo")
-async def get_inventario_catalogo():
-    """Ficha descriptiva de presentaciones (Fase D, plan de Inventario/
+def _stock_mapa_inventario_seguro(repo: Any, *, refresh_stock: bool = False) -> dict[str, float]:
+    """Devuelve ``producto_id -> free_qty`` de forma segura (sin romper repos mockeados)."""
+    try:
+        from decimal import Decimal
 
-    Catálogo, agosto 2026, pedido explícito del usuario) -- código,
-    nombre, presentación, litros, peso, unidades por paleta. Todo sale
-    del espejo local (``repo.all_catalogo()``), SIN llamadas a Odoo en
-    vivo. La presentación se deriva del nombre con la MISMA regex que
-    ``OdooXmlRpcReader._productos`` (contenido entre paréntesis al final
-    del nombre) -- no se duplica el dato en el espejo, se recalcula acá
-    porque es barato y puro.
-    """
+        from sqlalchemy import Engine
+
+        from cxc.documentos.catalogo import CatalogoSQLOdoo
+        from cxc.web.documentos_api import _lector_precios_odoo, _leer_stock_vivo_seguro
+
+        engine = getattr(repo, "_engine", None)
+        stock_out: dict[str, float] = {}
+        if refresh_stock:
+            vivo = _leer_stock_vivo_seguro(None)
+            if vivo:
+                for pid, qty in vivo.items():
+                    stock_out[str(pid)] = float(qty)
+                return stock_out
+        if isinstance(engine, Engine):
+            cat = CatalogoSQLOdoo(engine, _lector_precios_odoo)
+            for it in cat.listar(refresh=refresh_stock):
+                if it.stock_disponible is not None:
+                    stock_out[it.producto_id] = float(
+                        Decimal(str(it.stock_disponible))
+                    )
+        return stock_out
+    except Exception:
+        return {}
+
+
+def _estado_stock_inv(qty: float | None) -> str | None:
+    if qty is None:
+        return None
+    if qty <= 0:
+        return "agotado"
+    if qty <= 5:
+        return "bajo"
+    return "disponible"
+
+
+@app.get("/api/inventario/catalogo")
+async def get_inventario_catalogo(refresh_stock: bool = False):
+    """Ficha descriptiva de presentaciones + stock libre (``free_qty``) de Odoo."""
     try:
         repo = get_repo()
+        stock_map = _stock_mapa_inventario_seguro(repo, refresh_stock=refresh_stock)
         resultado = []
         for p in repo.all_catalogo():
             m = re.search(r"\(([^)]*)\)\s*$", (p.nombre or "").strip())
+            stock_val = stock_map.get(p.producto_id)
             resultado.append(
                 {
                     "producto_id": p.producto_id,
@@ -9207,6 +9240,9 @@ async def get_inventario_catalogo():
                     "litros": float(p.volumen),
                     "peso": float(p.peso),
                     "unidades_por_paleta": float(p.unidades_por_paleta),
+                    "stock_disponible": stock_val,
+                    "estado_stock": _estado_stock_inv(stock_val),
+                    "fuente_stock": "free_qty",
                 }
             )
         resultado.sort(key=lambda r: r["nombre"])
@@ -9217,7 +9253,7 @@ async def get_inventario_catalogo():
 
 
 @app.get("/api/inventario/comparativo")
-async def get_inventario_comparativo(categoria: str):
+async def get_inventario_comparativo(categoria: str, refresh_stock: bool = False):
     """Tabla comparativa USD vs VES para una categoría (Industrial o
 
     Comercial), estilo las sub-pestañas de Auditoría (pedido explícito
@@ -9275,6 +9311,7 @@ async def get_inventario_comparativo(categoria: str):
                 if ves_id_str and pl_id == int(ves_id_str):
                     precios_ves[pt_id] = float(r.get("fixed_price") or 0.0)
 
+        stock_map = _stock_mapa_inventario_seguro(repo, refresh_stock=refresh_stock)
         items = []
         for p in catalogo:
             if not p.producto_id.isdigit():
@@ -9282,6 +9319,7 @@ async def get_inventario_comparativo(categoria: str):
             pid = int(p.producto_id)
             if pid not in precios_usd and pid not in precios_ves:
                 continue
+            stock_val = stock_map.get(p.producto_id)
             items.append(
                 {
                     "producto_id": p.producto_id,
@@ -9293,6 +9331,8 @@ async def get_inventario_comparativo(categoria: str):
                     "precio_ves_con_iva": (
                         round(precios_ves[pid] * (1 + iva_rate), 2) if pid in precios_ves else None
                     ),
+                    "stock_disponible": stock_val,
+                    "estado_stock": _estado_stock_inv(stock_val),
                 }
             )
         items.sort(key=lambda r: r["nombre"])

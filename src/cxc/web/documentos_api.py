@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Cookie, Depends, HTTPException
@@ -19,7 +21,9 @@ from cxc.documentos.catalogo import (
     DatosPreciosOdoo,
     buscar_productos,
     cargar_datos_precios_odoo,
+    consultar_stock_vivo_odoo,
     resolver_producto_unico,
+    verificar_stock_lineas_catalogo,
 )
 from cxc.documentos.modelos import (
     BORRADOR,
@@ -55,6 +59,14 @@ from cxc.documentos.sync_odoo import (
 from cxc.odoo.client import OdooReader, OdooXmlRpcReader
 from cxc.odoo.directorio import filtrar_contactos
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
+from cxc.operativos.vinculaciones_docs import (
+    VinculacionInvalida,
+    VinculacionNoEncontrada,
+    candidatos_pagos_para_venta,
+    desvincular_pago_venta,
+    mapa_vinculaciones_ventas,
+    vincular_pago_venta,
+)
 from cxc.permisos import tiene
 from cxc.sync.incremental import IncrementalSync
 from cxc.web.capturas_api import exigir_bot_key
@@ -65,6 +77,7 @@ logger = logging.getLogger("cxc.documentos.api")
 router = APIRouter()
 
 PERMISOS_VER_DOCS = ("ventas", "ventas.aprobar_pedidos", "capturas.ver", "capturas.gestionar")
+PERMISOS_VINC_VENTAS = ("ventas", "pagos", "cobranza", "facturacion", "ventas.aprobar_pedidos")
 PERMISOS_GESTIONAR_DOCS = ("ventas", "ventas.aprobar_pedidos", "capturas.gestionar")
 PERMISO_APROBAR_PEDIDOS = "ventas.aprobar_pedidos"
 
@@ -150,6 +163,37 @@ class RechazoIn(BaseModel):
     motivo: str = ""
 
 
+class StockVerificarIn(BaseModel):
+    lineas: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def _leer_stock_vivo_seguro(producto_ids: list[str] | None = None) -> dict[str, Decimal] | None:
+    """Consulta ``free_qty`` en vivo en Odoo; devuelve ``None`` si no está disponible o en tests."""
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+    try:
+        from cxc.odoo.directorio import conectar_lectura
+
+        cfg = AppConfig.from_env()
+        if not cfg.odoo.url or cfg.odoo.url.endswith(".test") or not cfg.odoo.password:
+            return None
+        execute = conectar_lectura(cfg.odoo)
+        return consultar_stock_vivo_odoo(execute, producto_ids=producto_ids)
+    except Exception as exc:
+        logger.warning("No pude consultar stock libre en vivo en Odoo: %s", exc)
+        return None
+
+
+def _estado_stock_val(stock: Decimal | None) -> str | None:
+    if stock is None:
+        return None
+    if stock <= Decimal("0"):
+        return "agotado"
+    if stock <= Decimal("5"):
+        return "bajo"
+    return "disponible"
+
+
 # ── Endpoints para Bots de Telegram (X-Bot-Key) ──────────────────────────────
 
 
@@ -171,6 +215,70 @@ def bot_buscar_catalogo(
         "lista_defecto": lista_def.a_dict(),
         "unico": unico.a_dict() if unico else None,
         "items": [it.a_dict() for it in lista[:lim]],
+    }
+
+
+@router.get("/api/bots/stock", dependencies=[Depends(exigir_bot_key)])
+def bot_consultar_stock(
+    servicio: ServicioDocsDep,
+    q: str | None = None,
+    producto_ids: str | None = None,
+    limit: int = 12,
+    vivo: bool = True,
+) -> dict[str, Any]:
+    """Consulta disponibilidad de inventario en Odoo (``free_qty``) para el bot de ventas."""
+    items = servicio.catalogo_items(refresh=False)
+    lista_def = servicio.lista_comercial_defecto(refresh=False)
+    lim = max(1, min(limit, 50))
+    if producto_ids and producto_ids.strip():
+        ped_ids = {p.strip() for p in producto_ids.split(",") if p.strip()}
+        seleccionados = [it for it in items if it.producto_id in ped_ids][:lim]
+    elif q and q.strip():
+        seleccionados = buscar_productos(items, q.strip(), limite=lim)
+    else:
+        seleccionados = buscar_productos(items, None, limite=lim)
+
+    stock_vivo = (
+        _leer_stock_vivo_seguro([it.producto_id for it in seleccionados])
+        if vivo and seleccionados
+        else None
+    )
+    out_items: list[dict[str, Any]] = []
+    for it in seleccionados:
+        if stock_vivo is not None and it.producto_id in stock_vivo:
+            it_enr = replace(it, stock_disponible=stock_vivo[it.producto_id])
+        else:
+            it_enr = it
+        out_items.append(it_enr.a_dict())
+
+    return {
+        "fuente_stock": "free_qty",
+        "vivo_consultado": stock_vivo is not None,
+        "lista_defecto": lista_def.a_dict(),
+        "total": len(out_items),
+        "items": out_items,
+    }
+
+
+@router.post("/api/bots/stock/verificar", dependencies=[Depends(exigir_bot_key)])
+def bot_verificar_stock_pedido(
+    servicio: ServicioDocsDep,
+    body: StockVerificarIn,
+) -> dict[str, Any]:
+    """Verifica stock libre en vivo para líneas de cotización o pedido (solo informativo)."""
+    items = servicio.catalogo_items(refresh=False)
+    pids = [
+        str(ln.get("producto_id") or "").strip()
+        for ln in body.lineas
+        if isinstance(ln, dict) and str(ln.get("producto_id") or "").strip()
+    ]
+    stock_vivo = _leer_stock_vivo_seguro(pids) if pids else None
+    res = verificar_stock_lineas_catalogo(items, body.lineas, stock_vivo=stock_vivo)
+    return {
+        "ok": True,
+        "fuente_stock": "free_qty",
+        "vivo_consultado": stock_vivo is not None,
+        **res,
     }
 
 
@@ -825,6 +933,34 @@ def listar_ventas_unificadas(
             }
         )
 
+    filas.sort(key=lambda x: str(x.get("actualizado_en") or "")[:19], reverse=True)
+    # Enriquecer cada documento con pagos vinculados (Odoo espejo + PAG-* + Zelle 3ro)
+    try:
+        mapa_vinc_ventas = mapa_vinculaciones_ventas(engine_docs, repo_cxc)
+    except Exception:
+        mapa_vinc_ventas = {"por_so_id": {}}
+    por_so_vinc = mapa_vinc_ventas.get("por_so_id", {})
+    for it in filas:
+        so_k = str(it.get("odoo_order_name") or it.get("numero") or "").strip()
+        vincs_so = por_so_vinc.get(so_k, [])
+        tot_u = round(float(it.get("total_con_iva") or it.get("subtotal") or 0), 2)
+        vinc_u = round(sum(float(v.get("equiv_usd_bcv") or 0) for v in vincs_so), 2)
+        it["vinculaciones_count"] = len(vincs_so)
+        it["monto_vinculado_usd"] = vinc_u
+        it["saldo_pendiente_vinc_usd"] = max(0.0, round(tot_u - vinc_u, 2))
+        it["pagos_vinculados"] = [
+            {
+                "origen_registro": v.get("origen_registro"),
+                "vinc_id": v.get("vinc_id"),
+                "pago_id": v.get("pago_odoo_id") or v.get("pago_operativo_id"),
+                "monto_aplicado": v.get("monto_aplicado"),
+                "moneda": v.get("moneda"),
+                "equiv_usd_bcv": v.get("equiv_usd_bcv"),
+                "conciliado_odoo": bool(v.get("conciliado_odoo")),
+            }
+            for v in vincs_so[:6]
+        ]
+
     confirmados = [
         x for x in filas if x["estado"] == ENVIADO_ODOO and x.get("estado_odoo", "sale") != "cancel"
     ]
@@ -958,3 +1094,95 @@ def eliminar_override_cliente_api(
     if not eliminado:
         raise HTTPException(status_code=404, detail="Override de cliente no encontrado")
     return JSONResponse(status_code=200, content={"ok": True, "partner_odoo_id": partner_odoo_id})
+
+
+# ── Vinculación bidireccional Ventas ↔ Pagos (CxC + Odoo) ───────────────────
+
+
+class VincularVentaIn(BaseModel):
+    so_id: str | None = None
+    documento_comercial_id: int | None = None
+    pago_id: str | None = None
+    pago_operativo_id: int | None = None
+    monto_aplicado: float | str | None = None
+    origen_vinculacion: str = "manual"
+
+
+def _escritor_vinc_ventas() -> EscritorOdoo | None:
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None
+    try:
+        return _fabrica_escritor_doc()
+    except Exception:
+        return None
+
+
+@router.get("/api/ventas/vinculaciones/candidatos")
+def listar_candidatos_vinculacion_venta(
+    servicio: ServicioDocsDep,
+    so_id: str | None = None,
+    documento_id: int | None = None,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _usuario_doc(cxc_session, *PERMISOS_VINC_VENTAS)
+    repo_cxc, engine = _repo_y_engine(servicio)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Base de datos SQL no disponible")
+    try:
+        res = candidatos_pagos_para_venta(engine, repo_cxc, so_id=so_id, documento_id=documento_id)
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "escritura_odoo_activa": EscrituraConfig.from_env() is not None,
+        **res,
+    }
+
+
+@router.post("/api/ventas/vinculaciones")
+def crear_vinculacion_venta_api(
+    body: VincularVentaIn,
+    servicio: ServicioDocsDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_doc(cxc_session, *PERMISOS_VINC_VENTAS)
+    repo_cxc, engine = _repo_y_engine(servicio)
+    if engine is None:
+        return JSONResponse(status_code=503, content={"error": "Base de datos SQL no disponible"})
+    try:
+        res = vincular_pago_venta(
+            engine,
+            repo_cxc,
+            so_id=body.so_id,
+            documento_comercial_id=body.documento_comercial_id,
+            pago_id=body.pago_id,
+            pago_operativo_id=body.pago_operativo_id,
+            monto_aplicado=body.monto_aplicado,
+            origen_vinculacion=body.origen_vinculacion or "manual",
+            actor=_actor_doc(user),
+            escritor=_escritor_vinc_ventas(),
+        )
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except VinculacionInvalida as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    return JSONResponse(status_code=200, content=res)
+
+
+@router.delete("/api/ventas/vinculaciones/{origen}/{vinc_id}")
+def eliminar_vinculacion_venta_api(
+    origen: str,
+    vinc_id: str,
+    servicio: ServicioDocsDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_doc(cxc_session, *PERMISOS_VINC_VENTAS)
+    repo_cxc, engine = _repo_y_engine(servicio)
+    if engine is None:
+        return JSONResponse(status_code=503, content={"error": "Base de datos SQL no disponible"})
+    try:
+        res = desvincular_pago_venta(engine, repo_cxc, origen=origen, vinc_id=vinc_id)
+    except VinculacionNoEncontrada as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except VinculacionInvalida as exc:
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    return JSONResponse(status_code=200, content=res)

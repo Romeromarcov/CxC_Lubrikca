@@ -922,3 +922,290 @@ class EscritorOdoo:
         if nota_chatter and "message_ids" in move_campos:
             self.nota_chatter("account.move", move_id, nota_chatter)
         return move_id
+
+    # ── reconciliación contable asistida (CxC / CxP ↔ Odoo) ─────────────────
+
+    def buscar_factura_abierta_de_orden(
+        self, so_name: str, order_id: int | None = None
+    ) -> int | None:
+        """Devuelve el ``account.move.id`` publicado con saldo pendiente de una SO."""
+        so_limpia = str(so_name or "").strip()
+        try:
+            if so_limpia:
+                candidatas = self._call(
+                    "account.move",
+                    "search_read",
+                    [
+                        [
+                            ["move_type", "=", "out_invoice"],
+                            ["state", "=", "posted"],
+                            ["payment_state", "!=", "paid"],
+                            ["invoice_origin", "ilike", so_limpia],
+                        ]
+                    ],
+                    {
+                        "fields": ["id", "name", "invoice_origin", "payment_state"],
+                        "order": "id desc",
+                        "limit": 10,
+                    },
+                )
+                for row in candidatas or []:
+                    orig = str(row.get("invoice_origin") or "")
+                    tokens = {
+                        t.strip().upper()
+                        for t in orig.replace(";", ",").split(",")
+                        if t.strip()
+                    }
+                    if so_limpia.upper() in tokens or orig.strip().upper() == so_limpia.upper():
+                        return int(row["id"])
+                if candidatas:
+                    return int(candidatas[0]["id"])
+            if order_id is not None:
+                ords = self._call(
+                    "sale.order",
+                    "read",
+                    [[int(order_id)]],
+                    {"fields": ["id", "invoice_ids"]},
+                )
+                inv_ids = [int(i) for i in ((ords or [{}])[0].get("invoice_ids") or [])]
+                if inv_ids:
+                    invs = self._call(
+                        "account.move",
+                        "search_read",
+                        [
+                            [
+                                ["id", "in", inv_ids],
+                                ["move_type", "=", "out_invoice"],
+                                ["state", "=", "posted"],
+                                ["payment_state", "!=", "paid"],
+                            ]
+                        ],
+                        {"fields": ["id"], "order": "id desc", "limit": 1},
+                    )
+                    if invs:
+                        return int(invs[0]["id"])
+        except Exception as e:
+            logger.info(
+                "No se pudo consultar factura abierta de %s en Odoo: %s",
+                so_limpia or order_id,
+                e,
+            )
+        return None
+
+    def reconciliar_pago_con_documento(
+        self,
+        *,
+        pago_model: str,
+        pago_res_id: int,
+        factura_move_id: int,
+        es_cliente: bool,
+    ) -> dict[str, Any]:
+        """Intenta conciliar un pago o asiento publicado contra una factura publicada en Odoo.
+
+        Nunca publica borradores automáticamente ni lanza error si no es elegible en Odoo;
+        devuelve dict estructurado ``{reconciliado, pago_move_id, factura_move_id, motivo}``.
+        """
+        pago_move_id: int | None = None
+        try:
+            if pago_model == "account.payment":
+                pags = self._call(
+                    "account.payment",
+                    "read",
+                    [[int(pago_res_id)]],
+                    {"fields": ["id", "name", "state", "move_id"]},
+                )
+                if not pags:
+                    return {
+                        "reconciliado": False,
+                        "pago_move_id": None,
+                        "factura_move_id": int(factura_move_id),
+                        "motivo": f"Pago #{pago_res_id} no encontrado en Odoo.",
+                    }
+                pag = pags[0]
+                pago_move_id = self._m2o_id_val(pag.get("move_id"))
+                est_p = str(pag.get("state") or "").lower()
+                if pago_move_id is None:
+                    return {
+                        "reconciliado": False,
+                        "pago_move_id": None,
+                        "factura_move_id": int(factura_move_id),
+                        "motivo": f"Pago #{pago_res_id} sin asiento contable asociado en Odoo.",
+                    }
+                pm_rows = self._call(
+                    "account.move",
+                    "read",
+                    [[pago_move_id]],
+                    {"fields": ["id", "state", "name"]},
+                )
+                pm_state = str((pm_rows or [{}])[0].get("state") or "").lower()
+                if pm_state != "posted" and est_p not in ("posted", "paid", "in_process"):
+                    est_lbl = pm_state or est_p
+                    return {
+                        "reconciliado": False,
+                        "pago_move_id": pago_move_id,
+                        "factura_move_id": int(factura_move_id),
+                        "motivo": (
+                            f"El pago en Odoo está en estado '{est_lbl}' (vinculado en CxC)."
+                        ),
+                    }
+            else:
+                pago_move_id = int(pago_res_id)
+                pm_rows = self._call(
+                    "account.move",
+                    "read",
+                    [[pago_move_id]],
+                    {"fields": ["id", "state", "name"]},
+                )
+                if not pm_rows:
+                    return {
+                        "reconciliado": False,
+                        "pago_move_id": pago_move_id,
+                        "factura_move_id": int(factura_move_id),
+                        "motivo": f"Asiento #{pago_move_id} no encontrado en Odoo.",
+                    }
+                pm_state = str(pm_rows[0].get("state") or "").lower()
+                if pm_state != "posted":
+                    return {
+                        "reconciliado": False,
+                        "pago_move_id": pago_move_id,
+                        "factura_move_id": int(factura_move_id),
+                        "motivo": (
+                            f"El asiento del pago está en '{pm_state}' en Odoo "
+                            "(vinculado en CxC)."
+                        ),
+                    }
+
+            inv_rows = self._call(
+                "account.move",
+                "read",
+                [[int(factura_move_id)]],
+                {"fields": ["id", "name", "state", "payment_state", "move_type"]},
+            )
+            if not inv_rows:
+                return {
+                    "reconciliado": False,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": f"Factura #{factura_move_id} no encontrada en Odoo.",
+                }
+            inv = inv_rows[0]
+            if str(inv.get("state") or "").lower() != "posted":
+                return {
+                    "reconciliado": False,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": (
+                        f"La factura en Odoo está en '{inv.get('state')}' (vinculado en CxC)."
+                    ),
+                }
+            if str(inv.get("payment_state") or "").lower() == "paid":
+                return {
+                    "reconciliado": False,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": "La factura en Odoo ya aparece pagada (vinculado en CxC).",
+                }
+
+            acct_type = "asset_receivable" if es_cliente else "liability_payable"
+            pago_lines = self._call(
+                "account.move.line",
+                "search_read",
+                [
+                    [
+                        ["move_id", "=", pago_move_id],
+                        ["reconciled", "=", False],
+                        ["account_type", "=", acct_type],
+                    ]
+                ],
+                {"fields": ["id", "balance", "amount_residual"], "limit": 10},
+            )
+            candidatas_pago = [
+                ln
+                for ln in (pago_lines or [])
+                if (
+                    float(ln.get("balance") or 0) < 0
+                    if es_cliente
+                    else float(ln.get("balance") or 0) > 0
+                )
+            ] or list(pago_lines or [])
+            if not candidatas_pago:
+                return {
+                    "reconciliado": False,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": (
+                        "El pago no tiene línea abierta por conciliar en Odoo (vinculado en CxC)."
+                    ),
+                }
+            pago_line_id = int(candidatas_pago[0]["id"])
+            inv_lbl = inv.get("name") or f"#{factura_move_id}"
+            try:
+                self._call(
+                    "account.move",
+                    "js_assign_outstanding_line",
+                    [int(factura_move_id), pago_line_id],
+                    {},
+                )
+                return {
+                    "reconciliado": True,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": f"Reconciliado en Odoo con {inv_lbl}.",
+                }
+            except OdooEscrituraError as exc_assign:
+                inv_lines = self._call(
+                    "account.move.line",
+                    "search_read",
+                    [
+                        [
+                            ["move_id", "=", int(factura_move_id)],
+                            ["reconciled", "=", False],
+                            ["account_type", "=", acct_type],
+                        ]
+                    ],
+                    {"fields": ["id", "balance", "amount_residual"], "limit": 10},
+                )
+                candidatas_inv = [
+                    ln
+                    for ln in (inv_lines or [])
+                    if (
+                        float(ln.get("balance") or 0) > 0
+                        if es_cliente
+                        else float(ln.get("balance") or 0) < 0
+                    )
+                ] or list(inv_lines or [])
+                if not candidatas_inv:
+                    return {
+                        "reconciliado": False,
+                        "pago_move_id": pago_move_id,
+                        "factura_move_id": int(factura_move_id),
+                        "motivo": (
+                            f"Vinculado en CxC (Odoo no concilió automáticamente: {exc_assign})."
+                        ),
+                    }
+                self._call(
+                    "account.move.line",
+                    "reconcile",
+                    [[pago_line_id, int(candidatas_inv[0]["id"])]],
+                    {},
+                )
+                return {
+                    "reconciliado": True,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": f"Reconciliado en Odoo con {inv_lbl}.",
+                }
+        except Exception as exc:
+            logger.warning(
+                "Error no bloqueante al reconciliar en Odoo (pago=%s:%s, factura=%s): %s",
+                pago_model,
+                pago_res_id,
+                factura_move_id,
+                exc,
+            )
+            return {
+                "reconciliado": False,
+                "pago_move_id": pago_move_id,
+                "factura_move_id": int(factura_move_id),
+                "motivo": f"Vinculado en CxC (Odoo sin conciliar: {exc}).",
+            }

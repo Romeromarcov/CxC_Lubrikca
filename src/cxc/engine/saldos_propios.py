@@ -172,6 +172,7 @@ norm_nombre = _norm_nombre
 dec = _dec
 round_usd = _f
 indice_tasas_bcv_local = _indice_tasas_bcv_local
+tasa_bcv_en_fecha = _tasa_bcv_en_fecha
 a_usd_local = _a_usd_local
 tramo_mora = _tramo_mora
 
