@@ -491,7 +491,13 @@ def _resolver_venta_objetivo(
     ruta_exp = str(getattr(doc_row, "ruta_pago", "") or "") if doc_row is not None else ""
     if (lp_id is None or str(lp_id).strip() in ("", "0")) and ord_mirror is not None:
         lp_id = getattr(ord_mirror, "lista_precios", None)
-    ruta_pago = normalizar_ruta(ruta_exp) or ruta_de_lista(
+    lp_key = str(lp_id or "").strip()
+    ruta_cfg = (
+        normalizar_ruta(mapeo[lp_key].get("ruta"))
+        if lp_key and isinstance(mapeo.get(lp_key), dict) and mapeo[lp_key].get("ruta")
+        else None
+    )
+    ruta_pago = ruta_cfg or normalizar_ruta(ruta_exp) or ruta_de_lista(
         lp_id, mapeo, lista_nombre=lp_nom, moneda_lista=mon_lista
     )
 

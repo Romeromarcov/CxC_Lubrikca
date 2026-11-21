@@ -35,6 +35,7 @@ from cxc.documentos.modelos import (
     LineaDocumento,
 )
 from cxc.documentos.politica_ventas import evaluar_politica_auto_envio
+from cxc.documentos.repositorio import RepoDocumentosSQL
 from cxc.documentos.servicio import ServicioDocumentos
 from cxc.engine.cxc_routing import BandejaDestino, clasificar_estado_cxc
 from cxc.engine.rutas_pago import (
@@ -328,6 +329,9 @@ def _client_con_repo(repo: Any) -> tuple[ExitStack, TestClient]:
         patch("cxc.web.app.run_sync_in_background", _nada),
         patch("cxc.web.app._aplicar_migraciones_pendientes"),
         patch("cxc.web.app._connect", return_value=None),
+        patch("cxc.web.app._PRICELIST_MAPEO_CACHE_UNIFICADO", {}),
+        patch("cxc.web.app._load_pricelist_mapeo_from_json", return_value=None),
+        patch("cxc.web.app._save_pricelist_mapeo_to_json"),
     ):
         pila.enter_context(parche)
     return pila, pila.enter_context(TestClient(web_app.app, raise_server_exceptions=False))
@@ -1223,3 +1227,73 @@ def test_servicio_flujo_multilista_credito_especiales_y_endpoints() -> None:
     assert "Binance" in so_odoo["note"]
     assert "21 día(s)" in so_odoo["note"]
     assert "Bonificación comercial" in so_odoo["note"]
+
+
+def test_ventas_unificadas_y_candidatos_no_fuerzan_usd_en_lista_no_mapeada(
+    tmp_path: Path,
+) -> None:
+    db_file = tmp_path / "unif_ruta.db"
+    eng = create_engine(f"sqlite:///{db_file}", future=True)
+    schema.metadata.create_all(eng)
+    repo = PostgresRepository(eng)
+    repo.set_config("pricelist_mapeo_unificado", "{}")
+    repo.upsert_clientes(
+        [Cliente(cliente_id="1001", nombre="Angel ARMAS", vendedor_email="v@x.com")]
+    )
+    repo.upsert_ordenes(
+        [
+            OrdenVenta(
+                so_id="S01428",
+                cliente_id="1001",
+                fecha=date(2026, 11, 20),
+                fecha_entrega=date(2026, 11, 20),
+                monto_total=Decimal("100.00"),
+                lista_precios="21",
+                vendedor_email="v@x.com",
+                es_primera_compra=False,
+                estado_orden="sale",
+            )
+        ]
+    )
+    catalogo = _CatalogoMultiListaMem(
+        ITEMS_MULTI,
+        [ListaComercialActiva("22", "Pago VES Dic 2026", "VES", RUTA_BCV)],
+    )
+    svc = ServicioDocumentos(RepoDocumentosSQL(eng), catalogo, lambda: None, repo_cxc=repo)
+    web_app.app.dependency_overrides[get_servicio_documentos] = lambda: svc
+    pila, c = _client_con_repo(repo)
+    try:
+        with pila:
+            r_unif = c.get("/api/ventas/unificadas?q=S01428")
+            assert r_unif.status_code == 200, r_unif.text
+            row = next(x for x in r_unif.json()["items"] if x["numero"] == "S01428")
+            cands = candidatos_pagos_para_venta(eng, repo, so_id="S01428")
+            assert row["ruta_pago"] == RUTA_BCV
+            assert row["moneda_lista"] == "VES"
+            assert cands["documento"]["ruta_pago"] == RUTA_BCV
+
+            # Parametrizar lista 21 explícitamente como Binance/USD -> ambas vistas coinciden
+            r_cfg = c.post(
+                "/api/config/pricelist-mapeo",
+                json={
+                    "mapeo": {
+                        "21": {
+                            "moneda": "usd",
+                            "categoria": "comercial",
+                            "ruta": "binance",
+                            "nombre": "Lista 21 USD",
+                        }
+                    },
+                    "historical_pricelist_enabled": True,
+                },
+            )
+            assert r_cfg.status_code == 200
+            r_unif_2 = c.get("/api/ventas/unificadas?q=S01428")
+            assert r_unif_2.status_code == 200
+            row_2 = next(x for x in r_unif_2.json()["items"] if x["numero"] == "S01428")
+            cands_2 = candidatos_pagos_para_venta(eng, repo, so_id="S01428")
+            assert row_2["ruta_pago"] == RUTA_BINANCE
+            assert cands_2["documento"]["ruta_pago"] == RUTA_BINANCE
+    finally:
+        web_app.app.dependency_overrides.pop(get_servicio_documentos, None)
+
