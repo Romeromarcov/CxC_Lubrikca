@@ -1208,6 +1208,9 @@ documentos_comerciales = Table(
     Column("moneda_lista", String, nullable=False, server_default="VES"),  # VES | USD
     Column("lista_precios_id", String, nullable=False, server_default=""),
     Column("lista_precios_nombre", String, nullable=False, server_default=""),
+    Column("ruta_pago", String(24), nullable=False, server_default=""),
+    Column("dias_credito", Integer, nullable=False, server_default="0"),
+    Column("descuentos_especiales_json", Text, nullable=False, server_default="[]"),
     Column("vendedor_email", String, nullable=False, server_default=""),
     Column("fecha_entrega", Date, nullable=True),
     Column("condiciones_negociacion", Text, nullable=False, server_default=""),

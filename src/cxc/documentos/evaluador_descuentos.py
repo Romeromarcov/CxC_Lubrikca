@@ -12,11 +12,12 @@ Evalúa cada descuento elegido en el bot o en el panel de CxC contra:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -36,6 +37,13 @@ from cxc.engine.effective_dating import (
     _vigente,
 )
 from cxc.engine.equivalents import valor_pagado_usd
+from cxc.engine.rutas_pago import (
+    RUTA_BCV,
+    RUTA_BINANCE,
+    etiqueta_ruta,
+    normalizar_ruta,
+    ruta_de_lista,
+)
 from cxc.models import (
     Cliente,
     EstadoVinculacion,
@@ -110,12 +118,90 @@ def asegurar_datos_frescos_cxc(repo: Repository | None) -> dict[str, Any]:
     }
 
 
+_FAMILIA_LABELS: dict[str, str] = {
+    "pronto_pago": "Pronto Pago / Contado",
+    "volumen": "Volumen por Orden",
+    "fidelidad": "Fidelidad Acumulada",
+    "primera_compra": "Primera Compra / Obsequio",
+    "recompra": "Recompra / Ventana de Pago",
+    "diferencial": "Diferencial Cambiario",
+    "producto": "Promoción por Producto",
+    "especial": "Descuento Especial Comercial",
+}
+
+
+def _cargar_mapeo_listas_eval(repo: Repository | None) -> dict[str, Any]:
+    if repo is None:
+        return {}
+    try:
+        raw = repo.get_config("pricelist_mapeo_unificado")
+        if raw and isinstance(raw, str):
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
 def _listas_validas_repo(repo: Repository) -> tuple[list[str], list[str]]:
+    mapeo = _cargar_mapeo_listas_eval(repo)
+    valid_ves = [
+        pid
+        for pid, m in mapeo.items()
+        if isinstance(m, Mapping)
+        and (
+            normalizar_ruta(m.get("ruta")) == RUTA_BCV
+            or (not normalizar_ruta(m.get("ruta")) and m.get("moneda") == "ves")
+        )
+    ]
+    valid_usd = [
+        pid
+        for pid, m in mapeo.items()
+        if isinstance(m, Mapping)
+        and (
+            normalizar_ruta(m.get("ruta")) == RUTA_BINANCE
+            or (not normalizar_ruta(m.get("ruta")) and m.get("moneda") == "usd")
+        )
+    ]
+    if valid_ves or valid_usd:
+        return valid_ves, valid_usd
     ves_str = repo.get_config("valid_pricelists_ves") or ""
     usd_str = repo.get_config("valid_pricelists_usd") or ""
     valid_ves = [x.strip() for x in ves_str.split(",") if x.strip()]
     valid_usd = [x.strip() for x in usd_str.split(",") if x.strip()]
     return valid_ves, valid_usd
+
+
+def _normalizar_descuentos_especiales(
+    descuentos_especiales: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    salida: list[dict[str, Any]] = []
+    for idx, raw in enumerate(descuentos_especiales or [], start=1):
+        if not isinstance(raw, Mapping):
+            continue
+        motivo = str(
+            raw.get("motivo") or raw.get("descripcion") or raw.get("titulo") or ""
+        ).strip()
+        try:
+            pct = max(Decimal("0"), min(Decimal("100"), Decimal(str(raw.get("porcentaje") or "0"))))
+        except Exception:
+            pct = Decimal("0")
+        try:
+            monto_fijo = max(Decimal("0"), Decimal(str(raw.get("monto_usd") or "0")))
+        except Exception:
+            monto_fijo = Decimal("0")
+        if pct <= Decimal("0") and monto_fijo <= Decimal("0") and not motivo:
+            continue
+        salida.append(
+            {
+                "id": str(raw.get("id") or f"ESP-{idx}"),
+                "motivo": motivo or f"Descuento comercial especial #{idx}",
+                "porcentaje": float(q2(pct)),
+                "monto_usd": float(q2(monto_fijo)),
+            }
+        )
+    return salida
 
 
 def _pct_humano(fraccion_o_pct: Decimal) -> Decimal:
@@ -391,6 +477,9 @@ def obtener_catalogo_descuentos(
             }
         )
 
+    for it in catalogo_out:
+        it["familia_label"] = _FAMILIA_LABELS.get(str(it.get("familia") or ""), "Descuento")
+
     return catalogo_out
 
 
@@ -584,6 +673,7 @@ def evaluar_descuentos_cotizacion(
     *,
     lineas: Sequence[dict[str, Any]],
     descuentos_codigos: Sequence[str],
+    descuentos_especiales: Sequence[dict[str, Any]] | None = None,
     lista_precios_id: str = "21",
     lista_precios_nombre: str = "Pago VES Nov 2026",
     moneda_lista: str = "VES",
@@ -603,6 +693,16 @@ def evaluar_descuentos_cotizacion(
         if verificar_frescura
         else {"sincronizado": False, "ultimo_sync": None, "refrescado_ahora": False}
     )
+
+    mapeo_listas_eval = _cargar_mapeo_listas_eval(repo)
+    ruta_pago = ruta_de_lista(
+        lista_precios_id,
+        mapeo_listas_eval,
+        lista_nombre=lista_precios_nombre,
+        moneda_lista=moneda_lista,
+    )
+    ruta_pago_label = etiqueta_ruta(ruta_pago)
+    espec_limpios = _normalizar_descuentos_especiales(descuentos_especiales)
 
     subtotal_lista = Decimal("0")
     total_litros = Decimal("0")
@@ -625,29 +725,62 @@ def evaluar_descuentos_cotizacion(
         dict.fromkeys(str(c).strip() for c in (descuentos_codigos or []) if str(c).strip())
     )
 
+    espec_sin_repo: list[dict[str, Any]] = []
+    tot_esp_sin_repo = Decimal("0")
+    alertas_esp_sin_repo: list[str] = []
+    for esp in espec_limpios:
+        pct_e = Decimal(str(esp["porcentaje"]))
+        m_e = (
+            q2(subtotal_lista * pct_e / Decimal("100"))
+            if pct_e > Decimal("0")
+            else q2(Decimal(str(esp["monto_usd"])))
+        )
+        tot_esp_sin_repo += m_e
+        item_e = {
+            **esp,
+            "familia": "especial",
+            "familia_label": _FAMILIA_LABELS["especial"],
+            "monto_estimado_usd": float(m_e),
+            "requiere_aprobacion": True,
+        }
+        espec_sin_repo.append(item_e)
+        alertas_esp_sin_repo.append(
+            f"[ESPECIAL] {esp['motivo']} ({pct_e:g}% / -${m_e:.2f}): "
+            "requiere aprobación administrativa en CxC."
+        )
+
     if repo is None:
-        iva_sin_repo = q2(subtotal_lista * IVA_VENEZUELA)
-        tot_sin_repo = q2(subtotal_lista + iva_sin_repo)
+        tot_d_sr = min(subtotal_lista, q2(tot_esp_sin_repo))
+        sub_neto_sr = q2(subtotal_lista - tot_d_sr)
+        iva_sin_repo = q2(sub_neto_sr * IVA_VENEZUELA)
+        tot_sin_repo = q2(sub_neto_sr + iva_sin_repo)
+        alertas_sr = (
+            ["No hay repositorio CxC disponible para validar parámetros de descuentos."]
+            if codigos_limpios
+            else []
+        ) + alertas_esp_sin_repo
         return {
             "lista_precios_id": lista_precios_id,
             "lista_precios_nombre": lista_precios_nombre,
             "moneda_lista": moneda_lista,
+            "ruta_pago": ruta_pago,
+            "ruta_pago_label": ruta_pago_label,
             "tasa_bcv": None,
             "subtotal_lista": float(subtotal_lista),
-            "total_descuentos": 0.0,
-            "subtotal_neto": float(subtotal_lista),
+            "total_descuentos": float(tot_d_sr),
+            "subtotal_neto": float(sub_neto_sr),
             "monto_iva": float(iva_sin_repo),
             "total_con_iva": float(tot_sin_repo),
             "total_con_iva_ves": None,
             "total_litros": float(total_litros),
             "max_dias_credito_sugerido": None,
-            "cumple_todo": len(codigos_limpios) == 0,
+            "dias_credito_solicitados": dias_credito_solicitados,
+            "dias_credito_cumple": True,
+            "cumple_todo": len(codigos_limpios) == 0 and len(espec_sin_repo) == 0,
+            "requiere_aprobacion_manual": bool(espec_sin_repo or codigos_limpios),
             "descuentos": [],
-            "alertas": (
-                ["No hay repositorio CxC disponible para validar parámetros de descuentos."]
-                if codigos_limpios
-                else []
-            ),
+            "descuentos_especiales": espec_sin_repo,
+            "alertas": alertas_sr,
             "cliente_cxc": {"cliente_encontrado": False, "ordenes_previas": 0},
             "frescura_cxc": frescura,
         }
@@ -683,23 +816,48 @@ def evaluar_descuentos_cotizacion(
         )
 
     # Plazo máximo de crédito permitido según litros cotizados
-    max_dias_credito: int | None = None
+    candidatos_cred: list[int] = []
     for reg_cred in repo.all_reglas_dias_credito_volumen():
-        if str(reg_cred.get("activo", "TRUE")).upper() == "FALSE":
+        if str(reg_cred.get("activo", "TRUE")).strip().upper() in ("FALSE", "0", "NO"):
             continue
-        l_min = Decimal(str(reg_cred.get("litros_min") or "0"))
-        l_max = Decimal(str(reg_cred.get("litros_max") or "999999"))
-        if l_min <= total_litros <= l_max:
-            max_dias_credito = int(Decimal(str(reg_cred.get("dias_max") or "0")))
-            break
+        l_min = Decimal(
+            str(reg_cred.get("litros_minimo") or reg_cred.get("litros_min") or "0")
+        )
+        raw_max = (
+            reg_cred.get("litros_maximo")
+            if reg_cred.get("litros_maximo") not in (None, "")
+            else reg_cred.get("litros_max")
+        )
+        l_max = Decimal(str(raw_max)) if raw_max not in (None, "") else None
+        if l_min <= total_litros and (l_max is None or total_litros <= l_max):
+            dias_val = int(
+                Decimal(
+                    str(reg_cred.get("dias_credito_max") or reg_cred.get("dias_max") or "0")
+                )
+            )
+            candidatos_cred.append(dias_val)
+    max_dias_credito: int | None = max(candidatos_cred) if candidatos_cred else None
+    dias_credito_cumple = True
     if (
         dias_credito_solicitados is not None
         and max_dias_credito is not None
         and dias_credito_solicitados > max_dias_credito
     ):
+        dias_credito_cumple = False
         alertas_globales.append(
             f"Plazo de crédito solicitado ({dias_credito_solicitados} días) excede el máximo "
             f"permitido por motor ({max_dias_credito} días para {total_litros:g} L)."
+        )
+    if (
+        dias_credito_solicitados is not None
+        and dias_credito_solicitados > 0
+        and partner_odoo_id is None
+        and (es_primera_compra is True or hist["ordenes_previas"] == 0)
+    ):
+        dias_credito_cumple = False
+        alertas_globales.append(
+            f"Crédito solicitado ({dias_credito_solicitados} días) para cliente nuevo / "
+            "sin ficha verificada en Odoo: requiere aprobación en CxC."
         )
 
     # Mapas rápidos de reglas por código
@@ -1122,6 +1280,17 @@ def evaluar_descuentos_cotizacion(
                 p_it["excluido_por"] = ganadores[0]["codigo"]
                 p_it["alerta"] = f"{p_it['alerta']} {msg_ex}".strip()
 
+    # Conflicto entre días de crédito solicitados y descuentos de Pronto Pago / Contado
+    if dias_credito_solicitados is not None and dias_credito_solicitados > 0:
+        for it in evaluados:
+            if it["familia"] == "pronto_pago" or it["componente"] in ("contado", "contado_ves"):
+                it["cumple"] = False
+                msg_cred_pp = (
+                    f"Conflicto de plazo: crédito de {dias_credito_solicitados} día(s) "
+                    f"no es compatible con Pronto Pago / Contado."
+                )
+                it["alerta"] = f"{it['alerta']} {msg_cred_pp}".strip()
+
     # Evitar duplicar dos tramos de la misma familia (ej. 2 tramos de Recompra o Volumen)
     for fam_unica in ("recompra", "volumen", "diferencial", "pronto_pago"):
         misma_fam = [it for it in evaluados if it["familia"] == fam_unica]
@@ -1140,11 +1309,34 @@ def evaluar_descuentos_cotizacion(
     todas_alertas = list(alertas_globales)
     total_descuentos = Decimal("0")
     for it in evaluados:
+        it["familia_label"] = _FAMILIA_LABELS.get(str(it.get("familia") or ""), "Descuento")
         if it["alerta"]:
             todas_alertas.append(f"[{it['codigo']}] {it['alerta']}")
         if not it.get("excluido_por") and not it["es_obsequio"]:
             # Proyecta el descuento elegido salvo exclusión, registrando alertas del motor.
             total_descuentos += Decimal(str(it["monto_estimado_usd"]))
+
+    espec_evaluados: list[dict[str, Any]] = []
+    for esp in espec_limpios:
+        pct_e = Decimal(str(esp["porcentaje"]))
+        m_e = (
+            q2(subtotal_lista * pct_e / Decimal("100"))
+            if pct_e > Decimal("0")
+            else q2(Decimal(str(esp["monto_usd"])))
+        )
+        item_e = {
+            **esp,
+            "familia": "especial",
+            "familia_label": _FAMILIA_LABELS["especial"],
+            "monto_estimado_usd": float(m_e),
+            "requiere_aprobacion": True,
+        }
+        espec_evaluados.append(item_e)
+        total_descuentos += m_e
+        todas_alertas.append(
+            f"[ESPECIAL] {esp['motivo']} ({pct_e:g}% / -${m_e:.2f}): "
+            "requiere aprobación administrativa en CxC."
+        )
 
     if total_descuentos > subtotal_lista:
         total_descuentos = subtotal_lista
@@ -1154,12 +1346,18 @@ def evaluar_descuentos_cotizacion(
     total_con_iva = q2(subtotal_neto + monto_iva)
     total_con_iva_ves = q2(total_con_iva * tasa_bcv) if tasa_bcv is not None else None
 
-    cumple_todo = all(bool(it["cumple"]) for it in evaluados)
+    cumple_todo = (
+        all(bool(it["cumple"]) for it in evaluados)
+        and dias_credito_cumple
+        and len(espec_evaluados) == 0
+    )
 
     return {
         "lista_precios_id": lista_precios_id,
         "lista_precios_nombre": lista_precios_nombre,
         "moneda_lista": moneda_lista,
+        "ruta_pago": ruta_pago,
+        "ruta_pago_label": ruta_pago_label,
         "tasa_bcv": float(tasa_bcv) if tasa_bcv is not None else None,
         "subtotal_lista": float(subtotal_lista),
         "total_descuentos": float(total_descuentos),
@@ -1169,8 +1367,12 @@ def evaluar_descuentos_cotizacion(
         "total_con_iva_ves": float(total_con_iva_ves) if total_con_iva_ves is not None else None,
         "total_litros": float(total_litros),
         "max_dias_credito_sugerido": max_dias_credito,
+        "dias_credito_solicitados": dias_credito_solicitados,
+        "dias_credito_cumple": dias_credito_cumple,
         "cumple_todo": cumple_todo,
+        "requiere_aprobacion_manual": not cumple_todo,
         "descuentos": evaluados,
+        "descuentos_especiales": espec_evaluados,
         "alertas": todas_alertas,
         "cliente_cxc": {
             "cliente_encontrado": hist["cliente_encontrado"],

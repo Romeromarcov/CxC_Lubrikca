@@ -2412,7 +2412,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // el backend (ver saldo_cxc en app.py): la lista con la que nació
         // la orden, o Real Factura/Real Orden como fallback si esa lista
         // no tiene teórico calculado todavía.
-        const esUsdNacimiento = !!item.nacio_en_lista_usd;
+        const esBinanceRuta = (item.ruta_pago === 'binance') || (!item.ruta_pago && !!item.nacio_en_lista_usd);
+        const esUsdNacimiento = esBinanceRuta;
         const netaNativaTeorica = esUsdNacimiento ? item.usd_neta_teorica_iva : item.ves_neta_teorica_iva;
         const refKey = netaNativaTeorica != null
             ? (esUsdNacimiento ? 'usd' : 'ves')
@@ -2420,12 +2421,16 @@ document.addEventListener("DOMContentLoaded", () => {
         const refBadge = (key) => key === refKey
             ? ' <span title="Esta es la referencia que alimenta el Saldo CxC consolidado de la orden" style="color:#b45309;">★</span>'
             : '';
+        const rutaBadgeDet = esBinanceRuta
+            ? '<span class="state-badge" style="background:#fef3c7;color:#92400e;font-weight:700;">🔒 Ruta Binance (USD)</span>'
+            : '<span class="state-badge" style="background:#dbeafe;color:#1e40af;font-weight:700;">🔒 Ruta BCV (VES)</span>';
 
         cont.innerHTML = `
             <div style="display:flex;flex-wrap:wrap;gap:0.9rem 1.5rem;padding:0.85rem 1rem;background:#f8fafc;border-radius:10px;border:1px solid hsl(var(--border-card));margin-bottom:0.25rem;">
                 ${campo('Vendedor', item.vendedor || 'Sin Vendedor')}
                 ${campo('Fecha de orden', item.fecha || '—')}
                 ${campo('Lista aplicada', item.lista_aplicada_label || '—', item.lista_aplicada ?? '')}
+                ${campo('Ruta de Pago', rutaBadgeDet, 'Restricción bidireccional estricta')}
                 ${campo('Validación Orden', `<span style="color:${valColor(item.descuento_validacion_orden)};font-weight:600;">${valLabel(item.descuento_validacion_orden)}</span>`)}
                 ${campo('Validación Factura', `<span style="color:${valColor(item.descuento_validacion_factura)};font-weight:600;">${valLabel(item.descuento_validacion_factura)}</span>`)}
                 ${campo('Diferencia', `<strong style="color:${difColor};">${fmt(item.diferencia)}</strong>`, 'Venta teórica (lista aplicada) + IVA − Facturado Neto')}
@@ -2446,8 +2451,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         </tr>
                     </thead>
                     <tbody>
-                        <tr>
-                            <td>Teórico VES (BCV)${refBadge('ves')}</td>
+                        <tr style="${esBinanceRuta ? 'opacity:0.5;' : ''}">
+                            <td>Teórico VES (BCV)${refBadge('ves')}${esBinanceRuta ? ' <small style="color:#64748b;">(no aplica)</small>' : ''}</td>
                             <td style="text-align:right">${naVal(item.ves_bruta_teorica)}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_teorico_ves, item.descuento_teorico_ves_pct)}</td>
                             <td style="text-align:right">${naVal(item.ves_neta_teorica)}</td>
@@ -2456,8 +2461,8 @@ document.addEventListener("DOMContentLoaded", () => {
                             <td style="text-align:right"><strong>${naVal(saldoTeoricoVes)}</strong></td>
                             <td style="text-align:right">${item.estatus_pago_teorico_ves ?? '—'}</td>
                         </tr>
-                        <tr>
-                            <td>Teórico USD (Binance)${refBadge('usd')}</td>
+                        <tr style="${!esBinanceRuta ? 'opacity:0.5;' : ''}">
+                            <td>Teórico USD (Binance)${refBadge('usd')}${!esBinanceRuta ? ' <small style="color:#64748b;">(no aplica)</small>' : ''}</td>
                             <td style="text-align:right">${naVal(item.usd_bruta_teorica)}</td>
                             <td style="text-align:right">${descMontoPct(item.descuento_teorico_usd, item.descuento_teorico_usd_pct)}</td>
                             <td style="text-align:right">${naVal(item.usd_neta_teorica)}</td>
@@ -4471,7 +4476,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!body) return;
 
         try {
-            body.innerHTML = '<tr><td colspan="5" class="table-empty">Cargando...</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" class="table-empty">Cargando...</td></tr>';
             const [plRes, mapRes] = await Promise.all([
                 fetch('/api/config/listas-precio'),
                 fetch('/api/config/pricelist-mapeo')
@@ -4480,6 +4485,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const mapData = await mapRes.json();
             pintarHuecos(mapData.huecos_cobertura);
             const mapeo = mapData.mapeo || {};
+            const rutasPorLista = mapData.rutas_por_lista || {};
 
             const histCheckbox = document.getElementById("cfg-historical-pricelist-enabled");
             if (histCheckbox) {
@@ -4487,17 +4493,23 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             if (!Array.isArray(pricelists) || pricelists.length === 0) {
-                body.innerHTML = '<tr><td colspan="5" class="table-empty">No se encontraron listas de precios en Odoo.</td></tr>';
+                body.innerHTML = '<tr><td colspan="8" class="table-empty">No se encontraron listas de precios en Odoo.</td></tr>';
                 return;
             }
 
             body.innerHTML = pricelists.map(pl => {
                 const fila = mapeo[String(pl.id)] || { moneda: "", categoria: "", vigente: false };
+                const nomUp = String(pl.name || "").toUpperCase();
+                const rutaInf = nomUp.includes("USD") && !nomUp.includes("VES")
+                    ? "binance"
+                    : (nomUp.includes("VES") && !nomUp.includes("USD") ? "bcv" : (fila.moneda === "usd" ? "binance" : (fila.moneda === "ves" ? "bcv" : "")));
+                const rutaAct = fila.ruta || rutasPorLista[String(pl.id)] || rutaInf;
+                const nomEsc = String(pl.name || "").replace(/"/g, "&quot;");
                 const estado = pl.active === false
                     ? '<span style="color:#dc2626; font-weight:700;" title="Lista archivada en Odoo -- sus precios pueden estar congelados">⚠ Archivada</span>'
                     : '<span style="color:#059669;">✓ Vigente en Odoo</span>';
                 return `
-                    <tr data-pricelist-id="${pl.id}">
+                    <tr data-pricelist-id="${pl.id}" data-pricelist-name="${nomEsc}">
                         <td><strong>#${pl.id}</strong> ${pl.name} (${pl.moneda})</td>
                         <td>${estado}</td>
                         <td>
@@ -4505,6 +4517,13 @@ document.addEventListener("DOMContentLoaded", () => {
                                 <option value="" ${fila.moneda === "" ? "selected" : ""}>—</option>
                                 <option value="usd" ${fila.moneda === "usd" ? "selected" : ""}>USD</option>
                                 <option value="ves" ${fila.moneda === "ves" ? "selected" : ""}>VES</option>
+                            </select>
+                        </td>
+                        <td>
+                            <select class="pm-ruta" style="padding:0.3rem; font-weight:600; color:${rutaAct === "binance" ? "#92400e" : "#1e40af"};">
+                                <option value="" ${rutaAct === "" ? "selected" : ""}>Auto</option>
+                                <option value="bcv" ${rutaAct === "bcv" ? "selected" : ""}>Ruta BCV (VES)</option>
+                                <option value="binance" ${rutaAct === "binance" ? "selected" : ""}>Ruta Binance (USD)</option>
                             </select>
                         </td>
                         <td>
@@ -4562,8 +4581,37 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         } catch (err) {
             console.error("Error cargando mapeo de listas:", err);
-            body.innerHTML = '<tr><td colspan="7" class="table-empty" style="color:#ef4444;">Error al cargar listas.</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" class="table-empty" style="color:#ef4444;">Error al cargar listas.</td></tr>';
         }
+    };
+
+    window.autoAsignarRutasListas = function() {
+        const rows = document.querySelectorAll("#pricelist-mapeo-table-body tr[data-pricelist-id]");
+        let cambios = 0;
+        rows.forEach(row => {
+            const nom = String(row.dataset.pricelistName || "").toUpperCase();
+            const selMon = row.querySelector(".pm-moneda");
+            const selRuta = row.querySelector(".pm-ruta");
+            if (!selRuta) return;
+            let nuevaRuta = "";
+            if (nom.includes("USD") && !nom.includes("VES")) {
+                nuevaRuta = "binance";
+                if (selMon && !selMon.value) selMon.value = "usd";
+            } else if (nom.includes("VES") && !nom.includes("USD")) {
+                nuevaRuta = "bcv";
+                if (selMon && !selMon.value) selMon.value = "ves";
+            } else if (selMon?.value === "usd") {
+                nuevaRuta = "binance";
+            } else if (selMon?.value === "ves") {
+                nuevaRuta = "bcv";
+            }
+            if (nuevaRuta) {
+                selRuta.value = nuevaRuta;
+                selRuta.style.color = nuevaRuta === "binance" ? "#92400e" : "#1e40af";
+                cambios += 1;
+            }
+        });
+        alert(`✅ Regla VES→BCV / USD→Binance aplicada a ${cambios} lista(s). Pulsa "Guardar Mapeo de Listas" para confirmar.`);
     };
 
     window.savePricelistMapeo = async function(event) {
@@ -4575,6 +4623,8 @@ document.addEventListener("DOMContentLoaded", () => {
             mapeo[pid] = {
                 moneda: row.querySelector(".pm-moneda")?.value || "",
                 categoria: row.querySelector(".pm-categoria")?.value || "",
+                ruta: row.querySelector(".pm-ruta")?.value || "",
+                nombre: row.dataset.pricelistName || "",
                 vigente: row.querySelector(".pm-vigente")?.checked || false,
                 // Sin estas dos, guardar el mapeo borraba las vigencias y
                 // el teórico volvía a compararse contra las listas de hoy.
@@ -7642,10 +7692,12 @@ document.addEventListener("DOMContentLoaded", () => {
     let _docsItems = [];
     let _docsLineasEdit = [];
     let _docsCatalogoCache = [];
+    let _docsListasPrecio = [];
     let _docsDescuentosCatalogo = [];
     let _docsDescuentosSel = new Set();
+    let _docsEspecialesEdit = [];
     let _docsPuedeAprobar = false;
-    let _docsListaDefecto = { id: "21", nombre: "Pago VES Nov 2026", moneda: "VES" };
+    let _docsListaDefecto = { id: "21", nombre: "Pago VES Nov 2026", moneda: "VES", ruta_pago: "bcv" };
     let _docsCargadoUnaVez = false;
     let _tEvalDescuentos = null;
 
@@ -7672,25 +7724,157 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!listaDef || !listaDef.nombre) return;
         _docsListaDefecto = listaDef;
         const opt = document.getElementById("doc-opt-lista-ves");
-        if (opt) opt.textContent = `${listaDef.nombre} (Comercial por defecto)`;
+        if (opt) opt.textContent = `${listaDef.nombre} (${listaDef.moneda || "VES"} · Ruta BCV)`;
     }
 
-    async function _cargarCatalogoInicialDocs() {
+    function _getListaSeleccionadaInfo() {
+        const sel = document.getElementById("doc-f-lista-precios");
+        const monHidden = document.getElementById("doc-f-moneda");
+        if (sel && sel.selectedIndex >= 0) {
+            const opt = sel.options[sel.selectedIndex];
+            const lid = String(sel.value || _docsListaDefecto.id || "21");
+            const found = _docsListasPrecio.find((x) => String(x.id) === lid);
+            if (found) {
+                return {
+                    id: String(found.id),
+                    nombre: found.nombre || opt.textContent || lid,
+                    moneda: String(found.moneda || "VES").toUpperCase(),
+                    ruta_pago: found.ruta_pago || (String(found.moneda || "").toUpperCase() === "USD" ? "binance" : "bcv"),
+                    ruta_pago_label: found.ruta_pago_label || (found.ruta_pago === "binance" ? "Ruta Binance (USD)" : "Ruta BCV (VES)"),
+                };
+            }
+            const monOpt = String(opt?.dataset?.moneda || monHidden?.value || "VES").toUpperCase();
+            const rutaOpt = opt?.dataset?.ruta || (monOpt === "USD" ? "binance" : "bcv");
+            return {
+                id: lid,
+                nombre: (opt?.textContent || lid).split(" (")[0].trim(),
+                moneda: monOpt,
+                ruta_pago: rutaOpt,
+                ruta_pago_label: rutaOpt === "binance" ? "Ruta Binance (USD)" : "Ruta BCV (VES)",
+            };
+        }
+        const mon = String(monHidden?.value || "VES").toUpperCase();
+        return {
+            id: mon === "USD" ? "USD" : (_docsListaDefecto.id || "21"),
+            nombre: mon === "USD" ? "Pago USD Comercial" : (_docsListaDefecto.nombre || "Pago VES"),
+            moneda: mon,
+            ruta_pago: mon === "USD" ? "binance" : "bcv",
+            ruta_pago_label: mon === "USD" ? "Ruta Binance (USD)" : "Ruta BCV (VES)",
+        };
+    }
+
+    function _actualizarBadgeRutaDoc() {
+        const info = _getListaSeleccionadaInfo();
+        const monHidden = document.getElementById("doc-f-moneda");
+        if (monHidden) monHidden.value = info.moneda;
+        const badgeBox = document.getElementById("doc-f-ruta-badge");
+        if (!badgeBox) return;
+        const esBin = info.ruta_pago === "binance";
+        const bg = esBin ? "#fef3c7" : "#dbeafe";
+        const fg = esBin ? "#92400e" : "#1e40af";
+        const bd = esBin ? "#fcd34d" : "#bfdbfe";
+        const aviso = esBin
+            ? "Solo podrá cobrarse por Ruta Binance (bloquea pagos BCV)"
+            : "Solo podrá cobrarse por Ruta BCV (bloquea pagos Binance)";
+        badgeBox.innerHTML = `<span style="display:inline-block; background:${bg}; color:${fg}; border:1px solid ${bd}; padding:2px 8px; border-radius:99px; font-weight:700;">🔒 ${_capEsc(info.ruta_pago_label)}</span> <span style="color:#64748b;">${aviso}</span>`;
+    }
+
+    function _renderSelectListasPrecio(selectedId = null, monFallback = "VES") {
+        const sel = document.getElementById("doc-f-lista-precios");
+        if (!sel) return;
+        const listas = _docsListasPrecio.length
+            ? _docsListasPrecio
+            : [
+                {
+                    id: String(_docsListaDefecto.id || "21"),
+                    nombre: _docsListaDefecto.nombre || "Pago VES Nov 2026",
+                    moneda: "VES",
+                    ruta_pago: "bcv",
+                    ruta_pago_label: "Ruta BCV (VES)",
+                },
+                {
+                    id: "USD",
+                    nombre: "Pago USD Comercial",
+                    moneda: "USD",
+                    ruta_pago: "binance",
+                    ruta_pago_label: "Ruta Binance (USD)",
+                },
+            ];
+        const targetId = selectedId != null && String(selectedId).trim() !== ""
+            ? String(selectedId).trim()
+            : (String(monFallback || "").toUpperCase() === "USD"
+                ? String((listas.find((l) => String(l.moneda).toUpperCase() === "USD") || {}).id || "USD")
+                : String(_docsListaDefecto.id || listas[0]?.id || "21"));
+        const opts = [...listas];
+        if (targetId && !opts.some((l) => String(l.id) === targetId)) {
+            const monT = String(monFallback || "VES").toUpperCase();
+            opts.push({
+                id: targetId,
+                nombre: `Lista #${targetId}`,
+                moneda: monT,
+                ruta_pago: monT === "USD" ? "binance" : "bcv",
+                ruta_pago_label: monT === "USD" ? "Ruta Binance (USD)" : "Ruta BCV (VES)",
+            });
+        }
+        sel.innerHTML = opts.map((l) => {
+            const esBin = l.ruta_pago === "binance" || (String(l.moneda || "").toUpperCase() === "USD" && l.ruta_pago !== "bcv");
+            const rutaTxt = esBin ? "Ruta Binance" : "Ruta BCV";
+            const idStr = String(l.id);
+            return `<option value="${_capEsc(idStr)}" data-moneda="${_capEsc(l.moneda || "VES")}" data-ruta="${esBin ? "binance" : "bcv"}" ${idStr === targetId ? "selected" : ""}>${_capEsc(l.nombre || idStr)} (${_capEsc(l.moneda || "VES")} · ${rutaTxt})</option>`;
+        }).join("");
+        if (targetId) sel.value = targetId;
+        _actualizarBadgeRutaDoc();
+    }
+
+    function _precioCatalogoParaLista(prod, listaId, monFallback) {
+        if (!prod) return 0;
+        const mapa = prod.precios_por_lista || {};
+        const lid = String(listaId || "");
+        if (lid && mapa[lid] != null && Number(mapa[lid]) > 0) {
+            return Number(mapa[lid]) || 0;
+        }
+        return Number(String(monFallback || "").toUpperCase() === "USD" ? prod.precio_usd : prod.precio_ves) || 0;
+    }
+
+    async function _recargarDescuentosParaLista(listaId, soloLectura = false) {
         try {
-            const [resCat, resDesc] = await Promise.all([
+            const qs = listaId ? `?lista_precios_id=${encodeURIComponent(listaId)}` : "";
+            const res = await fetch(`/api/documentos/descuentos/catalogo${qs}`);
+            if (res.ok) {
+                const dataD = await res.json();
+                _docsDescuentosCatalogo = dataD.items || [];
+                _renderSelectorDescuentos(soloLectura);
+            }
+        } catch (_e) { /* silencioso */ }
+    }
+
+    async function _cargarCatalogoInicialDocs(listaIdPref = null) {
+        try {
+            const qsDesc = listaIdPref ? `?lista_precios_id=${encodeURIComponent(listaIdPref)}` : "";
+            const [resCat, resDesc, resListas] = await Promise.all([
                 _docsCatalogoCache.length ? Promise.resolve(null) : fetch("/api/documentos/catalogo?limit=500"),
-                _docsDescuentosCatalogo.length ? Promise.resolve(null) : fetch("/api/documentos/descuentos/catalogo"),
+                (!_docsDescuentosCatalogo.length || listaIdPref) ? fetch(`/api/documentos/descuentos/catalogo${qsDesc}`) : Promise.resolve(null),
+                _docsListasPrecio.length ? Promise.resolve(null) : fetch("/api/documentos/listas-precio"),
             ]);
             if (resCat && resCat.ok) {
                 const data = await resCat.json();
                 _docsCatalogoCache = data.items || [];
                 _actualizarEtiquetaListaDefecto(data.lista_defecto);
+                if (Array.isArray(data.listas_activas) && data.listas_activas.length && !_docsListasPrecio.length) {
+                    _docsListasPrecio = data.listas_activas;
+                }
+            }
+            if (resListas && resListas.ok) {
+                const dataL = await resListas.json();
+                _docsListasPrecio = dataL.items || _docsListasPrecio;
+                _actualizarEtiquetaListaDefecto(dataL.lista_defecto);
             }
             if (resDesc && resDesc.ok) {
                 const dataD = await resDesc.json();
                 _docsDescuentosCatalogo = dataD.items || [];
                 _actualizarEtiquetaListaDefecto(dataD.lista_defecto);
             }
+            _renderSelectListasPrecio(listaIdPref || (document.getElementById("doc-f-lista-precios") || {}).value || null);
             _renderSelectorDescuentos();
         } catch (_e) { /* silencioso */ }
         return _docsCatalogoCache;
@@ -7706,6 +7890,27 @@ document.addEventListener("DOMContentLoaded", () => {
         return `<div style="border-left:4px solid ${borde}; background:${bg}; color:${color}; padding:0.6rem 0.9rem; border-radius:6px; font-size:0.88rem; margin-bottom:0.35rem;">${icono} ${_capEsc(texto)}</div>`;
     }
 
+    function _renderDescuentosEspeciales(soloLectura = false) {
+        const cont = document.getElementById("doc-especiales-lista");
+        const btnAdd = document.getElementById("doc-btn-add-especial");
+        const inpMot = document.getElementById("doc-esp-motivo");
+        const inpPct = document.getElementById("doc-esp-pct");
+        if (btnAdd) btnAdd.disabled = soloLectura;
+        if (inpMot) inpMot.disabled = soloLectura;
+        if (inpPct) inpPct.disabled = soloLectura;
+        if (!cont) return;
+        if (!_docsEspecialesEdit.length) {
+            cont.innerHTML = `<span style="color:#64748b; font-size:0.78rem;">Sin descuentos especiales agregados.</span>`;
+            return;
+        }
+        cont.innerHTML = _docsEspecialesEdit.map((esp, i) => `
+            <span style="display:inline-flex; align-items:center; gap:6px; background:#fef3c7; border:1px solid #f59e0b; color:#92400e; padding:3px 9px; border-radius:99px; font-size:0.79rem; font-weight:600;">
+                ⚡ ${_capEsc(esp.motivo)}: -${Number(esp.porcentaje || 0).toFixed(2)}%
+                ${soloLectura ? "" : `<button type="button" data-doc-esp-del="${i}" style="background:none; border:none; color:#991b1b; cursor:pointer; font-weight:800; padding:0;">×</button>`}
+            </span>
+        `).join("");
+    }
+
     function _renderSelectorDescuentos(soloLectura = false) {
         const cont = document.getElementById("doc-descuentos-lista");
         if (!cont) return;
@@ -7713,18 +7918,33 @@ document.addEventListener("DOMContentLoaded", () => {
             cont.innerHTML = `<span style="color:#64748b; font-size:0.84rem;">No hay reglas activas en el catálogo de descuentos.</span>`;
             return;
         }
-        cont.innerHTML = _docsDescuentosCatalogo.map((d) => {
-            const checked = _docsDescuentosSel.has(d.codigo) ? "checked" : "";
-            const benef = d.es_obsequio
-                ? _capEsc(d.obsequio_detalle || "Obsequio")
-                : `-${Number(d.porcentaje || 0).toFixed(2)}%`;
-            return `<label style="display:flex; align-items:flex-start; gap:0.5rem; padding:0.5rem 0.65rem; background:#fff; border:1px solid ${checked ? "#2563eb" : "#e2e8f0"}; border-radius:6px; cursor:${soloLectura ? "default" : "pointer"}; font-size:0.82rem;">
-                <input type="checkbox" data-doc-desc-cod="${_capEsc(d.codigo)}" ${checked} ${soloLectura ? "disabled" : ""} style="margin-top:3px;">
-                <div>
-                    <div><strong>[${_capEsc(d.codigo)}]</strong> ${_capEsc(d.titulo)} <strong style="color:#15803d;">(${benef})</strong></div>
-                    <div style="color:#64748b; font-size:0.75rem;">${_capEsc(d.condicion || "")}</div>
-                </div>
-            </label>`;
+        const grupos = {};
+        _docsDescuentosCatalogo.forEach((d) => {
+            const famLbl = d.familia_label || d.familia || "Otros";
+            if (!grupos[famLbl]) grupos[famLbl] = [];
+            grupos[famLbl].push(d);
+        });
+        cont.innerHTML = Object.entries(grupos).map(([famLbl, reglas]) => {
+            const cards = reglas.map((d) => {
+                const checked = _docsDescuentosSel.has(d.codigo) ? "checked" : "";
+                const benef = d.es_obsequio
+                    ? _capEsc(d.obsequio_detalle || "Obsequio")
+                    : `-${Number(d.porcentaje || 0).toFixed(2)}%`;
+                const aplicaChip = d.aplica_lista_actual === false
+                    ? `<span style="background:#fee2e2; color:#991b1b; padding:0 5px; border-radius:4px; font-size:0.68rem; margin-left:4px;">Otra lista</span>`
+                    : "";
+                return `<label style="display:flex; align-items:flex-start; gap:0.5rem; padding:0.45rem 0.6rem; background:#fff; border:1px solid ${checked ? "#2563eb" : "#e2e8f0"}; border-radius:6px; cursor:${soloLectura ? "default" : "pointer"}; font-size:0.8rem; opacity:${d.aplica_lista_actual === false ? "0.75" : "1"};">
+                    <input type="checkbox" data-doc-desc-cod="${_capEsc(d.codigo)}" ${checked} ${soloLectura ? "disabled" : ""} style="margin-top:3px;">
+                    <div>
+                        <div><strong>[${_capEsc(d.codigo)}]</strong> ${_capEsc(d.titulo)} <strong style="color:#15803d;">(${benef})</strong>${aplicaChip}</div>
+                        <div style="color:#64748b; font-size:0.73rem;">${_capEsc(d.condicion || "")}</div>
+                    </div>
+                </label>`;
+            }).join("");
+            return `<div style="grid-column: 1 / -1; background:#ffffffaa; border:1px solid #e2e8f0; border-radius:8px; padding:0.55rem 0.65rem;">
+                <div style="font-size:0.78rem; font-weight:700; color:#334155; margin-bottom:0.4rem;">📂 ${_capEsc(famLbl)}</div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:0.45rem;">${cards}</div>
+            </div>`;
         }).join("");
     }
 
@@ -7735,6 +7955,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function _evaluarMotorEnVivo() {
         const alertBox = document.getElementById("doc-descuentos-alertas");
+        const verBox = document.getElementById("doc-politica-veredicto");
+        const topeBox = document.getElementById("doc-f-credito-tope");
         const elDesc = document.getElementById("doc-resumen-descuentos");
         const elNeto = document.getElementById("doc-resumen-neto");
         const elIva = document.getElementById("doc-resumen-iva");
@@ -7754,6 +7976,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!_docsLineasEdit.length) {
             if (alertBox) alertBox.innerHTML = "";
+            if (verBox) verBox.innerHTML = "";
+            if (topeBox) topeBox.textContent = "Tope por volumen: agrega productos para calcular";
             if (elDesc) elDesc.textContent = "-$0.00";
             if (elNeto) elNeto.textContent = "$0.00";
             if (elIva) elIva.textContent = "$0.00";
@@ -7762,20 +7986,27 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const pidRaw = (document.getElementById("doc-f-partner-id") || {}).value || "";
-        const mon = (document.getElementById("doc-f-moneda") || {}).value || "VES";
+        const infoL = _getListaSeleccionadaInfo();
+        const diasCred = Math.max(0, Number((document.getElementById("doc-f-dias-credito") || {}).value || 0) || 0);
         try {
             const res = await fetch("/api/documentos/descuentos/evaluar", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    moneda_lista: mon,
-                    lista_precios_id: mon === "VES" ? _docsListaDefecto.id : "USD",
-                    lista_precios_nombre: mon === "VES" ? _docsListaDefecto.nombre : "Pago USD Comercial",
+                    moneda_lista: infoL.moneda,
+                    lista_precios_id: infoL.id,
+                    lista_precios_nombre: infoL.nombre,
+                    dias_credito: diasCred,
                     partner_odoo_id: pidRaw ? Number(pidRaw) : null,
                     cliente_nombre: (document.getElementById("doc-f-cliente") || {}).value || "",
                     rif: (document.getElementById("doc-f-rif") || {}).value || "",
+                    email: (document.getElementById("doc-f-email") || {}).value || "",
+                    direccion: (document.getElementById("doc-f-direccion") || {}).value || "",
+                    latitud: (document.getElementById("doc-f-lat") || {}).value ? Number(document.getElementById("doc-f-lat").value) : null,
+                    longitud: (document.getElementById("doc-f-lon") || {}).value ? Number(document.getElementById("doc-f-lon").value) : null,
                     es_primera_compra: !pidRaw || (document.getElementById("doc-f-tipo-contacto") || {}).value === "prospecto",
                     descuentos_codigos: Array.from(_docsDescuentosSel),
+                    descuentos_especiales: _docsEspecialesEdit,
                     lineas: _docsLineasEdit,
                 }),
             });
@@ -7789,12 +8020,35 @@ document.addEventListener("DOMContentLoaded", () => {
             if (elNeto) elNeto.textContent = `$${neto.toFixed(2)}`;
             if (elIva) elIva.textContent = `$${iva.toFixed(2)}`;
             elTot.textContent = `$${tot.toFixed(2)}`;
+            if (topeBox) {
+                if (ev.max_dias_credito_sugerido != null) {
+                    const cumpleCred = ev.dias_credito_cumple !== false;
+                    topeBox.style.color = cumpleCred ? "#059669" : "#dc2626";
+                    topeBox.textContent = `Tope motor por volumen (${Number(ev.total_litros || 0).toFixed(1)} L): hasta ${ev.max_dias_credito_sugerido} días${cumpleCred ? "" : " (EXCEDIDO)"}`;
+                } else {
+                    topeBox.style.color = "#475569";
+                    topeBox.textContent = `Sin tramo de crédito por volumen configurado (${Number(ev.total_litros || 0).toFixed(1)} L)`;
+                }
+            }
+            if (verBox) {
+                const pol = ev.politica_preview;
+                if (pol) {
+                    if (pol.puede_auto_enviar) {
+                        verBox.innerHTML = _docAlertaHtml("ok", "⚡ Política de Pedido: cumple el 100% de parámetros y pasará directo a Odoo al convertir.");
+                    } else {
+                        const mots = (pol.motivos_retencion || []).slice(0, 3).join(" · ");
+                        verBox.innerHTML = _docAlertaHtml("warn", `⏳ Política de Pedido: requerirá revisión y aprobación en CxC (${mots || "parámetros fuera de rango"}).`);
+                    }
+                } else {
+                    verBox.innerHTML = "";
+                }
+            }
             if (alertBox) {
                 const alertas = ev.alertas || [];
                 alertBox.innerHTML = alertas.length
                     ? alertas.map((a) => _docAlertaHtml("warn", a)).join("")
-                    : (_docsDescuentosSel.size
-                        ? _docAlertaHtml("ok", "Todos los descuentos seleccionados cumplen los parámetros actuales del motor CxC.")
+                    : ((_docsDescuentosSel.size || _docsEspecialesEdit.length)
+                        ? _docAlertaHtml("ok", "Todos los parámetros y descuentos cumplen el motor CxC.")
                         : "");
             }
         } catch (_e) { /* silencioso */ }
@@ -7973,12 +8227,20 @@ document.addEventListener("DOMContentLoaded", () => {
         const tipo = "cotizacion";
         _cargarCatalogoInicialDocs();
         _docsDescuentosSel = new Set();
+        _docsEspecialesEdit = [];
         document.getElementById("doc-f-id").value = "";
         document.getElementById("doc-f-partner-id").value = "";
         document.getElementById("doc-f-tipo-contacto").value = "prospecto";
         document.getElementById("doc-f-tipo").value = tipo;
         document.getElementById("doc-f-tipo").disabled = true;
-        document.getElementById("doc-f-moneda").value = "VES";
+        _renderSelectListasPrecio(_docsListaDefecto.id || "21", "VES");
+        const selLp = document.getElementById("doc-f-lista-precios");
+        if (selLp) selLp.disabled = false;
+        const inpCred = document.getElementById("doc-f-dias-credito");
+        if (inpCred) {
+            inpCred.value = "0";
+            inpCred.disabled = false;
+        }
         document.getElementById("doc-buscar-contacto").value = "";
         document.getElementById("doc-f-cliente").value = "";
         document.getElementById("doc-f-rif").value = "";
@@ -7993,13 +8255,16 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("doc-f-observaciones").value = "";
         document.getElementById("doc-editor-mensaje").innerHTML = "";
         document.getElementById("doc-descuentos-alertas").innerHTML = "";
+        const verBox = document.getElementById("doc-politica-veredicto");
+        if (verBox) verBox.innerHTML = "";
         document.getElementById("doc-btn-preview").style.display = "none";
         document.getElementById("doc-btn-convertir").style.display = "none";
         document.getElementById("doc-editor-acciones").style.display = "flex";
         document.getElementById("doc-editor-titulo").textContent = "➕ Nueva Cotización (convertible a Pedido)";
-        document.getElementById("doc-editor-subtitulo").textContent = `Lista por defecto: ${_docsListaDefecto.nombre} · Catálogo real y motor de descuentos CxC`;
+        document.getElementById("doc-editor-subtitulo").textContent = `Elige lista de precios, plazo de crédito y descuentos · Ruta validada por motor CxC`;
         _docsLineasEdit = [];
         _renderSelectorDescuentos(false);
+        _renderDescuentosEspeciales(false);
         _actualizarEtiquetasTipoDoc();
         _renderLineasEditor(false);
         const card = document.getElementById("doc-editor-card");
@@ -8008,23 +8273,31 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.abrirNuevoDocumento = abrirNuevoDocumento;
 
-    async function editarDocumentoPorId(docId) {
-        await _cargarCatalogoInicialDocs();
+    async function editarDocumentoPorId(docId, { paraConvertirAPedido = false } = {}) {
         try {
             const res = await fetch(`/api/documentos/${docId}`);
             const d = await res.json();
             if (!res.ok) throw new Error(d.detail || d.error || `Error ${res.status}`);
+            await _cargarCatalogoInicialDocs(d.lista_precios_id || null);
             if (typeof d.puede_aprobar === "boolean") _docsPuedeAprobar = d.puede_aprobar;
             const enviado = d.estado === "ENVIADO_ODOO";
             const vmSync = (d.validacion_motor && d.validacion_motor.sync_odoo) ? d.validacion_motor.sync_odoo : {};
             const bloqueado = enviado || Boolean(d.confirmado_odoo) || Boolean(d.solo_lectura) || Boolean(vmSync.confirmado_odoo);
             _docsDescuentosSel = new Set((d.descuentos || []).map((x) => x.codigo).filter(Boolean));
+            _docsEspecialesEdit = (d.descuentos_especiales || []).map((e) => ({ ...e }));
             document.getElementById("doc-f-id").value = String(d.id);
             document.getElementById("doc-f-partner-id").value = d.partner_odoo_id ? String(d.partner_odoo_id) : "";
             document.getElementById("doc-f-tipo-contacto").value = d.tipo_contacto || "prospecto";
-            document.getElementById("doc-f-tipo").value = d.tipo || "cotizacion";
+            document.getElementById("doc-f-tipo").value = (paraConvertirAPedido && !bloqueado) ? "pedido" : (d.tipo || "cotizacion");
             document.getElementById("doc-f-tipo").disabled = bloqueado;
-            document.getElementById("doc-f-moneda").value = d.moneda_lista || "VES";
+            _renderSelectListasPrecio(d.lista_precios_id, d.moneda_lista || "VES");
+            const selLp = document.getElementById("doc-f-lista-precios");
+            if (selLp) selLp.disabled = bloqueado;
+            const inpCred = document.getElementById("doc-f-dias-credito");
+            if (inpCred) {
+                inpCred.value = String(Number(d.dias_credito || 0));
+                inpCred.disabled = bloqueado;
+            }
             document.getElementById("doc-buscar-contacto").value = "";
             document.getElementById("doc-f-cliente").value = d.cliente_nombre || "";
             document.getElementById("doc-f-rif").value = d.rif || "";
@@ -8043,6 +8316,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 const prefAuto = d.auto_enviado ? "⚡ Auto-enviado a Odoo" : "🔒 Confirmado en Odoo (solo lectura)";
                 const notaSync = vmSync.ajustado_desde_odoo ? " · Ajustado automáticamente con cambios desde Odoo." : "";
                 msgHtml = _docAlertaHtml("ok", `${prefAuto} como ${d.odoo_order_name || ("#" + (d.odoo_order_id || ""))} (no editable en CxC; descuentos en chatter).${notaSync}`);
+            } else if (paraConvertirAPedido && d.tipo === "cotizacion") {
+                msgHtml = _docAlertaHtml("warn", `Confirmando conversión de ${d.numero} a Pedido: ajusta lista de precios, días de crédito y descuentos antes de pulsar "🛒 Convertir en Pedido".`);
             } else if (d.estado === "PENDIENTE_APROBACION") {
                 const mots = Array.isArray(d.motivos_retencion) && d.motivos_retencion.length
                     ? ` Motivos de retención: ${d.motivos_retencion.join(" · ")}`
@@ -8068,8 +8343,10 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             document.getElementById("doc-editor-acciones").style.display = bloqueado ? "none" : "flex";
-            document.getElementById("doc-editor-titulo").textContent = `${bloqueado ? "🔒" : "✏️"} ${d.numero} · ${d.cliente_nombre}`;
-            document.getElementById("doc-editor-subtitulo").textContent = `Lista: ${d.lista_precios_nombre || d.moneda_lista} · Origen: ${d.origen === "bot" ? "Bot Telegram" : "Web CxC"} · Actualizado: ${_capFechaHora(d.actualizado_en)}`;
+            document.getElementById("doc-editor-titulo").textContent = paraConvertirAPedido
+                ? `🛒 Convertir ${d.numero} a Pedido · ${d.cliente_nombre}`
+                : `${bloqueado ? "🔒" : "✏️"} ${d.numero} · ${d.cliente_nombre}`;
+            document.getElementById("doc-editor-subtitulo").textContent = `Lista: ${d.lista_precios_nombre || d.moneda_lista} · ${d.ruta_pago_label || "Ruta BCV"} · Crédito: ${Number(d.dias_credito || 0)}d`;
             _docsLineasEdit = (d.lineas || []).map((ln) => ({
                 producto_id: ln.producto_id || "",
                 codigo: ln.codigo || "",
@@ -8081,6 +8358,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 descuento_pct: Number(ln.descuento_pct) || 0,
             }));
             _renderSelectorDescuentos(bloqueado);
+            _renderDescuentosEspeciales(bloqueado);
             _actualizarEtiquetasTipoDoc();
             _renderLineasEditor(bloqueado);
             const card = document.getElementById("doc-editor-card");
@@ -8091,6 +8369,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     window.editarDocumentoPorId = editarDocumentoPorId;
+    window.abrirConversionCotizacionAPedido = function(docId) {
+        return editarDocumentoPorId(docId, { paraConvertirAPedido: true });
+    };
 
     function cerrarEditorDocumento() {
         const card = document.getElementById("doc-editor-card");
@@ -8098,20 +8379,19 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.cerrarEditorDocumento = cerrarEditorDocumento;
 
-    async function guardarDocumentoComercial(enviarOdoo = false) {
-        const msg = document.getElementById("doc-editor-mensaje");
-        msg.innerHTML = "";
-        const docId = document.getElementById("doc-f-id").value;
+    function _construirPayloadDocEditor(tipoOverride = null) {
         const pidRaw = document.getElementById("doc-f-partner-id").value;
         const latRaw = document.getElementById("doc-f-lat").value;
         const lonRaw = document.getElementById("doc-f-lon").value;
-        const mon = document.getElementById("doc-f-moneda").value;
-        const tipoDoc = document.getElementById("doc-f-tipo").value;
-        const payload = {
+        const infoL = _getListaSeleccionadaInfo();
+        const tipoDoc = tipoOverride || document.getElementById("doc-f-tipo").value;
+        const diasCred = Math.max(0, Number((document.getElementById("doc-f-dias-credito") || {}).value || 0) || 0);
+        return {
             tipo: tipoDoc,
-            moneda_lista: mon,
-            lista_precios_id: mon === "VES" ? _docsListaDefecto.id : "USD",
-            lista_precios_nombre: mon === "VES" ? _docsListaDefecto.nombre : "Pago USD Comercial",
+            moneda_lista: infoL.moneda,
+            lista_precios_id: infoL.id,
+            lista_precios_nombre: infoL.nombre,
+            dias_credito: diasCred,
             partner_odoo_id: pidRaw ? Number(pidRaw) : null,
             tipo_contacto: document.getElementById("doc-f-tipo-contacto").value || "prospecto",
             es_primera_compra: !pidRaw || document.getElementById("doc-f-tipo-contacto").value === "prospecto",
@@ -8127,8 +8407,17 @@ document.addEventListener("DOMContentLoaded", () => {
             condiciones_negociacion: document.getElementById("doc-f-condiciones").value.trim(),
             observaciones: document.getElementById("doc-f-observaciones").value.trim(),
             descuentos_codigos: Array.from(_docsDescuentosSel),
+            descuentos_especiales: _docsEspecialesEdit,
             lineas: _docsLineasEdit,
         };
+    }
+
+    async function guardarDocumentoComercial(enviarOdoo = false) {
+        const msg = document.getElementById("doc-editor-mensaje");
+        msg.innerHTML = "";
+        const docId = document.getElementById("doc-f-id").value;
+        const payload = _construirPayloadDocEditor(null);
+        const tipoDoc = payload.tipo;
         try {
             const url = docId ? `/api/documentos/${docId}` : "/api/documentos";
             const metodo = docId ? "PUT" : "POST";
@@ -8182,14 +8471,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     window.guardarDocumentoComercial = guardarDocumentoComercial;
 
-    async function convertirDocumentoAPedido(docId) {
+    async function convertirDocumentoAPedido(docId, payloadExtra = {}) {
         const aviso = document.getElementById("docs-aviso-general");
         aviso.innerHTML = "";
         try {
             const res = await fetch(`/api/documentos/${docId}/convertir-pedido`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
+                body: JSON.stringify(payloadExtra || {}),
             });
             const d = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(d.error || d.detail || `Error ${res.status}`);
@@ -8208,8 +8497,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 );
             }
             await (window.loadDocumentosComerciales || loadDocumentosComerciales)();
+            return d;
         } catch (err) {
             aviso.innerHTML = _docAlertaHtml("err", err.message);
+            throw err;
         }
     }
     window.convertirDocumentoAPedido = convertirDocumentoAPedido;
@@ -8217,8 +8508,16 @@ document.addEventListener("DOMContentLoaded", () => {
     async function convertirDocumentoEditorAPedido() {
         const docId = document.getElementById("doc-f-id").value;
         if (!docId) return;
-        document.getElementById("doc-f-tipo").value = "pedido";
-        await guardarDocumentoComercial(false);
+        const msg = document.getElementById("doc-editor-mensaje");
+        msg.innerHTML = "";
+        const payload = _construirPayloadDocEditor("pedido");
+        try {
+            const d = await convertirDocumentoAPedido(docId, payload);
+            cerrarEditorDocumento();
+            return d;
+        } catch (err) {
+            msg.innerHTML = _docAlertaHtml("err", err.message);
+        }
     }
     window.convertirDocumentoEditorAPedido = convertirDocumentoEditorAPedido;
 
@@ -8283,17 +8582,58 @@ document.addEventListener("DOMContentLoaded", () => {
         const selTipoDoc = document.getElementById("doc-f-tipo");
         if (selTipoDoc) selTipoDoc.addEventListener("change", _actualizarEtiquetasTipoDoc);
 
-        const selMonedaDoc = document.getElementById("doc-f-moneda");
-        if (selMonedaDoc) {
-            selMonedaDoc.addEventListener("change", () => {
-                const mon = selMonedaDoc.value;
+        const selListaDoc = document.getElementById("doc-f-lista-precios");
+        if (selListaDoc) {
+            selListaDoc.addEventListener("change", () => {
+                _actualizarBadgeRutaDoc();
+                const info = _getListaSeleccionadaInfo();
                 _docsLineasEdit.forEach((ln) => {
                     const prod = _docsCatalogoCache.find((p) => String(p.producto_id) === String(ln.producto_id));
                     if (prod) {
-                        ln.precio_unitario = Number(mon === "VES" ? prod.precio_ves : prod.precio_usd) || 0;
+                        ln.precio_unitario = _precioCatalogoParaLista(prod, info.id, info.moneda);
                     }
                 });
+                _recargarDescuentosParaLista(info.id, selListaDoc.disabled);
                 _renderLineasEditor(false);
+            });
+        }
+        const inpCred = document.getElementById("doc-f-dias-credito");
+        if (inpCred) inpCred.addEventListener("input", _programarEvaluacionMotor);
+        document.querySelectorAll(".doc-cred-preset").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                if (inpCred && !inpCred.disabled) {
+                    inpCred.value = String(btn.dataset.credDias || "0");
+                    _programarEvaluacionMotor();
+                }
+            });
+        });
+
+        const btnAddEsp = document.getElementById("doc-btn-add-especial");
+        if (btnAddEsp) {
+            btnAddEsp.addEventListener("click", () => {
+                const inpMot = document.getElementById("doc-esp-motivo");
+                const inpPct = document.getElementById("doc-esp-pct");
+                const mot = String(inpMot?.value || "").trim() || "Descuento especial comercial";
+                const pct = Number(inpPct?.value || 0);
+                if (!Number.isFinite(pct) || pct <= 0 || pct > 100) {
+                    alert("Ingresa un porcentaje válido (> 0 y <= 100) para el descuento especial.");
+                    return;
+                }
+                _docsEspecialesEdit.push({ motivo: mot, porcentaje: pct });
+                if (inpMot) inpMot.value = "";
+                if (inpPct) inpPct.value = "";
+                _renderDescuentosEspeciales(false);
+                _programarEvaluacionMotor();
+            });
+        }
+        const boxEsp = document.getElementById("doc-especiales-lista");
+        if (boxEsp) {
+            boxEsp.addEventListener("click", (e) => {
+                const btn = e.target.closest("[data-doc-esp-del]");
+                if (!btn) return;
+                _docsEspecialesEdit.splice(Number(btn.dataset.docEspDel), 1);
+                _renderDescuentosEspeciales(false);
+                _programarEvaluacionMotor();
             });
         }
 
@@ -8403,9 +8743,9 @@ document.addEventListener("DOMContentLoaded", () => {
                         if (!items.length) {
                             boxProd.innerHTML = `<div style="padding:0.6rem 0.85rem; color:#64748b; font-size:0.84rem;">No se encontraron productos con «${_capEsc(q)}» en el catálogo de Odoo.</div>`;
                         } else {
-                            const mon = document.getElementById("doc-f-moneda").value;
+                            const infoL = _getListaSeleccionadaInfo();
                             boxProd.innerHTML = items.map((p, idx) => {
-                                const pr = Number(mon === "VES" ? p.precio_ves : p.precio_usd) || 0;
+                                const pr = _precioCatalogoParaLista(p, infoL.id, infoL.moneda);
                                 let stockBadge = "";
                                 if (p.stock_disponible != null) {
                                     const qty = Number(p.stock_disponible) || 0;
@@ -8440,8 +8780,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (!row || !boxProd._items) return;
                 const p = boxProd._items[Number(row.dataset.docPickProd)];
                 if (!p) return;
-                const mon = document.getElementById("doc-f-moneda").value;
-                const precio = Number(mon === "VES" ? p.precio_ves : p.precio_usd) || 0;
+                const infoL = _getListaSeleccionadaInfo();
+                const precio = _precioCatalogoParaLista(p, infoL.id, infoL.moneda);
                 const existente = _docsLineasEdit.find((x) => String(x.producto_id) === String(p.producto_id));
                 const stockDispPick = p.stock_disponible != null ? Number(p.stock_disponible) : null;
                 if (existente) {

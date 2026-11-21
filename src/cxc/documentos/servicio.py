@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import json
 import logging
 import secrets
 from collections.abc import Callable
@@ -11,6 +13,7 @@ from typing import Any
 
 from cxc.capturas.modelos import vacio, validar_gps
 from cxc.decimal_utils import q2
+from cxc.engine.rutas_pago import RUTA_BCV, etiqueta_ruta, normalizar_ruta, ruta_de_lista
 from cxc.odoo.escritura import EscritorOdoo, OdooEscrituraError
 from cxc.repositories import Repository
 
@@ -98,24 +101,43 @@ def _extraer_codigos_descuento(datos: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(codigos))
 
 
+def _extraer_descuentos_especiales(datos: dict[str, Any]) -> list[dict[str, Any]]:
+    crudos = datos.get("descuentos_especiales")
+    if not isinstance(crudos, list):
+        return []
+    salida: list[dict[str, Any]] = []
+    for item in crudos:
+        if isinstance(item, dict):
+            salida.append(dict(item))
+    return salida
+
+
 def _construir_nota_odoo(doc: DocumentoComercial, *, actor: str, auto_enviado: bool = False) -> str:
     """Construye la nota detallada para el documento y el chatter de Odoo."""
     etiqueta_doc = "Cotización" if doc.tipo == COTIZACION else "Pedido"
     lista_lbl = doc.lista_precios_nombre or f"Lista {doc.moneda_lista}"
+    ruta_lbl = etiqueta_ruta(
+        normalizar_ruta(getattr(doc, "ruta_pago", ""))
+        or ("binance" if str(doc.moneda_lista or "").upper() == "USD" else RUTA_BCV)
+    )
+    dias_c = int(getattr(doc, "dias_credito", 0) or 0)
+    plazo_lbl = "Contado (0 días)" if dias_c <= 0 else f"Crédito {dias_c} día(s)"
     cab_aut = (
         f"Auto-aprobado por política CxC (cumple todos los parámetros · {actor})"
         if auto_enviado
         else f"Autorizado / enviado desde CxC por: {actor}"
     )
     lineas_nota: list[str] = [
-        f"{etiqueta_doc} CxC {doc.numero} · Lista comercial: {lista_lbl}",
+        f"{etiqueta_doc} CxC {doc.numero} · Lista comercial: {lista_lbl} · "
+        f"{ruta_lbl} · {plazo_lbl}",
         cab_aut,
         f"Subtotal precios normales de lista: ${doc.subtotal:.2f}",
     ]
 
     # Descuentos manuales heredados en líneas de CxC (si existieran) + descuentos de catálogo CxC
     desc_lineas_cxc = [ln for ln in doc.lineas if ln.descuento_pct > Decimal("0")]
-    tiene_descuentos = bool(doc.descuentos_elegidos or desc_lineas_cxc)
+    especs = list(getattr(doc, "descuentos_especiales", ()) or ())
+    tiene_descuentos = bool(doc.descuentos_elegidos or especs or desc_lineas_cxc)
 
     if tiene_descuentos:
         lineas_nota.append("")
@@ -137,6 +159,13 @@ def _construir_nota_odoo(doc: DocumentoComercial, *, actor: str, auto_enviado: b
                 lineas_nota.append(
                     f"• [{cod}] {tit}: {pct:.2f}% (-${mto:.2f}){extra_c} [{estado_m}]"
                 )
+        for esp in especs:
+            mot_e = str(esp.get("motivo") or "Descuento especial comercial")
+            pct_e = float(esp.get("porcentaje") or 0.0)
+            mto_e = float(esp.get("monto_estimado_usd") or esp.get("monto_usd") or 0.0)
+            lineas_nota.append(
+                f"• [ESPECIAL] {mot_e}: {pct_e:.2f}% (-${mto_e:.2f}) [Aprobación especial CxC]"
+            )
         for ln in desc_lineas_cxc:
             ahorro_ln = q2(ln.cantidad * ln.precio_unitario * (ln.descuento_pct / Decimal("100")))
             lineas_nota.append(
@@ -193,6 +222,91 @@ class ServicioDocumentos:
                 return res
         return LISTA_POR_DEFECTO_FALLBACK
 
+    def _mapeo_listas_repo(self) -> dict[str, Any]:
+        if self._repo_cxc is None:
+            return {}
+        try:
+            raw = self._repo_cxc.get_config("pricelist_mapeo_unificado")
+            if raw and isinstance(raw, str):
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+        return {}
+
+    def listas_precio_activas(self, *, refresh: bool = False) -> list[dict[str, Any]]:
+        fn = getattr(self._catalogo, "listas_activas", None)
+        if callable(fn):
+            crudo = fn(refresh=refresh) or []
+        else:
+            crudo = [self.lista_comercial_defecto(refresh=refresh)]
+        mapeo = self._mapeo_listas_repo()
+        salida: list[dict[str, Any]] = []
+        for la in crudo:
+            if isinstance(la, ListaComercialActiva):
+                d = la.a_dict()
+                ruta = ruta_de_lista(
+                    la.lista_id,
+                    mapeo,
+                    lista_nombre=la.nombre,
+                    moneda_lista=la.moneda,
+                )
+                d["ruta_pago"] = ruta
+                d["ruta_pago_label"] = etiqueta_ruta(ruta)
+                salida.append(d)
+            elif isinstance(la, dict):
+                lid = str(la.get("id") or "")
+                nom = str(la.get("nombre") or "")
+                mon = str(la.get("moneda") or "VES").upper()
+                ruta = ruta_de_lista(lid, mapeo, lista_nombre=nom, moneda_lista=mon)
+                salida.append(
+                    {
+                        **la,
+                        "ruta_pago": ruta,
+                        "ruta_pago_label": etiqueta_ruta(ruta),
+                    }
+                )
+        if not salida:
+            ld = self.lista_comercial_defecto(refresh=refresh).a_dict()
+            salida.append(ld)
+        return salida
+
+    def _resolver_lista_y_ruta(
+        self,
+        lista_precios_id: Any,
+        moneda_raw: Any,
+        lista_precios_nombre_in: Any,
+    ) -> tuple[str, str, str, str]:
+        lista_def = self.lista_comercial_defecto()
+        lid_in = str(lista_precios_id or "").strip()
+        listas = self.listas_precio_activas()
+        match_la = next((x for x in listas if str(x.get("id")) == lid_in), None) if lid_in else None
+        mon_in = str(moneda_raw or "").strip().upper()
+        if match_la is not None:
+            moneda_lista = str(match_la.get("moneda") or mon_in or "VES").upper()
+            if moneda_lista not in MONEDAS_LISTA:
+                moneda_lista = "VES"
+            lista_id = str(match_la["id"])
+            lista_nom = str(lista_precios_nombre_in or match_la.get("nombre") or lista_def.nombre)
+            ruta = str(match_la.get("ruta_pago") or RUTA_BCV)
+            return lista_id, lista_nom, moneda_lista, ruta
+
+        moneda_lista = mon_in if mon_in in MONEDAS_LISTA else (lista_def.moneda or "VES")
+        if moneda_lista == "VES":
+            lista_id = lid_in or lista_def.lista_id
+            lista_nom = str(lista_precios_nombre_in or lista_def.nombre)
+        else:
+            lista_id = lid_in or "USD"
+            lista_nom = str(lista_precios_nombre_in or "Pago USD Comercial")
+        ruta = ruta_de_lista(
+            lista_id,
+            self._mapeo_listas_repo(),
+            lista_nombre=lista_nom,
+            moneda_lista=moneda_lista,
+        )
+        return lista_id, lista_nom, moneda_lista, ruta
+
     def catalogo_items(self, *, refresh: bool = False) -> list[ItemCatalogo]:
         return self._catalogo.listar(refresh=refresh)
 
@@ -201,16 +315,10 @@ class ServicioDocumentos:
         return obtener_catalogo_descuentos(self._repo_cxc, lista_precios_id=lid)
 
     def evaluar_descuentos(self, datos: dict[str, Any]) -> dict[str, Any]:
-        lista_def = self.lista_comercial_defecto()
-        moneda_raw = str(datos.get("moneda_lista") or lista_def.moneda or "VES").strip().upper()
-        moneda_lista = moneda_raw if moneda_raw in MONEDAS_LISTA else "VES"
-        lista_id = str(
-            datos.get("lista_precios_id")
-            or (lista_def.lista_id if moneda_lista == "VES" else "USD")
-        )
-        lista_nom = str(
-            datos.get("lista_precios_nombre")
-            or (lista_def.nombre if moneda_lista == "VES" else "Lista Comercial USD")
+        lista_id, lista_nom, moneda_lista, ruta_pago = self._resolver_lista_y_ruta(
+            datos.get("lista_precios_id"),
+            datos.get("moneda_lista"),
+            datos.get("lista_precios_nombre"),
         )
 
         # Enriquece las líneas contra el catálogo real para tener precio, marca, envase y litros
@@ -236,7 +344,12 @@ class ServicioDocumentos:
                 else None
             )
             if elegido is not None:
-                precio_cat = elegido.precio_usd if moneda_lista == "USD" else elegido.precio_ves
+                fn_p_lista = getattr(elegido, "precio_para_lista", None)
+                precio_cat = (
+                    fn_p_lista(lista_id, moneda_lista)
+                    if callable(fn_p_lista)
+                    else (elegido.precio_usd if moneda_lista == "USD" else elegido.precio_ves)
+                )
                 precio_u = (
                     precio_in
                     if (precio_in is not None and precio_in > Decimal("0"))
@@ -277,15 +390,21 @@ class ServicioDocumentos:
             else None
         )
         dias_cred = datos.get("dias_credito")
-        dias_int = (
-            int(str(dias_cred))
-            if dias_cred not in (None, "", False) and str(dias_cred).isdigit()
-            else None
-        )
-        return evaluar_descuentos_cotizacion(
+        try:
+            dias_int = (
+                max(0, int(str(dias_cred)))
+                if dias_cred is not None and str(dias_cred).strip() != ""
+                and dias_cred is not False
+                else None
+            )
+        except (TypeError, ValueError):
+            dias_int = None
+        especiales = _extraer_descuentos_especiales(datos)
+        eval_res = evaluar_descuentos_cotizacion(
             self._repo_cxc,
             lineas=lineas_enriq,
             descuentos_codigos=_extraer_codigos_descuento(datos),
+            descuentos_especiales=especiales,
             lista_precios_id=lista_id,
             lista_precios_nombre=lista_nom,
             moneda_lista=moneda_lista,
@@ -300,6 +419,84 @@ class ServicioDocumentos:
             moneda_pago_esperada=datos.get("moneda_pago_esperada"),
             dias_credito_solicitados=dias_int,
         )
+        eval_res["ruta_pago"] = ruta_pago
+        eval_res["ruta_pago_label"] = etiqueta_ruta(ruta_pago)
+
+        # Vista previa en vivo de política de auto-envío (para mostrar alertas reales al vendedor)
+        try:
+            from .modelos import LineaDocumento
+
+            ahora_sim = datetime.now()
+            lineas_sim = tuple(
+                LineaDocumento(
+                    linea_id=idx,
+                    orden=idx,
+                    producto_id=str(ln.get("producto_id") or ""),
+                    codigo=str(ln.get("codigo") or ""),
+                    descripcion=str(ln.get("descripcion") or ""),
+                    presentacion=str(ln.get("presentacion") or ""),
+                    litros_unidad=Decimal(str(ln.get("litros_unidad") or "0")),
+                    cantidad=Decimal(str(ln.get("cantidad") or "0")),
+                    precio_unitario=Decimal(str(ln.get("precio_unitario") or "0")),
+                    descuento_pct=Decimal("0"),
+                    subtotal=q2(
+                        Decimal(str(ln.get("cantidad") or "0"))
+                        * Decimal(str(ln.get("precio_unitario") or "0"))
+                    ),
+                )
+                for idx, ln in enumerate(lineas_enriq, start=1)
+            )
+            doc_sim = DocumentoComercial(
+                documento_id=0,
+                numero="PREVIEW",
+                tipo=PEDIDO,
+                estado=PENDIENTE_APROBACION,
+                origen="web",
+                captura_id=None,
+                partner_odoo_id=partner_int,
+                tipo_contacto="cliente" if partner_int is not None else "prospecto",
+                cliente_nombre=str(
+                    datos.get("cliente_nombre") or datos.get("cliente") or "Prospecto"
+                ).strip(),
+                rif=normalizar_rif_opcional(datos.get("rif")),
+                email=str(datos.get("email") or "").strip(),
+                telefono=str(datos.get("telefono") or "").strip(),
+                direccion=str(datos.get("direccion") or "").strip(),
+                plus_code=str(datos.get("plus_code") or "").strip(),
+                latitud=datos.get("latitud"),
+                longitud=datos.get("longitud"),
+                es_primera_compra=datos.get("es_primera_compra") is not False,
+                moneda_lista=moneda_lista,
+                vendedor_email=str(datos.get("vendedor_email") or "").strip(),
+                fecha_entrega=None,
+                condiciones_negociacion=str(datos.get("condiciones_negociacion") or "").strip(),
+                observaciones=str(datos.get("observaciones") or "").strip(),
+                subtotal=Decimal(str(eval_res["subtotal_lista"])),
+                total_litros=Decimal(str(eval_res["total_litros"])),
+                odoo_order_id=None,
+                odoo_order_name="",
+                error_odoo="",
+                creado_por="preview",
+                creado_en=ahora_sim,
+                actualizado_en=ahora_sim,
+                lineas=lineas_sim,
+                lista_precios_id=lista_id,
+                lista_precios_nombre=lista_nom,
+                ruta_pago=ruta_pago,
+                dias_credito=dias_int or 0,
+                descuentos_especiales=tuple(eval_res.get("descuentos_especiales") or []),
+                descuentos_elegidos=tuple(eval_res.get("descuentos") or []),
+                validacion_motor=eval_res,
+                total_descuentos=Decimal(str(eval_res["total_descuentos"])),
+                subtotal_neto=Decimal(str(eval_res["subtotal_neto"])),
+                monto_iva=Decimal(str(eval_res["monto_iva"])),
+                total_con_iva=Decimal(str(eval_res["total_con_iva"])),
+            )
+            eval_res["politica_preview"] = self.evaluar_politica(doc_sim)
+        except Exception as exc_pol:
+            logger.debug("No se pudo calcular politica_preview en evaluar_descuentos: %s", exc_pol)
+
+        return eval_res
 
     def obtener(self, documento_id: int) -> DocumentoComercial:
         doc = self._repo.obtener(documento_id)
@@ -341,15 +538,16 @@ class ServicioDocumentos:
         if not cliente:
             raise DocumentoInvalido("Indica el nombre del cliente o prospecto.", ["cliente_nombre"])
 
-        lista_def = self.lista_comercial_defecto()
-        moneda_raw = str(datos.get("moneda_lista") or "VES").strip().upper()
-        moneda_lista = moneda_raw if moneda_raw in MONEDAS_LISTA else "VES"
-        if moneda_lista == "VES":
-            lista_id = str(datos.get("lista_precios_id") or lista_def.lista_id)
-            lista_nombre = str(datos.get("lista_precios_nombre") or lista_def.nombre)
-        else:
-            lista_id = str(datos.get("lista_precios_id") or "USD")
-            lista_nombre = str(datos.get("lista_precios_nombre") or "Pago USD Comercial")
+        lista_id, lista_nombre, moneda_lista, ruta_pago = self._resolver_lista_y_ruta(
+            datos.get("lista_precios_id"),
+            datos.get("moneda_lista"),
+            datos.get("lista_precios_nombre"),
+        )
+        try:
+            dias_credito_val = max(0, int(datos.get("dias_credito") or 0))
+        except (TypeError, ValueError):
+            dias_credito_val = 0
+        especiales_in = _extraer_descuentos_especiales(datos)
 
         rif = normalizar_rif_opcional(datos.get("rif"))
         lat, lon, plus_code = _extraer_gps(datos)
@@ -424,7 +622,12 @@ class ServicioDocumentos:
                 marca_ln = elegido.marca
                 presentacion = elegido.presentacion
                 litros_u = elegido.litros
-                precio_cat = elegido.precio_usd if moneda_lista == "USD" else elegido.precio_ves
+                fn_p_lista = getattr(elegido, "precio_para_lista", None)
+                precio_cat = (
+                    fn_p_lista(lista_id, moneda_lista)
+                    if callable(fn_p_lista)
+                    else (elegido.precio_usd if moneda_lista == "USD" else elegido.precio_ves)
+                )
                 precio_u = (
                     precio_in
                     if (precio_in is not None and precio_in > Decimal("0"))
@@ -477,6 +680,7 @@ class ServicioDocumentos:
             self._repo_cxc,
             lineas=lineas_para_motor,
             descuentos_codigos=codigos_desc,
+            descuentos_especiales=especiales_in,
             lista_precios_id=lista_id,
             lista_precios_nombre=lista_nombre,
             moneda_lista=moneda_lista,
@@ -485,7 +689,10 @@ class ServicioDocumentos:
             cliente_nombre=cliente,
             es_primera_compra=es_primera,
             moneda_pago_esperada=datos.get("moneda_pago_esperada"),
+            dias_credito_solicitados=dias_credito_val,
         )
+        eval_res["ruta_pago"] = ruta_pago
+        eval_res["ruta_pago_label"] = etiqueta_ruta(ruta_pago)
 
         # Descuento total = descuentos del catálogo CxC + cualquier descuento manual de línea en CxC
         ahorro_manual_lineas = q2(subtotal_bruto_lista - subtotal_doc)
@@ -532,6 +739,9 @@ class ServicioDocumentos:
             "moneda_lista": moneda_lista,
             "lista_precios_id": lista_id,
             "lista_precios_nombre": lista_nombre,
+            "ruta_pago": ruta_pago,
+            "dias_credito": dias_credito_val,
+            "descuentos_especiales": eval_res.get("descuentos_especiales") or [],
             "vendedor_email": str(datos.get("vendedor_email") or "").strip(),
             "fecha_entrega": parsear_fecha_opcional(datos.get("fecha_entrega")),
             "condiciones_negociacion": str(datos.get("condiciones_negociacion") or "").strip(),
@@ -694,6 +904,28 @@ class ServicioDocumentos:
             d.get("codigo") for d in existente.descuentos_elegidos if d.get("codigo")
         ]
         tiene_desc_nuevo = "descuentos" in datos or "descuentos_codigos" in datos
+        especiales_prev = [dict(x) for x in getattr(existente, "descuentos_especiales", ()) or ()]
+        tiene_espec_nuevo = "descuentos_especiales" in datos
+        lista_cambio = (
+            "lista_precios_id" in datos
+            and str(datos.get("lista_precios_id") or "") != str(existente.lista_precios_id or "")
+        ) or (
+            "moneda_lista" in datos
+            and str(datos.get("moneda_lista") or "").upper()
+            != str(existente.moneda_lista or "").upper()
+        )
+        if "lineas" in datos:
+            lineas_combinadas = datos["lineas"]
+        elif lista_cambio:
+            lineas_combinadas = [
+                {
+                    **ln.a_dict(),
+                    "precio_unitario": (None if ln.producto_id else ln.precio_unitario),
+                }
+                for ln in existente.lineas
+            ]
+        else:
+            lineas_combinadas = [ln.a_dict() for ln in existente.lineas]
         combinado: dict[str, Any] = {
             "tipo": datos.get("tipo", existente.tipo),
             "partner_odoo_id": datos.get("partner_odoo_id", existente.partner_odoo_id),
@@ -711,7 +943,15 @@ class ServicioDocumentos:
             "moneda_lista": datos.get("moneda_lista", existente.moneda_lista),
             "lista_precios_id": datos.get("lista_precios_id", existente.lista_precios_id),
             "lista_precios_nombre": datos.get(
-                "lista_precios_nombre", existente.lista_precios_nombre
+                "lista_precios_nombre",
+                ""
+                if lista_cambio and "lista_precios_nombre" not in datos
+                else existente.lista_precios_nombre,
+            ),
+            "dias_credito": (
+                datos["dias_credito"]
+                if ("dias_credito" in datos and datos["dias_credito"] is not None)
+                else existente.dias_credito
             ),
             "vendedor_email": datos.get("vendedor_email", existente.vendedor_email),
             "fecha_entrega": datos.get("fecha_entrega", existente.fecha_entrega),
@@ -722,10 +962,10 @@ class ServicioDocumentos:
             "descuentos_codigos": (
                 _extraer_codigos_descuento(datos) if tiene_desc_nuevo else descuentos_previos
             ),
-            "lineas": datos.get(
-                "lineas",
-                [ln.a_dict() for ln in existente.lineas],
+            "descuentos_especiales": (
+                _extraer_descuentos_especiales(datos) if tiene_espec_nuevo else especiales_prev
             ),
+            "lineas": lineas_combinadas,
         }
         cab, lns = self._preparar_cabecera_y_lineas(
             combinado,
@@ -783,13 +1023,21 @@ class ServicioDocumentos:
             "observaciones",
             "partner_odoo_id",
             "es_primera_compra",
+            "moneda_lista",
+            "lista_precios_id",
+            "lista_precios_nombre",
+            "lineas",
         ):
             if campo in extra and not vacio(extra[campo]):
                 cambios[campo] = extra[campo]
+        if "dias_credito" in extra and extra["dias_credito"] is not None:
+            cambios["dias_credito"] = extra["dias_credito"]
         if "direccion_fiscal" in extra and not vacio(extra["direccion_fiscal"]):
             cambios["direccion"] = extra["direccion_fiscal"]
         if "descuentos_codigos" in extra or "descuentos" in extra:
             cambios["descuentos_codigos"] = _extraer_codigos_descuento(extra)
+        if "descuentos_especiales" in extra:
+            cambios["descuentos_especiales"] = _extraer_descuentos_especiales(extra)
 
         actualizado = self.editar(documento_id, cambios, actor=actor, auto_enviar=False)
         if actualizado.estado != PENDIENTE_APROBACION:
@@ -1023,6 +1271,20 @@ class ServicioDocumentos:
         try:
             partner_id = self._resolver_partner_para_envio(doc, escritor, marca)
             nota_final = _construir_nota_odoo(doc, actor=actor, auto_enviado=auto_enviado)
+            crear_kwargs: dict[str, Any] = {}
+            fn_pt = getattr(escritor, "payment_term_id_por_dias", None)
+            if callable(fn_pt):
+                pt_id = fn_pt(int(getattr(doc, "dias_credito", 0) or 0))
+                if pt_id is not None:
+                    try:
+                        sig = inspect.signature(escritor.crear_pedido)
+                        if "payment_term_id" in sig.parameters or any(
+                            p.kind == inspect.Parameter.VAR_KEYWORD
+                            for p in sig.parameters.values()
+                        ):
+                            crear_kwargs["payment_term_id"] = pt_id
+                    except Exception:
+                        pass
             order_id = escritor.crear_pedido(
                 partner_id=partner_id,
                 lineas=lineas_odoo,
@@ -1032,6 +1294,7 @@ class ServicioDocumentos:
                 shipping_id=None,
                 fecha_entrega=doc.fecha_entrega.isoformat() if doc.fecha_entrega else None,
                 pricelist_id=pricelist_odoo_id,
+                **crear_kwargs,
             )
             order_name = escritor.nombre_pedido(order_id)
         except DocumentoInvalido:

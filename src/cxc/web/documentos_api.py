@@ -56,6 +56,7 @@ from cxc.documentos.sync_odoo import (
     orden_confirmada_en_odoo,
     sincronizar_documentos_desde_odoo,
 )
+from cxc.engine.rutas_pago import RUTA_BINANCE, etiqueta_ruta, ruta_de_lista
 from cxc.odoo.client import OdooReader, OdooXmlRpcReader
 from cxc.odoo.directorio import filtrar_contactos
 from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
@@ -107,14 +108,19 @@ def _fabrica_escritor_doc() -> EscritorOdoo | None:
 def _lector_precios_odoo() -> DatosPreciosOdoo:
     from cxc.config import AppConfig
     from cxc.odoo.directorio import conectar_lectura
-    from cxc.web.app import get_valid_pricelists_usd_and_ves
+    from cxc.web.app import get_pricelist_mapeo, get_valid_pricelists_usd_and_ves
 
     cfg = AppConfig.from_env()
     execute = conectar_lectura(cfg.odoo)
     usd_lists, ves_lists = get_valid_pricelists_usd_and_ves()
     usd_ids = [int(x) for x in usd_lists if str(x).isdigit()]
     ves_ids = [int(x) for x in ves_lists if str(x).isdigit()]
-    return cargar_datos_precios_odoo(execute, usd_ids, ves_ids)
+    return cargar_datos_precios_odoo(
+        execute,
+        usd_ids,
+        ves_ids,
+        pricelist_mapeo=get_pricelist_mapeo(),
+    )
 
 
 def get_servicio_documentos() -> ServicioDocumentos:
@@ -150,12 +156,14 @@ class DocumentoBodyIn(BaseModel):
     moneda_lista: str = "VES"
     lista_precios_id: str | None = None
     lista_precios_nombre: str | None = None
+    dias_credito: int = Field(default=0, ge=0, le=365)
     moneda_pago_esperada: str | None = None
     vendedor_email: str | None = ""
     fecha_entrega: str | None = None
     condiciones_negociacion: str | None = ""
     observaciones: str | None = ""
     descuentos_codigos: list[str] = Field(default_factory=list)
+    descuentos_especiales: list[dict[str, Any]] = Field(default_factory=list)
     lineas: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -331,6 +339,20 @@ def bot_buscar_contactos(
     }
 
 
+@router.get("/api/bots/listas-precio", dependencies=[Depends(exigir_bot_key)])
+def bot_listar_listas_precio(
+    servicio: ServicioDocsDep,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    lista_def = servicio.lista_comercial_defecto(refresh=refresh)
+    items = servicio.listas_precio_activas(refresh=refresh)
+    return {
+        "lista_defecto": lista_def.a_dict(),
+        "total": len(items),
+        "items": items,
+    }
+
+
 @router.get("/api/bots/descuentos/catalogo", dependencies=[Depends(exigir_bot_key)])
 def bot_catalogo_descuentos(
     servicio: ServicioDocsDep,
@@ -413,6 +435,22 @@ def convertir_preview_a_pedido(
 # ── Endpoints Web de CxC (Sección Ventas → Cotizaciones y Pedidos) ───────────
 
 
+@router.get("/api/documentos/listas-precio")
+def listar_listas_precio_web(
+    servicio: ServicioDocsDep,
+    refresh: bool = False,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _usuario_doc(cxc_session, *PERMISOS_VER_DOCS)
+    lista_def = servicio.lista_comercial_defecto(refresh=refresh)
+    items = servicio.listas_precio_activas(refresh=refresh)
+    return {
+        "lista_defecto": lista_def.a_dict(),
+        "total": len(items),
+        "items": items,
+    }
+
+
 @router.get("/api/documentos/catalogo")
 def listar_catalogo_documentos(
     servicio: ServicioDocsDep,
@@ -424,10 +462,12 @@ def listar_catalogo_documentos(
     _usuario_doc(cxc_session, *PERMISOS_VER_DOCS)
     todos = servicio.catalogo_items(refresh=refresh)
     lista_def = servicio.lista_comercial_defecto(refresh=refresh)
+    listas_act = servicio.listas_precio_activas(refresh=False)
     filtrados = buscar_productos(todos, q, limite=max(1, min(limit, 500)))
     return {
         "total_catalogo": len(todos),
         "lista_defecto": lista_def.a_dict(),
+        "listas_activas": listas_act,
         "items": [it.a_dict() for it in filtrados],
     }
 
@@ -902,6 +942,22 @@ def listar_ventas_unificadas(
                 "moneda_lista": pl_mon,
                 "lista_precios_id": str(o.lista_precios or ""),
                 "lista_precios_nombre": pl_nombre,
+                "ruta_pago": ruta_de_lista(
+                    o.lista_precios,
+                    pricelists_map,
+                    lista_nombre=pl_nombre,
+                    moneda_lista=pl_mon,
+                ),
+                "ruta_pago_label": etiqueta_ruta(
+                    ruta_de_lista(
+                        o.lista_precios,
+                        pricelists_map,
+                        lista_nombre=pl_nombre,
+                        moneda_lista=pl_mon,
+                    )
+                ),
+                "dias_credito": int(getattr(o, "dias_credito", 0) or 0),
+                "descuentos_especiales": [],
                 "vendedor_email": o.vendedor_email,
                 "subtotal": sub_o,
                 "total_descuentos": 0.0,
@@ -944,7 +1000,21 @@ def listar_ventas_unificadas(
         so_k = str(it.get("odoo_order_name") or it.get("numero") or "").strip()
         vincs_so = por_so_vinc.get(so_k, [])
         tot_u = round(float(it.get("total_con_iva") or it.get("subtotal") or 0), 2)
-        vinc_u = round(sum(float(v.get("equiv_usd_bcv") or 0) for v in vincs_so), 2)
+        ruta_fila = it.get("ruta_pago") or "bcv"
+        vinc_u = round(
+            sum(
+                float(
+                    (
+                        v.get("equiv_usd_binance")
+                        if (ruta_fila == RUTA_BINANCE and v.get("equiv_usd_binance") is not None)
+                        else v.get("equiv_usd_bcv")
+                    )
+                    or 0
+                )
+                for v in vincs_so
+            ),
+            2,
+        )
         it["vinculaciones_count"] = len(vincs_so)
         it["monto_vinculado_usd"] = vinc_u
         it["saldo_pendiente_vinc_usd"] = max(0.0, round(tot_u - vinc_u, 2))
@@ -1106,6 +1176,7 @@ class VincularVentaIn(BaseModel):
     pago_operativo_id: int | None = None
     monto_aplicado: float | str | None = None
     origen_vinculacion: str = "manual"
+    ruta_pago: str | None = None
 
 
 def _escritor_vinc_ventas() -> EscritorOdoo | None:
@@ -1160,6 +1231,7 @@ def crear_vinculacion_venta_api(
             origen_vinculacion=body.origen_vinculacion or "manual",
             actor=_actor_doc(user),
             escritor=_escritor_vinc_ventas(),
+            ruta_pago=body.ruta_pago,
         )
     except VinculacionNoEncontrada as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -65,9 +65,13 @@
             const doc = data.documento || {};
             const nom = doc.cliente_nombre || doc.proveedor_nombre || "—";
             const ref = doc.so_id || doc.compra_ref || doc.numero || "—";
+            const rutaBadge = doc.ruta_pago_label
+                ? `<div><span class="cap-sub">Ruta Obligatoria</span><strong style="color:${doc.ruta_pago === "binance" ? "#92400e" : "#1e40af"};">🔒 ${_esc(doc.ruta_pago_label)}</strong></div>`
+                : "";
             box.innerHTML = `
                 <div><span class="cap-sub">Documento</span><strong>${_esc(ref)}</strong></div>
                 <div><span class="cap-sub">Contraparte</span><strong>${_esc(nom)}</strong></div>
+                ${rutaBadge}
                 <div><span class="cap-sub">Total Documento</span><strong>${_usd(doc.total_usd)}</strong></div>
                 <div><span class="cap-sub">Ya Vinculado</span><strong style="color:#0369a1;">${_usd(doc.vinculado_usd)}</strong></div>
                 <div><span class="cap-sub">Saldo Pendiente</span><strong style="color:${Number(doc.saldo_pendiente_usd || 0) > 0 ? "#b45309" : "#15803d"};">${_usd(doc.saldo_pendiente_usd)}</strong></div>
@@ -130,10 +134,14 @@
             return;
         }
         tbody.innerHTML = cands.map((c, idx) => {
-            const esFifo = Boolean(c.sugerido_fifo);
-            const rowBg = esFifo ? "background:#f0fdf4;" : "";
+            const compatible = c.compatible_ruta !== false;
+            const esFifo = compatible && Boolean(c.sugerido_fifo);
+            const rowBg = !compatible ? "background:#fef2f2; opacity:0.75;" : (esFifo ? "background:#f0fdf4;" : "");
             const badgeFifo = esFifo
                 ? '<div><span class="state-badge" style="background:#dcfce7; color:#166534; font-size:0.7rem;">⚡ Sugerido FIFO</span></div>'
+                : "";
+            const badgeIncomp = !compatible
+                ? `<div style="color:#991b1b; font-size:0.74rem; font-weight:600; margin-top:2px;">⛔ ${_esc(c.motivo_incompatibilidad || "Ruta incompatible")}</div>`
                 : "";
             const sugVal = Number(c.monto_sugerido_original || 0);
             const esDesdePago = _ctxActual.modo === "venta_pago" || _ctxActual.modo === "compra_pago";
@@ -155,7 +163,8 @@
             let tituloCol;
             let saldoCol;
             if (_ctxActual.modo === "venta_pago") {
-                tituloCol = `<strong>${_esc(c.so_id)}</strong>${c.numero_cxc ? `<div class="cap-sub">CxC: ${_esc(c.numero_cxc)}</div>` : ""}`;
+                const rutaC = c.ruta_pago_label ? `<div class="cap-sub">🔒 ${_esc(c.ruta_pago_label)}</div>` : "";
+                tituloCol = `<strong>${_esc(c.so_id)}</strong>${c.numero_cxc ? `<div class="cap-sub">CxC: ${_esc(c.numero_cxc)}</div>` : ""}${rutaC}`;
                 saldoCol = `<strong>${_usd(c.saldo_pendiente_usd)}</strong><div class="cap-sub">de ${_usd(c.total_usd)}</div>`;
             } else if (_ctxActual.modo === "compra_pago") {
                 tituloCol = `<strong>${_esc(c.compra_ref || c.numero)}</strong><div class="cap-sub">${_esc(c.tipo)}</div>`;
@@ -168,15 +177,15 @@
             }
 
             return `<tr style="${rowBg}">
-                <td>${tituloCol}${badgeFifo}</td>
+                <td>${tituloCol}${badgeFifo}${badgeIncomp}</td>
                 <td>${_esc(c.fecha || "—")}</td>
                 <td>${saldoCol}</td>
                 <td>
-                    <input type="number" step="0.01" min="0.01" id="vinc-amt-${idx}" value="${defAmt > 0 ? defAmt.toFixed(2) : ""}" style="width:115px; padding:4px 6px;" class="filter-select">
+                    <input type="number" step="0.01" min="0.01" id="vinc-amt-${idx}" value="${defAmt > 0 ? defAmt.toFixed(2) : ""}" ${compatible ? "" : "disabled"} style="width:115px; padding:4px 6px;" class="filter-select">
                     <span class="cap-sub">${_esc(pagMon)}</span>
                 </td>
                 <td>
-                    <button type="button" class="btn-primary" style="padding:0.35rem 0.7rem; font-size:0.8rem; background:${esFifo ? "#16a34a" : "#2563eb"};" data-vinc-apply="${idx}" data-vinc-fifo="${esFifo ? "1" : "0"}">🔗 Vincular</button>
+                    <button type="button" class="btn-primary" style="padding:0.35rem 0.7rem; font-size:0.8rem; background:${!compatible ? "#94a3b8" : (esFifo ? "#16a34a" : "#2563eb")};" ${compatible ? "" : "disabled"} data-vinc-apply="${idx}" data-vinc-fifo="${esFifo ? "1" : "0"}">🔗 Vincular</button>
                 </td>
             </tr>`;
         }).join("");

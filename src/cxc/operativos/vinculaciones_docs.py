@@ -13,6 +13,7 @@ vinculación en CxC si alguno sigue en borrador o aún no ha sido facturado.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -29,6 +30,14 @@ from ..db.schema import (
 )
 from ..decimal_utils import q2, q6
 from ..engine.equivalents import equivalentes_bcv, equivalentes_binance
+from ..engine.rutas_pago import (
+    RUTA_BCV,
+    RUTA_BINANCE,
+    etiqueta_ruta,
+    normalizar_ruta,
+    ruta_de_lista,
+    validar_compatibilidad_ruta_pago,
+)
 from ..engine.saldos_propios import dec, indice_tasas_bcv_local, norm_nombre, tasa_bcv_en_fecha
 from ..models import EstadoVinculacion, Moneda, TipoTasa, Vinculacion
 
@@ -93,6 +102,26 @@ def _monto_orig_desde_usd(
 
 def _tasa_binance_cercana(repo_cxc: Any, fecha_d: date, tasa_bcv_fallback: Decimal) -> Decimal:
     try:
+        hist = (
+            repo_cxc.all_tasas_historicas_auditoria()
+            if hasattr(repo_cxc, "all_tasas_historicas_auditoria")
+            else []
+        )
+    except Exception:
+        hist = []
+    hist_bin: Decimal | None = None
+    f_str = fecha_d.isoformat()
+    for row in hist:
+        if str(row.get("fecha") or "")[:10] == f_str:
+            tb_h = dec(
+                row.get("tasa_binance")
+                or row.get("tasa_binance_tarde")
+                or row.get("tasa_binance_manana")
+            )
+            if tb_h > 0:
+                hist_bin = tb_h
+                break
+    try:
         series = sorted(repo_cxc.all_serie_tasas(), key=lambda x: x.timestamp)
     except Exception:
         series = []
@@ -106,7 +135,95 @@ def _tasa_binance_cercana(repo_cxc: Any, fecha_d: date, tasa_bcv_fallback: Decim
             break
     if elegida > 0:
         return elegida
+    if hist_bin is not None and hist_bin > 0:
+        return hist_bin
     return tasa_bcv_fallback if tasa_bcv_fallback > 0 else Decimal("1")
+
+
+def _mapeo_listas_op(repo_cxc: Any) -> dict[str, Any]:
+    try:
+        raw = (
+            repo_cxc.get_config("pricelist_mapeo_unificado")
+            if hasattr(repo_cxc, "get_config")
+            else None
+        )
+        if raw and isinstance(raw, str):
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _metodo_pago_info(repo_cxc: Any, metodo_id: Any) -> tuple[str, str | None]:
+    mid = str(metodo_id or "").strip()
+    if not mid or not hasattr(repo_cxc, "get_metodo_pago"):
+        return "", None
+    try:
+        mp = repo_cxc.get_metodo_pago(mid)
+    except Exception:
+        return mid, None
+    if mp is None:
+        return mid, None
+    nombre = getattr(mp, "nombre", "")
+    tt = getattr(mp, "tipo_tasa", None)
+    nombre_s = str(nombre) if isinstance(nombre, str) else mid
+    tt_s = (
+        str(tt.value if hasattr(tt, "value") else tt)
+        if isinstance(tt, str | TipoTasa)
+        else None
+    )
+    return nombre_s, tt_s
+
+
+def _tasa_efectiva_ruta(
+    repo_cxc: Any,
+    fecha_d: date,
+    ruta: str,
+    por_fecha_bcv: dict[date, Decimal],
+    fallback_bcv: Decimal,
+) -> Decimal:
+    t_bcv = tasa_bcv_en_fecha(fecha_d, por_fecha_bcv, fallback_bcv)
+    if normalizar_ruta(ruta) == RUTA_BINANCE:
+        return _tasa_binance_cercana(repo_cxc, fecha_d, t_bcv)
+    return t_bcv
+
+
+def _equiv_usd_y_tasa_ruta(
+    monto: Decimal,
+    moneda: str,
+    fecha_d: date,
+    ruta: str,
+    por_fecha_bcv: dict[date, Decimal],
+    fallback_bcv: Decimal,
+    repo_cxc: Any,
+) -> tuple[Decimal, Decimal | None]:
+    mon = (moneda or "USD").strip().upper()
+    if mon == "USD" or monto <= 0:
+        return q2(monto), None
+    tasa = _tasa_efectiva_ruta(repo_cxc, fecha_d, ruta, por_fecha_bcv, fallback_bcv)
+    if tasa <= 0:
+        return Decimal("0.00"), None
+    return q2(monto / tasa), q6(tasa)
+
+
+def _monto_orig_desde_usd_ruta(
+    usd: Decimal,
+    moneda: str,
+    fecha_d: date,
+    ruta: str,
+    por_fecha_bcv: dict[date, Decimal],
+    fallback_bcv: Decimal,
+    repo_cxc: Any,
+) -> Decimal:
+    mon = (moneda or "USD").strip().upper()
+    if mon == "USD" or usd <= 0:
+        return q2(usd)
+    tasa = _tasa_efectiva_ruta(repo_cxc, fecha_d, ruta, por_fecha_bcv, fallback_bcv)
+    if tasa <= 0:
+        return q2(usd)
+    return q2(usd * tasa)
 
 
 def _serializar_vinc_op_venta(row: Any) -> dict[str, Any]:
@@ -137,6 +254,11 @@ def _serializar_vinc_op_venta(row: Any) -> dict[str, Any]:
 def _serializar_vinc_mirror_venta(v: Any) -> dict[str, Any]:
     est = str(getattr(v.estado, "value", v.estado) or "pendiente")
     eq_usd = v.equiv_usd_bcv if v.equiv_usd_bcv is not None else v.monto_aplicado
+    eq_bin = (
+        v.equiv_usd_binance
+        if getattr(v, "equiv_usd_binance", None) is not None
+        else eq_usd
+    )
     return {
         "origen_registro": "mirror",
         "vinc_id": str(v.vinc_id),
@@ -147,7 +269,21 @@ def _serializar_vinc_mirror_venta(v: Any) -> dict[str, Any]:
         "monto_aplicado": _f2(v.monto_aplicado),
         "moneda": str(getattr(v.moneda_abono, "value", v.moneda_abono) or "VES"),
         "equiv_usd_bcv": _f2(eq_usd),
+        "equiv_usd_binance": _f2(eq_bin),
         "tasa_bcv": float(v.tasa_bcv_aplicada) if v.tasa_bcv_aplicada else None,
+        "tasa_binance": (
+            float(v.tasa_binance_aplicada)
+            if getattr(v, "tasa_binance_aplicada", None)
+            else None
+        ),
+        "tipo_tasa_abono": str(
+            getattr(
+                getattr(v, "tipo_tasa_abono", None),
+                "value",
+                getattr(v, "tipo_tasa_abono", "BCV"),
+            )
+            or "BCV"
+        ),
         "origen_vinculacion": "fifo" if "FIFO" in str(v.confirmado_por or "").upper() else "manual",
         "estado": "RECONCILIADO_ODOO"
         if est == EstadoVinculacion.CONCILIADO.value
@@ -348,6 +484,17 @@ def _resolver_venta_objetivo(
     elif doc_row is not None:
         total_usd = q2(dec(doc_row.total_con_iva or doc_row.subtotal))
 
+    mapeo = _mapeo_listas_op(repo_cxc)
+    lp_id = getattr(doc_row, "lista_precios_id", None) if doc_row is not None else None
+    lp_nom = str(getattr(doc_row, "lista_precios_nombre", "") or "") if doc_row is not None else ""
+    mon_lista = str(getattr(doc_row, "moneda_lista", "") or "") if doc_row is not None else ""
+    ruta_exp = str(getattr(doc_row, "ruta_pago", "") or "") if doc_row is not None else ""
+    if (lp_id is None or str(lp_id).strip() in ("", "0")) and ord_mirror is not None:
+        lp_id = getattr(ord_mirror, "lista_precios", None)
+    ruta_pago = normalizar_ruta(ruta_exp) or ruta_de_lista(
+        lp_id, mapeo, lista_nombre=lp_nom, moneda_lista=mon_lista
+    )
+
     return {
         "so_id": so_norm,
         "documento_comercial_id": int(doc_row.documento_id) if doc_row is not None else None,
@@ -367,6 +514,10 @@ def _resolver_venta_objetivo(
         "cliente_nombre": cli_nombre,
         "total_usd": total_usd,
         "en_ordenes_mirror": ord_mirror is not None,
+        "lista_precios_id": lp_id,
+        "lista_precios_nombre": lp_nom,
+        "ruta_pago": ruta_pago,
+        "ruta_pago_label": etiqueta_ruta(ruta_pago),
     }
 
 
@@ -424,6 +575,16 @@ def _recolectar_pagos_cliente(
         usado_orig = q2(sum((dec(v["monto_aplicado"]) for v in vincs), Decimal("0")))
         disp_orig = max(Decimal("0.00"), q2(monto_orig - usado_orig))
         disp_usd, _ = _equiv_usd_y_tasa(disp_orig, mon, f_d, por_fecha, fallback)
+        disp_usd_binance, _ = _equiv_usd_y_tasa_ruta(
+            disp_orig, mon, f_d, RUTA_BINANCE, por_fecha, fallback, repo_cxc
+        )
+        met_nombre, met_tt = _metodo_pago_info(repo_cxc, row.get("metodo_pago"))
+        met_low = met_nombre.lower()
+        ruta_excl = (
+            RUTA_BINANCE
+            if "binance" in met_low
+            else (RUTA_BCV if "bcv" in met_low else "")
+        )
         op_match = op_por_odoo_id.get(pid)
         salida.append(
             {
@@ -444,6 +605,10 @@ def _recolectar_pagos_cliente(
                 "monto_usd": float(monto_usd),
                 "disponible_original": float(disp_orig),
                 "disponible_usd": float(disp_usd),
+                "disponible_usd_binance": float(disp_usd_binance),
+                "metodo_pago_nombre": met_nombre,
+                "tipo_tasa_metodo": met_tt,
+                "ruta_pago_exclusiva": ruta_excl or None,
                 "referencia": str(row.get("referencia") or ""),
                 "estado_pago": "CONFIRMADO_ODOO",
                 "confirmado_prio": 0,
@@ -472,6 +637,16 @@ def _recolectar_pagos_cliente(
         usado_orig = q2(sum((dec(v["monto_aplicado"]) for v in vincs), Decimal("0")))
         disp_orig = max(Decimal("0.00"), q2(monto_orig - usado_orig))
         disp_usd, _ = _equiv_usd_y_tasa(disp_orig, mon, f_d, por_fecha, fallback)
+        disp_usd_binance, _ = _equiv_usd_y_tasa_ruta(
+            disp_orig, mon, f_d, RUTA_BINANCE, por_fecha, fallback, repo_cxc
+        )
+        met_nombre_op = str(getattr(op, "metodo_pago", "") or "")
+        ruta_op_raw = normalizar_ruta(getattr(op, "ruta_pago", ""))
+        ruta_excl_op = ruta_op_raw or (
+            RUTA_BINANCE
+            if "binance" in met_nombre_op.lower()
+            else (RUTA_BCV if "bcv" in met_nombre_op.lower() else "")
+        )
         est_txt = str(op.estado or "")
         es_conf = est_txt in ("CONFIRMADO_CXC", "ENVIADO_ODOO")
         salida.append(
@@ -503,6 +678,10 @@ def _recolectar_pagos_cliente(
                 "monto_usd": float(monto_usd),
                 "disponible_original": float(disp_orig),
                 "disponible_usd": float(disp_usd),
+                "disponible_usd_binance": float(disp_usd_binance),
+                "metodo_pago_nombre": met_nombre_op,
+                "tipo_tasa_metodo": None,
+                "ruta_pago_exclusiva": ruta_excl_op or None,
                 "referencia": str(op.referencia or op.numero_recibo or ""),
                 "estado_pago": est_txt,
                 "confirmado_prio": 0 if es_conf else 1,
@@ -523,9 +702,22 @@ def candidatos_pagos_para_venta(
     """Devuelve resumen de la orden, vinculaciones actuales y pagos elegibles FIFO."""
     por_fecha, fallback = indice_tasas_bcv_local(repo_cxc)
     doc = _resolver_venta_objetivo(engine, repo_cxc, so_id=so_id, documento_id=documento_id)
+    ruta_doc = doc.get("ruta_pago") or RUTA_BCV
     mapa_v = mapa_vinculaciones_ventas(engine, repo_cxc)
     actuales = list(mapa_v["por_so_id"].get(doc["so_id"], []))
-    vinculado_usd = q2(sum((dec(v["equiv_usd_bcv"]) for v in actuales), Decimal("0")))
+    vinculado_usd = q2(
+        sum(
+            (
+                dec(
+                    v.get("equiv_usd_binance")
+                    if (ruta_doc == RUTA_BINANCE and v.get("equiv_usd_binance") is not None)
+                    else v["equiv_usd_bcv"]
+                )
+                for v in actuales
+            ),
+            Decimal("0"),
+        )
+    )
     saldo_pend_usd = max(Decimal("0.00"), q2(doc["total_usd"] - vinculado_usd))
 
     pagos_cli = _recolectar_pagos_cliente(
@@ -536,13 +728,30 @@ def candidatos_pagos_para_venta(
     restante_usd = saldo_pend_usd
     hoy = date.today()
     for p in disponibles:
-        p_disp_usd = q2(dec(p["disponible_usd"]))
-        if restante_usd > 0 and p["confirmado_prio"] == 0 and p_disp_usd > 0:
+        compat, motivo_incomp = validar_compatibilidad_ruta_pago(
+            ruta_doc,
+            ruta_pago_declarada=p.get("ruta_pago_exclusiva"),
+            metodo_pago_nombre=p.get("metodo_pago_nombre", ""),
+            tipo_tasa_metodo=p.get("tipo_tasa_metodo"),
+        )
+        p["compatible_ruta"] = compat
+        p["motivo_incompatibilidad"] = motivo_incomp
+        p_disp_usd = q2(
+            dec(
+                p.get("disponible_usd_binance")
+                if (ruta_doc == RUTA_BINANCE and p.get("disponible_usd_binance") is not None)
+                else p["disponible_usd"]
+            )
+        )
+        p["disponible_usd_ruta"] = float(p_disp_usd)
+        if compat and restante_usd > 0 and p["confirmado_prio"] == 0 and p_disp_usd > 0:
             sug_usd = min(restante_usd, p_disp_usd)
             f_d = _fecha_iso_o_hoy(p["fecha"], hoy)
             sug_orig = min(
                 q2(dec(p["disponible_original"])),
-                _monto_orig_desde_usd(sug_usd, p["moneda"], f_d, por_fecha, fallback),
+                _monto_orig_desde_usd_ruta(
+                    sug_usd, p["moneda"], f_d, ruta_doc, por_fecha, fallback, repo_cxc
+                ),
             )
             p["sugerido_fifo"] = True
             p["monto_sugerido_usd"] = float(sug_usd)
@@ -645,6 +854,18 @@ def candidatos_ventas_para_pago(
     disp_usd, _ = _equiv_usd_y_tasa(disp_orig, mon, f_pago, por_fecha, fallback)
 
     # Recolectar órdenes confirmadas del cliente
+    mapeo_listas = _mapeo_listas_op(repo_cxc)
+    if pago_mirror is not None:
+        met_nom_p, met_tt_p = _metodo_pago_info(repo_cxc, pago_mirror.metodo_pago)
+    else:
+        met_nom_p = str(getattr(op_row, "metodo_pago", "") or "")
+        met_tt_p = None
+    ruta_excl_p = normalizar_ruta(getattr(op_row, "ruta_pago", "") if op_row else "") or (
+        RUTA_BINANCE
+        if "binance" in met_nom_p.lower()
+        else (RUTA_BCV if "bcv" in met_nom_p.lower() else "")
+    )
+
     nom_norm = norm_nombre(contraparte_nom)
     with engine.connect() as conn:
         docs_com = list(
@@ -675,8 +896,32 @@ def candidatos_ventas_para_pago(
             continue
         vistas_so.add(o.so_id)
         tot = q2(dec(o.monto_total))
+        ruta_ord = normalizar_ruta(getattr(dc, "ruta_pago", "") if dc else "") or ruta_de_lista(
+            getattr(dc, "lista_precios_id", None) if dc else o.lista_precios,
+            mapeo_listas,
+            lista_nombre=str(getattr(dc, "lista_precios_nombre", "") or "") if dc else "",
+            moneda_lista=str(getattr(dc, "moneda_lista", "") or "") if dc else "",
+        )
+        compat, motivo_incomp = validar_compatibilidad_ruta_pago(
+            ruta_ord,
+            ruta_pago_declarada=ruta_excl_p or None,
+            metodo_pago_nombre=met_nom_p,
+            tipo_tasa_metodo=met_tt_p,
+        )
         vincs_so = mapa_v["por_so_id"].get(o.so_id, [])
-        pag_so = q2(sum((dec(v["equiv_usd_bcv"]) for v in vincs_so), Decimal("0")))
+        pag_so = q2(
+            sum(
+                (
+                    dec(
+                        v.get("equiv_usd_binance")
+                        if (ruta_ord == RUTA_BINANCE and v.get("equiv_usd_binance") is not None)
+                        else v["equiv_usd_bcv"]
+                    )
+                    for v in vincs_so
+                ),
+                Decimal("0"),
+            )
+        )
         sal_so = max(Decimal("0.00"), q2(tot - pag_so))
         if sal_so <= Decimal("0.00"):
             continue
@@ -692,6 +937,10 @@ def candidatos_ventas_para_pago(
                 "factura_id": o.factura_id,
                 "odoo_order_id": getattr(o, "odoo_order_id", None)
                 or (dc.odoo_order_id if dc else None),
+                "ruta_pago": ruta_ord,
+                "ruta_pago_label": etiqueta_ruta(ruta_ord),
+                "compatible_ruta": compat,
+                "motivo_incompatibilidad": motivo_incomp,
             }
         )
 
@@ -706,8 +955,32 @@ def candidatos_ventas_para_pago(
         if not cid_match and not (nom_norm and norm_nombre(dc.cliente_nombre) == nom_norm):
             continue
         tot = q2(dec(dc.total_con_iva or dc.subtotal))
+        ruta_dc = normalizar_ruta(getattr(dc, "ruta_pago", "")) or ruta_de_lista(
+            getattr(dc, "lista_precios_id", None),
+            mapeo_listas,
+            lista_nombre=str(getattr(dc, "lista_precios_nombre", "") or ""),
+            moneda_lista=str(getattr(dc, "moneda_lista", "") or ""),
+        )
+        compat, motivo_incomp = validar_compatibilidad_ruta_pago(
+            ruta_dc,
+            ruta_pago_declarada=ruta_excl_p or None,
+            metodo_pago_nombre=met_nom_p,
+            tipo_tasa_metodo=met_tt_p,
+        )
         vincs_so = mapa_v["por_so_id"].get(so_key, [])
-        pag_so = q2(sum((dec(v["equiv_usd_bcv"]) for v in vincs_so), Decimal("0")))
+        pag_so = q2(
+            sum(
+                (
+                    dec(
+                        v.get("equiv_usd_binance")
+                        if (ruta_dc == RUTA_BINANCE and v.get("equiv_usd_binance") is not None)
+                        else v["equiv_usd_bcv"]
+                    )
+                    for v in vincs_so
+                ),
+                Decimal("0"),
+            )
+        )
         sal_so = max(Decimal("0.00"), q2(tot - pag_so))
         if sal_so <= Decimal("0.00"):
             continue
@@ -722,22 +995,33 @@ def candidatos_ventas_para_pago(
                 "saldo_pendiente_usd": float(sal_so),
                 "factura_id": None,
                 "odoo_order_id": dc.odoo_order_id,
+                "ruta_pago": ruta_dc,
+                "ruta_pago_label": etiqueta_ruta(ruta_dc),
+                "compatible_ruta": compat,
+                "motivo_incompatibilidad": motivo_incomp,
             }
         )
 
     ordenes_cand.sort(key=lambda x: (x["fecha"], x["so_id"]))
-    rest_usd = disp_usd
+    rest_orig = disp_orig
     for ord_c in ordenes_cand:
         sal = q2(dec(ord_c["saldo_pendiente_usd"]))
-        if rest_usd > 0 and sal > 0:
-            sug_usd = min(rest_usd, sal)
+        ruta_ord = ord_c.get("ruta_pago") or RUTA_BCV
+        rest_usd_ruta, _ = _equiv_usd_y_tasa_ruta(
+            rest_orig, mon, f_pago, ruta_ord, por_fecha, fallback, repo_cxc
+        )
+        if ord_c.get("compatible_ruta", True) and rest_usd_ruta > 0 and sal > 0:
+            sug_usd = min(rest_usd_ruta, sal)
             sug_orig = min(
-                disp_orig, _monto_orig_desde_usd(sug_usd, mon, f_pago, por_fecha, fallback)
+                rest_orig,
+                _monto_orig_desde_usd_ruta(
+                    sug_usd, mon, f_pago, ruta_ord, por_fecha, fallback, repo_cxc
+                ),
             )
             ord_c["sugerido_fifo"] = True
             ord_c["monto_sugerido_usd"] = float(sug_usd)
             ord_c["monto_sugerido_original"] = float(sug_orig)
-            rest_usd = max(Decimal("0.00"), q2(rest_usd - sug_usd))
+            rest_orig = max(Decimal("0.00"), q2(rest_orig - sug_orig))
         else:
             ord_c["sugerido_fifo"] = False
             ord_c["monto_sugerido_usd"] = 0.0
@@ -811,6 +1095,7 @@ def vincular_pago_venta(
     origen_vinculacion: str = "manual",
     actor: str = "sistema",
     escritor: Any = None,
+    ruta_pago: str | None = None,
 ) -> dict[str, Any]:
     """Vincula un pago recibido contra un pedido/orden y opcionalmente concilia en Odoo."""
     doc = _resolver_venta_objetivo(
@@ -849,6 +1134,24 @@ def vincular_pago_venta(
     if pago_mirror is None and op_row is None:
         raise VinculacionInvalida("Debes indicar un pago recibido válido.")
 
+    if pago_mirror is not None:
+        met_nombre, met_tt = _metodo_pago_info(repo_cxc, pago_mirror.metodo_pago)
+    else:
+        met_nombre = str(getattr(op_row, "metodo_pago", "") or "")
+        met_tt = None
+    ruta_excl = normalizar_ruta(ruta_pago) or normalizar_ruta(
+        getattr(op_row, "ruta_pago", "") if op_row is not None else ""
+    )
+    ruta_doc = doc.get("ruta_pago") or RUTA_BCV
+    compat, motivo_incomp = validar_compatibilidad_ruta_pago(
+        ruta_doc,
+        ruta_pago_declarada=ruta_excl or None,
+        metodo_pago_nombre=met_nombre,
+        tipo_tasa_metodo=met_tt,
+    )
+    if not compat:
+        raise VinculacionInvalida(motivo_incomp)
+
     monto_total_pago = q2(
         dec(pago_mirror.monto if pago_mirror is not None else op_row.monto)  # type: ignore[union-attr]
     )
@@ -886,7 +1189,9 @@ def vincular_pago_venta(
             f"El monto ({monto_dec}) supera el saldo disponible del pago ({disp_orig} {mon})."
         )
 
-    equiv_usd, tasa_bcv = _equiv_usd_y_tasa(monto_dec, mon, f_pago, por_fecha, fallback)
+    equiv_usd, tasa_bcv = _equiv_usd_y_tasa_ruta(
+        monto_dec, mon, f_pago, ruta_doc, por_fecha, fallback, repo_cxc
+    )
 
     # Intentar reconciliación en Odoo si el cliente/factura/pago existen allá
     pago_res_odoo = (
@@ -944,7 +1249,9 @@ def vincular_pago_venta(
             timestamp_registro=datetime.now(),
             estado=(EstadoVinculacion.CONCILIADO if reconciliado else EstadoVinculacion.PENDIENTE),
             moneda_abono=mon_enum,
-            tipo_tasa_abono=TipoTasa.BCV,
+            tipo_tasa_abono=(
+                TipoTasa.BINANCE if ruta_doc == RUTA_BINANCE else TipoTasa.BCV
+            ),
             bcv_variante="USD",
         )
         repo_cxc.update_vinculacion(vinc_obj)

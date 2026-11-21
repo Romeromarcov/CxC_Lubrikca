@@ -1304,13 +1304,27 @@
                             </select>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label>Lista comercial por defecto</label>
-                            <select id="doc-f-moneda">
-                                <option value="VES" id="doc-opt-lista-ves">Pago VES Nov 2026 (Comercial por defecto)</option>
-                                <option value="USD">Pago USD Comercial ($)</option>
+                            <label>Lista de Precios (Odoo)</label>
+                            <select id="doc-f-lista-precios">
+                                <option value="21" data-moneda="VES" data-ruta="bcv" id="doc-opt-lista-ves">Pago VES Nov 2026 (VES · Ruta BCV)</option>
+                                <option value="USD" data-moneda="USD" data-ruta="binance">Pago USD Comercial (USD · Ruta Binance)</option>
                             </select>
+                            <input type="hidden" id="doc-f-moneda" value="VES">
+                            <div id="doc-f-ruta-badge" style="margin-top:0.35rem; font-size:0.77rem;"></div>
                         </div>
-                        <div class="form-group" style="margin:0; grid-column: span 2;">
+                        <div class="form-group" style="margin:0;">
+                            <label>Plazo de Crédito (días)</label>
+                            <div style="display:flex; gap:0.35rem; align-items:center; flex-wrap:wrap;">
+                                <input type="number" id="doc-f-dias-credito" min="0" max="180" value="0" style="width:74px;">
+                                <button type="button" class="btn-secondary doc-cred-preset" data-cred-dias="0" style="padding:3px 7px; font-size:0.75rem;">Contado</button>
+                                <button type="button" class="btn-secondary doc-cred-preset" data-cred-dias="7" style="padding:3px 7px; font-size:0.75rem;">7d</button>
+                                <button type="button" class="btn-secondary doc-cred-preset" data-cred-dias="15" style="padding:3px 7px; font-size:0.75rem;">15d</button>
+                                <button type="button" class="btn-secondary doc-cred-preset" data-cred-dias="21" style="padding:3px 7px; font-size:0.75rem;">21d</button>
+                                <button type="button" class="btn-secondary doc-cred-preset" data-cred-dias="30" style="padding:3px 7px; font-size:0.75rem;">30d</button>
+                            </div>
+                            <small id="doc-f-credito-tope" style="display:block; margin-top:0.25rem; color:#475569; font-size:0.75rem;">Tope por volumen: calculando...</small>
+                        </div>
+                        <div class="form-group" style="margin:0; grid-column: 1 / -1;">
                             <label>Buscar contacto existente en Odoo (Prospecto o Cliente)</label>
                             <div style="position:relative;">
                                 <input type="text" id="doc-buscar-contacto" placeholder="🔎 Escribe nombre o RIF para autocompletar desde Odoo...">
@@ -1401,7 +1415,19 @@
                         <div id="doc-descuentos-lista" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:0.5rem;">
                             <span style="color:#64748b; font-size:0.85rem;">Cargando catálogo de descuentos...</span>
                         </div>
-                        <div id="doc-descuentos-alertas" style="margin-top:0.65rem;"></div>
+                        <div id="doc-especiales-panel" style="margin-top:0.85rem; padding-top:0.75rem; border-top:1px dashed #cbd5e1;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.4rem;">
+                                <label style="font-weight:700; color:#92400e; font-size:0.84rem; margin:0;">⚡ Descuentos / Negociaciones Especiales (Sujetos a aprobación en CxC)</label>
+                            </div>
+                            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.5rem;">
+                                <input type="text" id="doc-esp-motivo" placeholder="Ej. Acuerdo gerencial / descuento comercial especial" style="flex:1; min-width:220px; padding:5px 8px;">
+                                <input type="number" id="doc-esp-pct" min="0.1" max="100" step="0.5" placeholder="% Desc." style="width:95px; padding:5px 8px;">
+                                <button type="button" class="btn-secondary" id="doc-btn-add-especial" style="background:#fef3c7; color:#92400e; border-color:#fcd34d;">➕ Agregar Especial</button>
+                            </div>
+                            <div id="doc-especiales-lista" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>
+                        </div>
+                        <div id="doc-politica-veredicto" style="margin-top:0.65rem;"></div>
+                        <div id="doc-descuentos-alertas" style="margin-top:0.45rem;"></div>
                     </div>
 
                     <div style="display:flex; justify-content:flex-end; gap:1.4rem; flex-wrap:wrap; margin-bottom:1rem; font-size:0.93rem; background:#f1f5f9; padding:0.75rem 1rem; border-radius:8px;">
@@ -3453,12 +3479,15 @@
                      mapeos separados que había antes -- una sola fuente de verdad por
                      lista, para no arrastrar lógica/endpoints duplicados). -->
                 <section class="config-card card" data-subpage="listas" style="grid-column: 1 / span 2; border-left: 5px solid var(--accent-blue, #2563eb);">
-                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center;">
+                    <div class="panel-header-row" style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem; flex-wrap:wrap;">
                         <div>
-                            <h2 style="color: #1e40af; margin:0;">Mapeo de Listas de Precio</h2>
-                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Por cada lista: si alimenta el cálculo en Moneda USD o VES (el motor de descuentos usa TODAS las marcadas, como respaldo entre sí), su Categoría Industrial/Comercial (solo consulta, para Inventario), y cuál es la "Vigente" a mostrar cuando haya más de una candidata en el mismo grupo Categoría+Moneda.</p>
+                            <h2 style="color: #1e40af; margin:0;">Mapeo de Listas de Precio y Rutas de Pago</h2>
+                            <p style="color: #475569; margin: 0.25rem 0 0 0;">Configura para cada lista su Moneda (USD/VES), su Ruta de Pago autorizada (<strong>Ruta BCV</strong> por defecto para VES, <strong>Ruta Binance</strong> por defecto para USD — bidireccional y retroactivo), Categoría y Vigencia.</p>
                         </div>
-                        <button type="button" class="btn btn-secondary" onclick="loadPricelistMapeo()">🔄 Cargar Mapeo</button>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                            <button type="button" class="btn btn-secondary" onclick="autoAsignarRutasListas()">⚡ Auto-asignar VES→BCV / USD→Binance</button>
+                            <button type="button" class="btn btn-secondary" onclick="loadPricelistMapeo()">🔄 Cargar Mapeo</button>
+                        </div>
                     </div>
 
                     <form id="pricelist-mapeo-form" class="cxc-form" style="margin-top: 1rem;" onsubmit="savePricelistMapeo(event)">
@@ -3470,12 +3499,13 @@
                                         <th>Lista</th>
                                         <th>Estado</th>
                                         <th>Moneda</th>
+                                        <th>Ruta de Pago</th>
                                         <th>Categoría</th>
                                         <th>Vigente</th>
                                     <th title="Desde cuándo esta lista fue la referencia de su grupo">Vigente desde</th><th title="Vacío = sigue siendo la referencia">Hasta</th></tr>
                                 </thead>
                                 <tbody id="pricelist-mapeo-table-body">
-                                    <tr><td colspan="5" class="table-empty">Cargando listas de Odoo...</td></tr>
+                                    <tr><td colspan="8" class="table-empty">Cargando listas de Odoo...</td></tr>
                                 </tbody>
                             </table>
                         </div>

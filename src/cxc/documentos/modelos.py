@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from cxc.capturas.modelos import normalizar_rif, vacio
+from cxc.engine.rutas_pago import etiqueta_ruta, normalizar_ruta
 
 COTIZACION = "cotizacion"
 PEDIDO = "pedido"
@@ -129,6 +130,9 @@ class DocumentoComercial:
     token_preview: str = ""
     lista_precios_id: str = "21"
     lista_precios_nombre: str = "Pago VES Nov 2026"
+    ruta_pago: str = "bcv"
+    dias_credito: int = 0
+    descuentos_especiales: tuple[dict[str, Any], ...] = ()
     descuentos_elegidos: tuple[dict[str, Any], ...] = ()
     validacion_motor: dict[str, Any] | None = None
     total_descuentos: Decimal = Decimal("0")
@@ -181,11 +185,21 @@ class DocumentoComercial:
             "moneda_lista": self.moneda_lista,
             "lista_precios_id": self.lista_precios_id,
             "lista_precios_nombre": self.lista_precios_nombre,
+            "ruta_pago": (
+                normalizar_ruta(self.ruta_pago)
+                or ("binance" if str(self.moneda_lista or "").upper() == "USD" else "bcv")
+            ),
+            "ruta_pago_label": etiqueta_ruta(
+                normalizar_ruta(self.ruta_pago)
+                or ("binance" if str(self.moneda_lista or "").upper() == "USD" else "bcv")
+            ),
+            "dias_credito": int(self.dias_credito or 0),
             "vendedor_email": self.vendedor_email,
             "fecha_entrega": self.fecha_entrega.isoformat() if self.fecha_entrega else None,
             "condiciones_negociacion": self.condiciones_negociacion,
             "observaciones": self.observaciones,
             "descuentos": [dict(d) for d in self.descuentos_elegidos],
+            "descuentos_especiales": [dict(d) for d in self.descuentos_especiales],
             "validacion_motor": dict(self.validacion_motor) if self.validacion_motor else None,
             "alertas_motor": (
                 list(self.validacion_motor.get("alertas", []))

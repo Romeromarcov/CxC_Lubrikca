@@ -107,6 +107,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from .rutas_pago import RUTA_BINANCE, normalizar_ruta
+
 
 class ReferenciaCxC(StrEnum):
     """Contra qué referencia se dio la orden por pagada.
@@ -166,6 +168,7 @@ def clasificar_estado_cxc(
     factura_pagada_confirmada_odoo: bool = False,
     subtotal_pagado: bool = False,
     subtotal_pagado_incl_pendiente: bool = False,
+    ruta_orden: str | None = None,
 ) -> ClasificacionCxC:
     """Clasifica una orden según el árbol de enrutamiento de CxC.
 
@@ -176,13 +179,11 @@ def clasificar_estado_cxc(
     PENDIENTE sin reconciliar en Odoo, ver Fase 0 del plan de arquitectura
     de pagos).
 
-    `nacio_en_lista_usd`: True si la orden nació en una lista de precios
-    USD (no VES, no ventana histórica). Cambia la evaluación de las
-    reglas 1/2: para una orden USD, `teorico_usd_pagado` es la ÚNICA
-    condición que exporta por teórico (BS pagado solo, sin USD pagado, NO
-    alcanza -- ver aclaratoria en el docstring del módulo). Para una orden
-    VES/histórica (`False`, default), se mantiene el OR original: cualquiera
-    de los dos teóricos pagado es suficiente.
+    ``ruta_orden`` (``"bcv"`` | ``"binance"``) o ``nacio_en_lista_usd``:
+    Enrutamiento estricto bidireccional en las reglas 1/2: una orden nacida
+    en lista USD (Ruta Binance) solo sale por teórico vía ``teorico_usd_pagado``,
+    y una orden nacida en lista VES (Ruta BCV) solo sale por teórico vía
+    ``teorico_bs_pagado``. Ninguna orden puede liquidarse por la ruta contraria.
 
     `venta_real_pagada`: True si lo pagado cubre el monto real de la
     orden en Odoo (Col 3), independiente de cualquier teórico -- solo
@@ -198,25 +199,15 @@ def clasificar_estado_cxc(
     `factura_pagada_confirmada_odoo`: True si Odoo mismo (``account.
     move.payment_state`` de TODAS las out_invoice de la orden, en vivo)
     ya considera la factura saldada -- 'paid'/'in_payment'/'reversed'.
-    Pedido explícito del usuario (agosto 2026, auditoría de saldos de
-    Cuentas por Cobrar): antes de este flag, la única forma de salir de
-    CxC era reconstruir "pagado" de abajo hacia arriba a partir de
-    nuestras propias Vinculaciones -- cualquier hueco en esa
-    reconstrucción (sync incompleto, tasa mal congelada, un pago que
-    nunca se vinculó localmente) dejaba la orden viéndose pendiente
-    aunque Odoo, la fuente de verdad, ya la diera por saldada.
-    Confirmado en vivo: 107 órdenes reales en ese estado. Esta señal es
-    DIRECTA y autoritativa -- no requiere que ninguna otra columna
-    calzada exactamente, así que se evalúa junto con las reglas 1-4
-    (CONCILIADO), nunca junto a las `*_incl_pendiente` (esas siguen
-    siendo exclusivamente sobre Vinculaciones PENDIENTE nuestras, un
-    concepto distinto).
 
     La tolerancia (epsilon 0.05, la misma de las columnas de estatus de
     pago) ya debe haberse aplicado al calcular los flags de entrada: esta
     función solo combina booleanos.
     """
-    if teorico_usd_pagado:
+    ruta_norm = normalizar_ruta(ruta_orden)
+    es_ruta_binance = (ruta_norm == RUTA_BINANCE) if ruta_norm else bool(nacio_en_lista_usd)
+
+    if teorico_usd_pagado and es_ruta_binance:
         bandeja = BandejaDestino.FACTURACION_2 if facturada else BandejaDestino.FACTURACION_1
         return ClasificacionCxC(
             so_id=so_id,
@@ -226,7 +217,7 @@ def clasificar_estado_cxc(
             referencia=ReferenciaCxC.TEORICO_USD,
         )
 
-    if teorico_bs_pagado and not nacio_en_lista_usd:
+    if teorico_bs_pagado and not es_ruta_binance:
         bandeja = BandejaDestino.FACTURACION_2 if facturada else BandejaDestino.FACTURACION_1
         return ClasificacionCxC(
             so_id=so_id,
@@ -283,28 +274,10 @@ def clasificar_estado_cxc(
             referencia=ReferenciaCxC.ODOO,
         )
 
-    if teorico_bs_pagado and nacio_en_lista_usd:
-        return ClasificacionCxC(
-            so_id=so_id,
-            sale_de_cxc=False,
-            bandeja_destino=None,
-            motivo=(
-                "Pagado vs Teórico Lista BS pero la orden nació en Lista "
-                "USD -- no alcanza sin el Teórico USD (su referencia "
-                "nativa) también pagado"
-            ),
-            referencia=ReferenciaCxC.NINGUNA,
-        )
-
-    # "En proceso de pago" (segunda pasada, mismo criterio que las reglas
-    # 1-4 pero incluyendo lo PENDIENTE) -- solo se llega aquí si NINGUNA
-    # versión CONCILIADO alcanzó arriba. Mismo "beneficio de la duda" que
-    # Odoo le da a una factura in_payment. Destino según `facturada` --
-    # ver docstring del módulo: antes de facturar, CONCILIADO es
-    # estructuralmente imposible, así que esta señal DEBE enrutar a
-    # Facturación 1 (acción real) o la orden nunca tendría otro camino
-    # para que alguien note que ya está lista.
-    if teorico_usd_pagado_incl_pendiente:
+    # "En proceso de pago" (segunda pasada, mismo criterio estricto de ruta
+    # pero incluyendo lo PENDIENTE) -- solo se llega aquí si NINGUNA versión
+    # CONCILIADO alcanzó arriba.
+    if teorico_usd_pagado_incl_pendiente and es_ruta_binance:
         bandeja = (
             BandejaDestino.EN_PROCESO_DE_PAGO if facturada else BandejaDestino.FACTURACION_1
         )
@@ -321,7 +294,7 @@ def clasificar_estado_cxc(
             referencia=ReferenciaCxC.TEORICO_USD,
         )
 
-    if teorico_bs_pagado_incl_pendiente and not nacio_en_lista_usd:
+    if teorico_bs_pagado_incl_pendiente and not es_ruta_binance:
         bandeja = (
             BandejaDestino.EN_PROCESO_DE_PAGO if facturada else BandejaDestino.FACTURACION_1
         )
@@ -403,6 +376,32 @@ def clasificar_estado_cxc(
             ),
             confirmado=subtotal_pagado,
             referencia=ReferenciaCxC.SUBTOTAL_SIN_IVA,
+        )
+
+    if (teorico_bs_pagado or teorico_bs_pagado_incl_pendiente) and es_ruta_binance:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=False,
+            bandeja_destino=None,
+            motivo=(
+                "Pagado vs Teórico Lista BS pero la orden nació en Lista "
+                "USD (Ruta Binance) -- no puede cerrarse por Ruta BCV sin "
+                "el Teórico USD también pagado"
+            ),
+            referencia=ReferenciaCxC.NINGUNA,
+        )
+
+    if (teorico_usd_pagado or teorico_usd_pagado_incl_pendiente) and not es_ruta_binance:
+        return ClasificacionCxC(
+            so_id=so_id,
+            sale_de_cxc=False,
+            bandeja_destino=None,
+            motivo=(
+                "Pagado vs Teórico Lista USD pero la orden nació en Lista "
+                "VES (Ruta BCV) -- no puede cerrarse por Ruta Binance sin "
+                "el Teórico BS también pagado"
+            ),
+            referencia=ReferenciaCxC.NINGUNA,
         )
 
     return ClasificacionCxC(

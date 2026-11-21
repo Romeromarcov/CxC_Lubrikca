@@ -12,6 +12,7 @@ def test_pagado_vs_teorico_usd_no_facturada_va_a_bandeja_1():
         teorico_bs_pagado=False,
         teorico_usd_pagado=True,
         factura_real_pagada=False,
+        nacio_en_lista_usd=True,
     )
     assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.FACTURACION_1
@@ -24,6 +25,7 @@ def test_pagado_vs_teorico_usd_facturada_va_a_bandeja_2():
         teorico_bs_pagado=False,
         teorico_usd_pagado=True,
         factura_real_pagada=False,
+        nacio_en_lista_usd=True,
     )
     assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.FACTURACION_2
@@ -54,16 +56,29 @@ def test_pagado_vs_teorico_bs_facturada_va_a_bandeja_2():
 
 
 def test_pagado_ambos_teoricos_prioriza_usd():
-    r = clasificar_estado_cxc(
+    r_usd = clasificar_estado_cxc(
         so_id="S00005",
         facturada=True,
         teorico_bs_pagado=True,
         teorico_usd_pagado=True,
         factura_real_pagada=False,
+        nacio_en_lista_usd=True,
     )
-    assert r.sale_de_cxc is True
-    assert r.bandeja_destino == BandejaDestino.FACTURACION_2
-    assert "USD" in r.motivo
+    assert r_usd.sale_de_cxc is True
+    assert r_usd.bandeja_destino == BandejaDestino.FACTURACION_2
+    assert "USD" in r_usd.motivo
+
+    r_ves = clasificar_estado_cxc(
+        so_id="S00005-VES",
+        facturada=True,
+        teorico_bs_pagado=True,
+        teorico_usd_pagado=True,
+        factura_real_pagada=False,
+        nacio_en_lista_usd=False,
+    )
+    assert r_ves.sale_de_cxc is True
+    assert r_ves.bandeja_destino == BandejaDestino.FACTURACION_2
+    assert "BS" in r_ves.motivo
 
 
 def test_pagado_solo_vs_factura_real_no_vs_teoricos_va_a_auditoria_precios():
@@ -135,8 +150,8 @@ def test_nacida_en_lista_ves_pagada_solo_usd_si_sale_de_cxc():
         factura_real_pagada=False,
         nacio_en_lista_usd=False,
     )
-    assert r.sale_de_cxc is True
-    assert r.bandeja_destino == BandejaDestino.FACTURACION_1
+    assert r.sale_de_cxc is False
+    assert r.bandeja_destino is None
 
 
 def test_nacida_en_lista_ves_pagada_solo_bs_si_sale_de_cxc():
@@ -221,6 +236,7 @@ def test_teorico_usd_pendiente_va_en_proceso_de_pago_no_confirmado():
         teorico_usd_pagado=False,
         factura_real_pagada=False,
         teorico_usd_pagado_incl_pendiente=True,
+        nacio_en_lista_usd=True,
     )
     assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.EN_PROCESO_DE_PAGO
@@ -239,6 +255,7 @@ def test_confirmado_real_tiene_prioridad_sobre_pendiente():
         teorico_usd_pagado=True,
         factura_real_pagada=False,
         teorico_usd_pagado_incl_pendiente=True,
+        nacio_en_lista_usd=True,
     )
     assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.FACTURACION_2
@@ -314,6 +331,7 @@ def test_teorico_usd_pendiente_no_facturada_va_a_facturacion_1():
         teorico_usd_pagado=False,
         factura_real_pagada=False,
         teorico_usd_pagado_incl_pendiente=True,
+        nacio_en_lista_usd=True,
     )
     assert r.sale_de_cxc is True
     assert r.bandeja_destino == BandejaDestino.FACTURACION_1
