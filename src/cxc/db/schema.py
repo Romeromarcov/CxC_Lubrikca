@@ -1642,3 +1642,104 @@ cuentas_receptoras_lubrikca = Table(
     Column("creado_en", DateTime(timezone=False), nullable=False),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
 )
+
+# --- Fase 1: API v1 Móvil Offline y Portal Web/Mobile de Clientes -------------
+auth_refresh_tokens = Table(
+    "auth_refresh_tokens",
+    metadata,
+    Column("token_id", Integer, primary_key=True, autoincrement=True),
+    Column("familia_id", String(64), nullable=False, index=True),
+    Column("token_hash", String(128), nullable=False, unique=True, index=True),
+    # vendedor | cliente_portal
+    Column("sujeto_tipo", String(32), nullable=False, index=True),
+    Column("sujeto_id", String(160), nullable=False, index=True),
+    Column("device_id", String(120), nullable=False, server_default="", index=True),
+    Column("password_version", String(32), nullable=False, server_default=""),
+    Column("ip_origen", String(64), nullable=False, server_default=""),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("expira_en", DateTime(timezone=False), nullable=False, index=True),
+    Column("rotado_en", DateTime(timezone=False), nullable=True),
+    Column("revocado_en", DateTime(timezone=False), nullable=True),
+)
+
+dispositivos_moviles = Table(
+    "dispositivos_moviles",
+    metadata,
+    Column("device_id", String(120), primary_key=True),
+    Column("sujeto_tipo", String(32), nullable=False, index=True),
+    Column("sujeto_id", String(160), nullable=False, index=True),
+    Column("plataforma", String(32), nullable=False, server_default="android"),
+    Column("push_token", String(255), nullable=False, server_default=""),
+    Column("app_version", String(40), nullable=False, server_default=""),
+    Column("ultimo_sync_en", DateTime(timezone=False), nullable=True),
+    Column("ultimo_cursor", String(64), nullable=False, server_default=""),
+    Column("activo", Boolean, nullable=False, server_default="true", index=True),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+clientes_portal_cuentas = Table(
+    "clientes_portal_cuentas",
+    metadata,
+    Column("cuenta_id", Integer, primary_key=True, autoincrement=True),
+    Column("cliente_id", String(64), nullable=False, index=True),
+    Column("partner_odoo_id", Integer, nullable=True, index=True),
+    Column("cliente_nombre", String(200), nullable=False, server_default=""),
+    Column("email", String(160), nullable=False, unique=True, index=True),
+    Column("telefono", String(40), nullable=False, server_default=""),
+    Column("password_hash", String(255), nullable=False),
+    Column("salt", String(64), nullable=False),
+    # titular | compras | tesoreria
+    Column("rol_portal", String(32), nullable=False, server_default="titular"),
+    Column("activo", Boolean, nullable=False, server_default="true", index=True),
+    Column("verificado_en", DateTime(timezone=False), nullable=True),
+    Column("ultimo_acceso_en", DateTime(timezone=False), nullable=True),
+    Column("creado_por", String(160), nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)
+
+clientes_portal_invitaciones = Table(
+    "clientes_portal_invitaciones",
+    metadata,
+    Column("invitacion_id", Integer, primary_key=True, autoincrement=True),
+    Column("token_hash", String(128), nullable=False, unique=True, index=True),
+    Column("cliente_id", String(64), nullable=False, index=True),
+    Column("partner_odoo_id", Integer, nullable=True, index=True),
+    Column("cliente_nombre", String(200), nullable=False, server_default=""),
+    Column("email", String(160), nullable=False, index=True),
+    Column("rol_portal", String(32), nullable=False, server_default="titular"),
+    Column("creado_por", String(160), nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("expira_en", DateTime(timezone=False), nullable=False),
+    Column("consumido_en", DateTime(timezone=False), nullable=True),
+)
+
+sync_idempotency_keys = Table(
+    "sync_idempotency_keys",
+    metadata,
+    Column("idempotency_key", String(128), primary_key=True),
+    Column("actor_tipo", String(32), nullable=False, index=True),
+    Column("actor_id", String(160), nullable=False, index=True),
+    Column("endpoint", String(120), nullable=False, server_default=""),
+    Column("payload_hash", String(64), nullable=False),
+    Column("status_code", Integer, nullable=False, server_default="200"),
+    Column("response_json", Text, nullable=False, server_default="{}"),
+    Column("creado_en", DateTime(timezone=False), nullable=False, index=True),
+)
+
+adjuntos_objeto = Table(
+    "adjuntos_objeto",
+    metadata,
+    Column("adjunto_id", Integer, primary_key=True, autoincrement=True),
+    Column("sha256", String(64), nullable=False, index=True),
+    Column("storage_key", String(255), nullable=False, unique=True),
+    Column("storage_backend", String(32), nullable=False, server_default="local"),
+    Column("mime", String(80), nullable=False),
+    Column("bytes", Integer, nullable=False),
+    Column("nombre_archivo", String(200), nullable=False, server_default=""),
+    Column("subido_por_tipo", String(32), nullable=False, server_default=""),
+    Column("subido_por_id", String(160), nullable=False, server_default=""),
+    Column("entidad_tipo", String(40), nullable=False, server_default=""),
+    Column("entidad_id", String(64), nullable=False, server_default=""),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+)
