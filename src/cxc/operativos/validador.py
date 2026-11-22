@@ -22,6 +22,11 @@ from cxc.odoo.directorio import (
 )
 from cxc.repositories import Repository
 
+from .cuentas_receptoras import (
+    CuentaReceptora,
+    codigo_sudeban_de_banco,
+    validar_destino_pago,
+)
 from .modelos import (
     CATEGORIAS_GASTO,
     TIPO_FACTURA_PROVEEDOR,
@@ -334,12 +339,26 @@ def validar_documento_operativo(
     cuentas_odoo: Sequence[CuentaContable] = (),
     diarios_extra: dict[str, int] | None = None,
     cuentas_terceros: Sequence[CuentaTercero] = (),
+    cuentas_receptoras: Sequence[CuentaReceptora] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Normaliza ``raw_datos`` y ejecuta validación completa para Bot y Web CxC.
 
     Devuelve ``(datos_normalizados, validacion)``.
     """
     datos = extraer_campos_canonicos(tipo, raw_datos)
+    datos_destino = {
+        k: str(datos.get(k) or "").strip()
+        for k in (
+            "banco_origen",
+            "banco_destino",
+            "cuenta_destino",
+            "rif_destino",
+            "telefono_destino",
+            "titular_destino",
+            "email_destino",
+        )
+        if str(datos.get(k) or "").strip()
+    }
     alertas: list[str] = []
 
     cuenta_zt: CuentaTercero | None = None
@@ -407,26 +426,83 @@ def validar_documento_operativo(
             alertas.append(
                 "Proveedor nuevo en Odoo: se creará automáticamente al autorizar el documento."
             )
+            if not datos.get("rif"):
+                alertas.append(
+                    "Indica el RIF del proveedor nuevo para evitar duplicados en el Maestro Único."
+                )
         elif candidatos:
             alertas.append(
                 f"Hay {len(candidatos)} proveedores similares en Odoo; verifica antes de aprobar."
             )
 
     diario_sug: dict[str, Any] | None = None
+    destino_val: dict[str, Any] | None = None
     if tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR):
         if tipo == TIPO_PAGO and datos.get("es_zelle_tercero"):
+            destino_val = validar_destino_pago(
+                datos,
+                cuentas_receptoras,
+                es_zelle_tercero=True,
+                es_efectivo_flag=False,
+            )
             prov_lbl = cuenta_zt.proveedor_nombre if cuenta_zt else "proveedor configurado"
             regla_odoo = (
                 "Zelle de Terceros: NO toca diarios bancarios propios; creará en Odoo "
                 f"un asiento contable borrador (Débito CxP {prov_lbl} / Crédito CxC Cliente)."
             )
+        elif tipo == TIPO_PAGO:
+            es_ef_pago = es_efectivo(datos.get("metodo_pago"))
+            destino_val = validar_destino_pago(
+                datos,
+                cuentas_receptoras,
+                es_zelle_tercero=False,
+                es_efectivo_flag=es_ef_pago,
+            )
+            if destino_val.get("bloqueante"):
+                diario_sug = None
+                datos["diario_id"] = None
+                datos["diario_nombre"] = ""
+                alertas.append(
+                    str(destino_val.get("mensaje") or "La cuenta destino no pertenece a Lubrikca.")
+                )
+            elif (
+                destino_val.get("estado") == "VALIDADO_LUBRIKCA"
+                and destino_val.get("diario_odoo_id") is not None
+            ):
+                jid_dest = int(destino_val["diario_odoo_id"])
+                cat_d = listar_diarios_bancarios(diarios_extra)
+                diario_sug = next((d for d in cat_d if int(d["id"]) == jid_dest), None) or {
+                    "id": jid_dest,
+                    "nombre": str(destino_val.get("diario_odoo_nombre") or f"Diario #{jid_dest}"),
+                    "moneda": str(datos.get("moneda") or "VES"),
+                    "tipo": "banco",
+                }
+            else:
+                datos_para_diario = dict(datos)
+                bo = str(datos.get("banco_origen") or "").strip()
+                br = str(datos.get("banco") or "").strip()
+                cod_bo = codigo_sudeban_de_banco(bo)
+                cod_br = codigo_sudeban_de_banco(br)
+                if bo and br and (bo.lower() == br.lower() or (cod_bo and cod_bo == cod_br)):
+                    datos_para_diario["banco"] = ""
+                diario_sug = resolver_diario_opcional(datos_para_diario, diarios_extra)
+                if diario_sug is None and not datos.get("diario_id"):
+                    alertas.append(
+                        "Banco / diario receptor no resuelto automáticamente: "
+                        "indica la cuenta/banco de destino de Lubrikca antes de aprobar."
+                    )
         else:
-            diario_sug = resolver_diario_opcional(datos, diarios_extra)
+            datos_prov_d = dict(datos)
+            if datos.get("banco_origen") and not datos.get("banco"):
+                datos_prov_d["banco"] = datos["banco_origen"]
+            diario_sug = resolver_diario_opcional(datos_prov_d, diarios_extra)
             if diario_sug is None:
                 alertas.append(
-                    "Banco / diario no resuelto automáticamente: selecciona el diario bancario "
-                    "o caja antes de aprobar."
+                    "Banco / diario no resuelto automáticamente: "
+                    "selecciona el diario bancario o caja antes de aprobar."
                 )
+
+        if not (tipo == TIPO_PAGO and datos.get("es_zelle_tercero")):
             if es_efectivo(datos.get("metodo_pago")):
                 regla_odoo = (
                     "Efectivo: se confirma primero en CxC (emite recibo) y en Odoo se enviará "
@@ -445,8 +521,8 @@ def validar_documento_operativo(
             )
         else:
             regla_odoo = (
-                "Compras CxP: irá al diario de compras VES por defecto (o el diario elegido), "
-                "sin impuestos y detalle en narration + chatter."
+                "Compras CxP: irá al diario de compras VES con base imponible + impuesto compra "
+                "(tax_ids real en Odoo) y verificación automática post-creación."
             )
 
     # Validación matemática base + IVA vs monto total
@@ -508,14 +584,17 @@ def validar_documento_operativo(
     for dup in duplicados:
         alertas.append(dup["detalle"])
 
+    destino_bloqueante = bool(destino_val and destino_val.get("bloqueante"))
     validacion = {
-        "ok": not faltantes and not duplicados,
+        "ok": not faltantes and not duplicados and not destino_bloqueante,
         "faltantes": faltantes,
         "alertas": alertas,
         "contraparte_resuelta": contraparte,
         "contraparte_candidatos": candidatos,
         "creara_proveedor_nuevo": creara_proveedor,
         "diario_sugerido": diario_sug,
+        "destino_validacion": destino_val,
+        "datos_destino": datos_destino,
         "cuenta_sugerida": cuenta_sugerida,
         "categoria_sugerida": categoria_sugerida,
         "cuentas_alternativas": alternativas,

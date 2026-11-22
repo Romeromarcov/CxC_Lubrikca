@@ -172,13 +172,16 @@ def _a_doc(r: Any) -> DocumentoOperativo:
     )
 
 
+_COLS_DOCUMENTOS_OPERATIVOS: frozenset[str] = frozenset(c.name for c in documentos_operativos.c)
+
+
 def _serializar(campos: dict[str, Any]) -> dict[str, Any]:
     out = dict(campos)
     if "validacion" in out:
         out["validacion_json"] = json.dumps(out.pop("validacion") or {}, ensure_ascii=False)
     if "faltantes" in out:
         out["faltantes_json"] = json.dumps(list(out.pop("faltantes") or []), ensure_ascii=False)
-    return out
+    return {k: v for k, v in out.items() if k in _COLS_DOCUMENTOS_OPERATIVOS}
 
 
 class RepoOperativosSQL:

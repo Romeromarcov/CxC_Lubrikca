@@ -30,6 +30,11 @@ from cxc.operativos.contabilidad_gastos import (
     categorias_y_metodos_catalogo,
     guardar_config_gastos,
 )
+from cxc.operativos.cuentas_receptoras import (
+    BANCOS_SUDEBAN,
+    TIPOS_CANAL_CUENTA,
+    RepoCuentasReceptorasSQL,
+)
 from cxc.operativos.lotes_efectivo import (
     RepoLotesEfectivo,
     agrupar_efectivo_pendiente_por_vendedor,
@@ -170,6 +175,19 @@ def get_repo_terceros() -> RepoCuentasTerceros:
     return RepoCuentasTercerosSQL(repo._engine)
 
 
+def get_repo_cuentas_receptoras() -> RepoCuentasReceptorasSQL:
+    from cxc.web.app import get_repo
+
+    repo: Any = get_repo()
+    r = RepoCuentasReceptorasSQL(repo._engine)
+    try:
+        if not r.listar():
+            r.sembrar_desde_diarios(_diarios_env(), actor="auto_seed")
+    except SQLAlchemyError:
+        pass
+    return r
+
+
 def get_servicio_operativos() -> ServicioOperativos:
     from cxc.web.app import app as _app
     from cxc.web.app import get_repo
@@ -177,10 +195,17 @@ def get_servicio_operativos() -> ServicioOperativos:
     repo: Any = get_repo()
     engine = repo._engine
     fabrica_terceros = _app.dependency_overrides.get(get_repo_terceros, get_repo_terceros)
+    fabrica_cr = _app.dependency_overrides.get(
+        get_repo_cuentas_receptoras, get_repo_cuentas_receptoras
+    )
     try:
         repo_terceros: RepoCuentasTerceros | None = fabrica_terceros()
     except Exception:
         repo_terceros = None
+    try:
+        repo_cr: RepoCuentasReceptorasSQL | None = fabrica_cr()
+    except Exception:
+        repo_cr = None
     return ServicioOperativos(
         RepoOperativosSQL(engine),
         _fabrica_escritor_op,
@@ -190,11 +215,15 @@ def get_servicio_operativos() -> ServicioOperativos:
         diarios_extra=_diarios_env(),
         repo_capturas=RepoCapturasSQL(engine),
         repo_terceros=repo_terceros,
+        repo_cuentas_receptoras=repo_cr,
     )
 
 
 ServicioOpDep = Annotated[ServicioOperativos, Depends(get_servicio_operativos)]
 RepoTercerosDep = Annotated[RepoCuentasTerceros, Depends(get_repo_terceros)]
+RepoCuentasReceptorasDep = Annotated[
+    RepoCuentasReceptorasSQL, Depends(get_repo_cuentas_receptoras)
+]
 
 
 class OperativoValidarIn(BaseModel):
@@ -211,12 +240,26 @@ class ConfirmarCxcIn(BaseModel):
     enviar_a_odoo: bool = False
 
 
+class AprobarOpIn(BaseModel):
+    forzar_destino: bool = False
+    motivo_override_destino: str = ""
+    diario_id: int | None = None
+
+
 # ── Endpoints para Bots de Telegram (X-Bot-Key) ──────────────────────────────
 
 
 @router.get("/api/bots/operativos/catalogos", dependencies=[Depends(exigir_bot_key)])
 def bot_catalogos_operativos(servicio: ServicioOpDep) -> dict[str, Any]:
     return servicio.catalogos()
+
+
+@router.get(
+    "/api/bots/operativos/cuentas-receptoras", dependencies=[Depends(exigir_bot_key)]
+)
+def bot_cuentas_receptoras(repo_cr: RepoCuentasReceptorasDep) -> dict[str, Any]:
+    items = [c.a_dict() for c in repo_cr.listar(solo_activas=True, solo_propias=True)]
+    return {"items": items, "total": len(items)}
 
 
 @router.post("/api/bots/operativos/validar", dependencies=[Depends(exigir_bot_key)])
@@ -454,6 +497,7 @@ def confirmar_operativo_en_cxc(
 def aprobar_y_enviar_operativo_a_odoo(
     documento_id: int,
     servicio: ServicioOpDep,
+    body: Annotated[AprobarOpIn | None, Body()] = None,
     cxc_session: str | None = Cookie(default=None),
 ) -> JSONResponse:
     user = _usuario_op(cxc_session, *PERMISOS_VER_OPERATIVOS)
@@ -463,8 +507,36 @@ def aprobar_y_enviar_operativo_a_odoo(
         raise HTTPException(status_code=404, detail="Documento operativo no encontrado") from e
 
     _exigir_permiso_aprobacion(user, doc.tipo)
+    forzar = bool(body and body.forzar_destino)
+    motivo_ov = (body.motivo_override_destino or "").strip() if body else ""
+    if forzar:
+        if user.get("rol") not in ("admin", "superadmin"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Solo un administrador puede aprobar por excepción "
+                    "un pago con destino no validado."
+                ),
+            )
+        if not motivo_ov:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": (
+                        "Debes indicar motivo_override_destino para registrar "
+                        "el override en auditoría."
+                    ),
+                    "faltan": ["motivo_override_destino"],
+                },
+            )
     try:
-        aprobado = servicio.aprobar_y_enviar_a_odoo(documento_id, actor=_actor_op(user))
+        aprobado = servicio.aprobar_y_enviar_a_odoo(
+            documento_id,
+            actor=_actor_op(user),
+            forzar_destino=forzar,
+            motivo_override_destino=motivo_ov,
+            diario_id_override=(body.diario_id if (body and forzar) else None),
+        )
     except (OperativoYaEnviado, OperativoEstadoInvalido) as e:
         return JSONResponse(status_code=409, content={"error": str(e)})
     except (OperativoInvalido, CapturaInvalida) as e:
@@ -574,6 +646,99 @@ def listar_diarios_generales(
     except Exception as e:
         return {"items": [], "error": str(e)}
     return {"items": []}
+
+
+# ── Cuentas Receptoras Propias de Lubrikca (Tesorería) ───────────────────────
+
+
+@router.get("/api/tesoreria/cuentas-receptoras")
+def listar_cuentas_receptoras_tesoreria(
+    repo_cr: RepoCuentasReceptorasDep,
+    solo_activas: bool = False,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    _usuario_op(cxc_session, "pagos", "cobranza", "configuracion", PERMISO_APROBAR_PAGOS)
+    items = repo_cr.listar(solo_activas=solo_activas)
+    return {
+        "items": [c.a_dict() for c in items],
+        "total": len(items),
+        "bancos_sudeban": [
+            {"codigo": k, "nombre": v} for k, v in sorted(BANCOS_SUDEBAN.items())
+        ],
+        "tipos_canal": list(TIPOS_CANAL_CUENTA),
+    }
+
+
+@router.post("/api/tesoreria/cuentas-receptoras")
+def crear_cuenta_receptora_tesoreria(
+    repo_cr: RepoCuentasReceptorasDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    user = _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    try:
+        creada = repo_cr.crear(body, actor=_actor_op(user))
+    except OperativoInvalido as e:
+        return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
+    return JSONResponse(status_code=201, content=creada.a_dict())
+
+
+@router.put("/api/tesoreria/cuentas-receptoras/{cuenta_id}")
+def editar_cuenta_receptora_tesoreria(
+    cuenta_id: int,
+    repo_cr: RepoCuentasReceptorasDep,
+    body: Annotated[dict[str, Any], Body(default_factory=dict)],
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    try:
+        actualizada = repo_cr.actualizar(cuenta_id, body)
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Cuenta receptora no encontrada") from e
+    except OperativoInvalido as e:
+        return JSONResponse(status_code=422, content={"error": e.error, "faltan": e.faltan})
+    return JSONResponse(status_code=200, content=actualizada.a_dict())
+
+
+@router.delete("/api/tesoreria/cuentas-receptoras/{cuenta_id}")
+def desactivar_cuenta_receptora_tesoreria(
+    cuenta_id: int,
+    repo_cr: RepoCuentasReceptorasDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> JSONResponse:
+    _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    try:
+        desactivada = repo_cr.desactivar(cuenta_id)
+    except OperativoNoEncontrado as e:
+        raise HTTPException(status_code=404, detail="Cuenta receptora no encontrada") from e
+    return JSONResponse(status_code=200, content=desactivada.a_dict())
+
+
+@router.post("/api/tesoreria/cuentas-receptoras/sincronizar-odoo")
+def sincronizar_cuentas_receptoras_odoo(
+    repo_cr: RepoCuentasReceptorasDep,
+    servicio: ServicioOpDep,
+    cxc_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    user = _usuario_op(cxc_session, PERMISO_APROBAR_PAGOS)
+    sembradas = repo_cr.sembrar_desde_diarios(_diarios_env(), actor=_actor_op(user))
+    sync_res = {"creadas": 0, "actualizadas": 0}
+    try:
+        escritor = servicio._fabrica()
+        if escritor is not None:
+            sync_res = repo_cr.sincronizar_desde_odoo(escritor, actor=_actor_op(user))
+    except Exception as e:
+        return {
+            "sembradas": sembradas,
+            "sync_odoo": sync_res,
+            "warning": f"No se pudo consultar diarios de Odoo: {e}",
+            "items": [c.a_dict() for c in repo_cr.listar()],
+        }
+    return {
+        "sembradas": sembradas,
+        "sync_odoo": sync_res,
+        "items": [c.a_dict() for c in repo_cr.listar()],
+    }
 
 
 # ── Vista Unificada de Pagos (CxC + Espejo Odoo) ─────────────────────────────

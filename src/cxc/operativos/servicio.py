@@ -32,6 +32,7 @@ from .contabilidad_gastos import (
     resolver_cuenta_credito_gasto,
     resolver_cuenta_debito_gasto,
 )
+from .cuentas_receptoras import CuentaReceptora, validar_destino_pago
 from .modelos import (
     BORRADOR,
     CATEGORIAS_GASTO,
@@ -97,6 +98,7 @@ class ServicioOperativos:
         diarios_extra: dict[str, int] | None = None,
         repo_capturas: RepoCapturas | None = None,
         repo_terceros: RepoCuentasTerceros | None = None,
+        repo_cuentas_receptoras: Any | None = None,
     ) -> None:
         self._repo = repo
         self._fabrica = fabrica_escritor
@@ -106,6 +108,7 @@ class ServicioOperativos:
         self._diarios_extra = diarios_extra or {}
         self._repo_capturas = repo_capturas
         self._repo_terceros = repo_terceros
+        self._repo_cuentas_receptoras = repo_cuentas_receptoras
 
     def _cuentas_terceros(self, *, solo_activas: bool = False) -> list[CuentaTercero]:
         if self._repo_terceros is None:
@@ -114,6 +117,17 @@ class ServicioOperativos:
             return self._repo_terceros.listar(solo_activas=solo_activas)
         except Exception as e:
             logger.warning("No se pudo listar cuentas de terceros: %s", e)
+            return []
+
+    def _cuentas_receptoras_activas(self) -> list[CuentaReceptora]:
+        if self._repo_cuentas_receptoras is None:
+            return []
+        try:
+            return list(
+                self._repo_cuentas_receptoras.listar(solo_activas=True, solo_propias=True)
+            )
+        except Exception as e:
+            logger.warning("No se pudo listar cuentas receptoras propias: %s", e)
             return []
 
     def catalogos(self) -> dict[str, Any]:
@@ -157,6 +171,7 @@ class ServicioOperativos:
             "cuentas_contrapartida": cuentas_contrapartida[:150],
             "propuestas_categorias": propuestas,
             "cuentas_terceros": [c.a_dict() for c in self._cuentas_terceros(solo_activas=True)],
+            "cuentas_receptoras": [c.a_dict() for c in self._cuentas_receptoras_activas()],
         }
 
     def validar_en_vivo(
@@ -176,6 +191,7 @@ class ServicioOperativos:
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
             cuentas_terceros=self._cuentas_terceros(solo_activas=False),
+            cuentas_receptoras=self._cuentas_receptoras_activas(),
         )
         return {
             "tipo": tipo,
@@ -260,6 +276,7 @@ class ServicioOperativos:
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
             cuentas_terceros=self._cuentas_terceros(solo_activas=False),
+            cuentas_receptoras=self._cuentas_receptoras_activas(),
         )
         self._aplicar_sugerencias(datos, validacion)
 
@@ -354,6 +371,7 @@ class ServicioOperativos:
             "cuenta_contrapartida_id": doc.cuenta_contrapartida_id,
             "conciliado_banco_huella": doc.conciliado_banco_huella,
             "notas": doc.notas,
+            **((doc.validacion or {}).get("datos_destino") or {}),
         }
         cambios_norm = dict(cambios)
         if cambios_norm.get("es_zelle_tercero") is False and not cambios_norm.get(
@@ -394,6 +412,13 @@ class ServicioOperativos:
             "lote_caja_chica_id",
             "cuenta_contrapartida_id",
             "conciliado_banco_huella",
+            "banco_origen",
+            "banco_destino",
+            "cuenta_destino",
+            "rif_destino",
+            "telefono_destino",
+            "titular_destino",
+            "email_destino",
             "notas",
         ):
             if k in cambios and cambios[k] in (None, ""):
@@ -429,6 +454,7 @@ class ServicioOperativos:
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
             cuentas_terceros=self._cuentas_terceros(solo_activas=False),
+            cuentas_receptoras=self._cuentas_receptoras_activas(),
         )
         # Si cambió cuenta_contable_id manualmente, completar código y nombre desde plan de cuentas
         if datos.get("cuenta_contable_id") and cuentas:
@@ -480,9 +506,12 @@ class ServicioOperativos:
             "banco_origen",
             "banco_destino",
             "cuenta_destino",
+            "rif_destino",
             "rif_cedula_destino",
             "telefono_destino",
             "correo_destino",
+            "email_destino",
+            "titular_destino",
             "beneficiario_destino",
             "fecha",
             "fecha_pago",
@@ -674,9 +703,14 @@ class ServicioOperativos:
 
         journal_id = doc.diario_id
         if journal_id is None:
+            banco_resolver = doc.banco
+            if not es_cliente and not banco_resolver:
+                banco_resolver = str(
+                    ((doc.validacion or {}).get("datos_destino") or {}).get("banco_origen") or ""
+                ).strip()
             try:
                 journal_id = resolver_diario(
-                    {"moneda": doc.moneda, "banco": doc.banco, "metodo_pago": doc.metodo_pago},
+                    {"moneda": doc.moneda, "banco": banco_resolver, "metodo_pago": doc.metodo_pago},
                     self._diarios_extra,
                 )
             except _Incompleto as e:
@@ -708,6 +742,13 @@ class ServicioOperativos:
             f"Ref: {doc.referencia}" if doc.referencia else "Sin referencia (efectivo)",
             f"Aplica a pedido: {doc.pedido_ref}" if (es_cliente and doc.pedido_ref) else "",
             factura_txt,
+            (
+                "[OVERRIDE DESTINO AUDITADO] Autorizado por "
+                f"{(doc.validacion or {})['override_destino'].get('por')}: "
+                f"{(doc.validacion or {})['override_destino'].get('motivo')}"
+                if isinstance((doc.validacion or {}).get("override_destino"), dict)
+                else ""
+            ),
             f"Notas: {doc.notas}" if doc.notas else "",
         ]
         nota_chatter = "\n".join(p for p in partes if p)
@@ -1128,13 +1169,33 @@ class ServicioOperativos:
             self._repo.actualizar(doc.documento_id, {"validacion": val_actual})
         return "account.move", move_id, f"account.move:{move_id}", partner_id, diario_id
 
-    def aprobar_y_enviar_a_odoo(self, documento_id: int, *, actor: str = "") -> DocumentoOperativo:
+    def aprobar_y_enviar_a_odoo(
+        self,
+        documento_id: int,
+        *,
+        actor: str = "",
+        forzar_destino: bool = False,
+        motivo_override_destino: str = "",
+        diario_id_override: int | None = None,
+    ) -> DocumentoOperativo:
         eng = getattr(self._repo, "_engine", None)
         with advisory_lock_engine(eng, "operativo_enviar_odoo", str(documento_id)):
-            return self._aprobar_y_enviar_a_odoo_locked(documento_id, actor=actor)
+            return self._aprobar_y_enviar_a_odoo_locked(
+                documento_id,
+                actor=actor,
+                forzar_destino=forzar_destino,
+                motivo_override_destino=motivo_override_destino,
+                diario_id_override=diario_id_override,
+            )
 
     def _aprobar_y_enviar_a_odoo_locked(
-        self, documento_id: int, *, actor: str = ""
+        self,
+        documento_id: int,
+        *,
+        actor: str = "",
+        forzar_destino: bool = False,
+        motivo_override_destino: str = "",
+        diario_id_override: int | None = None,
     ) -> DocumentoOperativo:
         doc = self.obtener(documento_id)
         if doc.estado == ENVIADO_ODOO:
@@ -1149,6 +1210,44 @@ class ServicioOperativos:
             )
         if doc.estado not in (PENDIENTE_APROBACION, CONFIRMADO_CXC, ERROR_ODOO, BORRADOR):
             raise OperativoEstadoInvalido(f"Estado inválido para aprobar: {doc.estado}")
+
+        if doc.tipo == TIPO_PAGO and not doc.es_zelle_tercero and not es_efectivo(doc.metodo_pago):
+            ctas_prop = self._cuentas_receptoras_activas()
+            val_prev = dict(doc.validacion or {})
+            dest_val: dict[str, Any] | None
+            if ctas_prop:
+                datos_dest_eval = {
+                    **(val_prev.get("datos_destino") or {}),
+                    "banco": doc.banco,
+                    "moneda": doc.moneda,
+                }
+                dest_val = validar_destino_pago(
+                    datos_dest_eval,
+                    ctas_prop,
+                    es_zelle_tercero=False,
+                    es_efectivo_flag=False,
+                )
+            else:
+                dest_val = val_prev.get("destino_validacion")
+            if isinstance(dest_val, dict) and dest_val.get("bloqueante"):
+                if not forzar_destino or not motivo_override_destino.strip():
+                    raise OperativoInvalido(
+                        str(
+                            dest_val.get("mensaje")
+                            or "La cuenta destino del pago no pertenece a Lubrikca."
+                        ),
+                        ["banco_destino"],
+                    )
+                val_prev["override_destino"] = {
+                    "por": actor or "admin",
+                    "motivo": motivo_override_destino.strip(),
+                    "en": datetime.now().isoformat(),
+                    "estado_previo": dest_val,
+                }
+                cambios_ov: dict[str, Any] = {"validacion": val_prev}
+                if diario_id_override is not None:
+                    cambios_ov["diario_id"] = int(diario_id_override)
+                doc = self._repo.actualizar(doc.documento_id, cambios_ov)
 
         if doc.tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR) and not doc.confirmado_cxc:
             doc = self.confirmar_en_cxc(doc.documento_id, actor=actor, enviar_a_odoo=False)

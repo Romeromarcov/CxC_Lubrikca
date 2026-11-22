@@ -5,10 +5,139 @@
     let _ztCuentas = [];
     let _ztDiariosGen = [];
     let _ztCuentasOdoo = [];
+    let _crCuentas = [];
+    let _crSudeban = [];
+    let _crDiariosBancos = [];
 
     function _esc(v) {
         if (window.CxC && typeof window.CxC.esc === "function") return window.CxC.esc(v);
         return String(v == null ? "" : v);
+    }
+
+    function _limpiarFormularioCr() {
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        setVal("cr-id", "");
+        setVal("cr-nombre", "");
+        setVal("cr-canal", "banco");
+        setVal("cr-banco-sudeban", "");
+        setVal("cr-numero-cuenta", "");
+        setVal("cr-titular", "");
+        setVal("cr-rif", "");
+        setVal("cr-telefono", "");
+        setVal("cr-email", "");
+        setVal("cr-binance-id", "");
+        setVal("cr-moneda", "VES");
+        setVal("cr-diario-id", "");
+        setVal("cr-notas", "");
+        const tit = document.getElementById("cr-form-titulo");
+        if (tit) tit.textContent = "➕ Nueva Cuenta Receptora Propia de Lubrikca";
+        const btnCan = document.getElementById("cr-cancelar");
+        if (btnCan) btnCan.style.display = "none";
+        const st = document.getElementById("cr-status");
+        if (st) st.textContent = "";
+    }
+
+    window.editarCuentaReceptora = function (id) {
+        const c = _crCuentas.find((x) => x.cuenta_id === Number(id));
+        if (!c) return;
+        const setVal = (eid, v) => { const el = document.getElementById(eid); if (el) el.value = v; };
+        setVal("cr-id", String(c.cuenta_id));
+        setVal("cr-nombre", c.nombre || "");
+        setVal("cr-canal", c.tipo_canal || "banco");
+        setVal("cr-banco-sudeban", c.banco_codigo_sudeban || "");
+        setVal("cr-numero-cuenta", c.numero_cuenta || "");
+        setVal("cr-titular", c.titular_nombre || "");
+        setVal("cr-rif", c.titular_rif || "");
+        setVal("cr-telefono", c.telefono || "");
+        setVal("cr-email", c.email_zelle || "");
+        setVal("cr-binance-id", c.binance_id || "");
+        setVal("cr-moneda", c.moneda || "VES");
+        setVal("cr-diario-id", c.diario_odoo_id ? String(c.diario_odoo_id) : "");
+        setVal("cr-notas", c.notas || "");
+        const tit = document.getElementById("cr-form-titulo");
+        if (tit) tit.textContent = `✏️ Editando Cuenta Propia: ${c.nombre}`;
+        const btnCan = document.getElementById("cr-cancelar");
+        if (btnCan) btnCan.style.display = "inline-block";
+        const st = document.getElementById("cr-status");
+        if (st) st.textContent = "";
+    };
+
+    window.toggleEstadoCuentaReceptora = async function (id, activaActual) {
+        try {
+            const res = await fetch(`/api/tesoreria/cuentas-receptoras/${encodeURIComponent(id)}`, {
+                method: activaActual ? "DELETE" : "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: activaActual ? undefined : JSON.stringify({ activa: true }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+            await loadCuentasReceptoras();
+        } catch (err) {
+            alert("⚠️ " + err.message);
+        }
+    };
+
+    async function loadCuentasReceptoras() {
+        const tbody = document.getElementById("cr-table-body");
+        if (!tbody) return;
+        try {
+            const [rCr, rCat] = await Promise.all([
+                fetch("/api/tesoreria/cuentas-receptoras"),
+                fetch("/api/operativos/catalogos"),
+            ]);
+            if (rCat.ok) {
+                const cat = await rCat.json().catch(() => ({}));
+                _crDiariosBancos = cat.diarios_bancarios || [];
+                const selDir = document.getElementById("cr-diario-id");
+                if (selDir) {
+                    const prev = selDir.value;
+                    selDir.innerHTML = '<option value="">(Sin diario Odoo vinculado)</option>'
+                        + _crDiariosBancos.map((d) => `<option value="${d.id}">${_esc((d.codigo ? d.codigo + " · " : "") + d.nombre + " (" + d.moneda + ")")}</option>`).join("");
+                    if (prev) selDir.value = prev;
+                }
+            }
+            const data = await rCr.json().catch(() => ({}));
+            if (!rCr.ok) throw new Error(data.detail || data.error || `Error ${rCr.status}`);
+            _crCuentas = data.items || [];
+            _crSudeban = data.bancos_sudeban || [];
+            const selSud = document.getElementById("cr-banco-sudeban");
+            if (selSud && _crSudeban.length) {
+                const prevS = selSud.value;
+                selSud.innerHTML = '<option value="">(N/A o Canal Internacional)</option>'
+                    + _crSudeban.map((b) => `<option value="${_esc(b.codigo)}">${_esc(b.codigo + " · " + b.nombre)}</option>`).join("");
+                if (prevS) selSud.value = prevS;
+            }
+            if (!_crCuentas.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="table-empty">No hay cuentas receptoras propias configuradas todavía.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = _crCuentas.map((c) => {
+                const stBadge = c.activa
+                    ? '<span class="semaphore verde">Activa</span>'
+                    : '<span class="semaphore rojo">Inactiva</span>';
+                const toggleLbl = c.activa ? "Desactivar" : "Reactivar";
+                const bancoTxt = c.banco_codigo_sudeban
+                    ? `${c.banco_codigo_sudeban} · ${c.banco_nombre || ""}`
+                    : (c.banco_nombre || "Canal Digital");
+                const contactoPartes = [c.titular_nombre, c.titular_rif, c.telefono, c.email_zelle, c.binance_id].filter(Boolean);
+                const diarioLbl = c.diario_odoo_nombre
+                    ? `${c.diario_odoo_codigo ? c.diario_odoo_codigo + " · " : ""}${c.diario_odoo_nombre} (#${c.diario_odoo_id})`
+                    : (c.diario_odoo_id ? `Diario #${c.diario_odoo_id}` : "Sin diario");
+                return `<tr>
+                    <td><strong>${_esc(c.nombre)}</strong><div class="cap-sub">${_esc((c.tipo_canal || "banco").toUpperCase())} · ${_esc(c.moneda)}</div></td>
+                    <td><strong>${_esc(bancoTxt)}</strong><div class="cap-sub">${_esc(c.numero_cuenta || "Sin número de cuenta")}</div></td>
+                    <td><div class="cap-sub">${_esc(contactoPartes.join(" · ") || "Sin datos de titular")}</div></td>
+                    <td>${_esc(diarioLbl)}</td>
+                    <td>${stBadge}</td>
+                    <td style="white-space:nowrap; display:flex; gap:4px;">
+                        <button type="button" class="btn-secondary" style="padding:0.3rem 0.55rem; font-size:0.78rem;" onclick="editarCuentaReceptora(${c.cuenta_id})">✏️ Editar</button>
+                        <button type="button" class="btn-secondary" style="padding:0.3rem 0.55rem; font-size:0.78rem;" onclick="toggleEstadoCuentaReceptora(${c.cuenta_id}, ${c.activa ? "true" : "false"})">${toggleLbl}</button>
+                    </td>
+                </tr>`;
+            }).join("");
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="6" class="table-empty">❌ ${_esc(err.message)}</td></tr>`;
+        }
     }
 
     async function _cargarOpcionesOdooTesoreria() {
@@ -100,6 +229,7 @@
     };
 
     async function loadConfigTesoreria() {
+        await loadCuentasReceptoras();
         const tbody = document.getElementById("zt-table-body");
         if (!tbody) return;
         await _cargarOpcionesOdooTesoreria();
@@ -137,6 +267,89 @@
     window.loadConfigTesoreria = loadConfigTesoreria;
 
     document.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("cr-cancelar")?.addEventListener("click", _limpiarFormularioCr);
+        document.getElementById("cr-btn-sync")?.addEventListener("click", async () => {
+            const st = document.getElementById("cr-status");
+            if (st) {
+                st.style.color = "#1e40af";
+                st.textContent = "Sincronizando diarios de Odoo y seed inicial...";
+            }
+            try {
+                const res = await fetch("/api/tesoreria/cuentas-receptoras/sincronizar-odoo", { method: "POST" });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || data.error || `Error ${res.status}`);
+                const s = data.sync_odoo || {};
+                if (st) {
+                    st.style.color = data.warning ? "#b45309" : "#15803d";
+                    st.textContent = data.warning
+                        ? `⚠️ Sembradas: ${data.sembradas || 0}. ${data.warning}`
+                        : `✅ Sincronización lista (sembradas: ${data.sembradas || 0}, nuevas Odoo: ${s.creadas || 0}, actualizadas: ${s.actualizadas || 0}).`;
+                }
+                await loadCuentasReceptoras();
+            } catch (err) {
+                if (st) {
+                    st.style.color = "#b91c1c";
+                    st.textContent = "⚠️ " + err.message;
+                }
+            }
+        });
+        document.getElementById("cr-form")?.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const st = document.getElementById("cr-status");
+            const idVal = (document.getElementById("cr-id") || {}).value;
+            const selSud = document.getElementById("cr-banco-sudeban");
+            const sudCode = selSud ? selSud.value : "";
+            const sudObj = _crSudeban.find((b) => b.codigo === sudCode);
+            const selDir = document.getElementById("cr-diario-id");
+            const dirIdVal = selDir && selDir.value ? Number(selDir.value) : null;
+            const dirObj = _crDiariosBancos.find((d) => Number(d.id) === dirIdVal);
+            const body = {
+                nombre: document.getElementById("cr-nombre").value.trim(),
+                tipo_canal: document.getElementById("cr-canal").value || "banco",
+                banco_codigo_sudeban: sudCode,
+                banco_nombre: sudObj ? sudObj.nombre : "",
+                numero_cuenta: document.getElementById("cr-numero-cuenta").value.trim(),
+                titular_nombre: document.getElementById("cr-titular").value.trim(),
+                titular_rif: document.getElementById("cr-rif").value.trim(),
+                telefono: document.getElementById("cr-telefono").value.trim(),
+                email_zelle: document.getElementById("cr-email").value.trim(),
+                binance_id: document.getElementById("cr-binance-id").value.trim(),
+                moneda: document.getElementById("cr-moneda").value || "VES",
+                diario_odoo_id: dirIdVal,
+                diario_odoo_codigo: dirObj ? (dirObj.codigo || "") : "",
+                diario_odoo_nombre: dirObj ? (dirObj.nombre || "") : "",
+                notas: document.getElementById("cr-notas").value.trim(),
+                es_propia: true,
+            };
+            if (st) {
+                st.style.color = "#1e40af";
+                st.textContent = "Guardando cuenta receptora...";
+            }
+            try {
+                const res = await fetch(
+                    idVal ? `/api/tesoreria/cuentas-receptoras/${encodeURIComponent(idVal)}` : "/api/tesoreria/cuentas-receptoras",
+                    {
+                        method: idVal ? "PUT" : "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body),
+                    },
+                );
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || data.detail || `Error ${res.status}`);
+                _limpiarFormularioCr();
+                if (st) {
+                    st.style.color = "#15803d";
+                    st.textContent = `✅ Cuenta receptora «${data.nombre}» guardada.`;
+                }
+                await loadCuentasReceptoras();
+            } catch (err) {
+                if (st) {
+                    st.style.color = "#b91c1c";
+                    st.textContent = "⚠️ " + err.message;
+                }
+            }
+        });
+
         const inpProv = document.getElementById("zt-prov-buscar");
         const boxProv = document.getElementById("zt-prov-resultados");
         let tProv = null;
