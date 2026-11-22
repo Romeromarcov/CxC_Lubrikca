@@ -2753,18 +2753,15 @@ def get_rate_for_datetime(
     siempre un par de números, pero por eso mismo va al final.
     """
     # El repo se resuelve tarde y solo si hace falta.
-    if repo is None and rows is None:
-        repo = get_repo()
-    elif repo is None:
-        try:
-            repo = get_repo()
-        except RuntimeError:
-            repo = None
     if rows is None:
-        rows = _all_serie_tasas_rows(repo)
+        rows = _all_serie_tasas_rows(repo if repo is not None else get_repo())
 
     fecha_str = dt.date().isoformat()
-    historicas = _tasas_historicas_cacheadas(repo) if repo is not None else []
+    try:
+        repo_hist = repo if repo is not None else get_repo()
+        historicas = _tasas_historicas_cacheadas(repo_hist)
+    except RuntimeError:
+        historicas = []
     tasas = Tasas(historicas=historicas, serie=rows or [])
     bcv = tasas.bcv_usd(dt, arrastrar=False)
     binance = tasas.binance(dt)
