@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import time
 from datetime import datetime
 from typing import Any
 
@@ -23,19 +24,49 @@ ALL_PAGES = [clave for clave, _ in PAGINAS]
 ROLES_PERMISOS: dict[str, list[str]] = {rol: efectivos(rol) for rol in BASE_POR_ROL}
 
 
+_SCRYPT_PREFIX = "scrypt$"
+_SCRYPT_N = 2**14
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_DEFAULT_SESSION_TTL_SECONDS = 86400 * 7
+
+
+def _hash_legacy_sha256(password: str, salt: str) -> str:
+    salted = (password + salt).encode("utf-8")
+    return hashlib.sha256(salted).hexdigest()
+
+
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
-    """Genera un hash SHA-256 con salt para una contraseña."""
+    """Genera un hash scrypt con salt para una contraseña."""
     if not salt:
         salt = secrets.token_hex(16)
-    salted = (password + salt).encode("utf-8")
-    pwd_hash = hashlib.sha256(salted).hexdigest()
-    return pwd_hash, salt
+    dk = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt.encode("utf-8"),
+        n=_SCRYPT_N,
+        r=_SCRYPT_R,
+        p=_SCRYPT_P,
+        dklen=32,
+    )
+    return f"{_SCRYPT_PREFIX}{dk.hex()}", salt
 
 
 def verificar_password(password: str, pwd_hash: str, salt: str) -> bool:
-    """Verifica si una contraseña coincide con su hash almacenado."""
-    calculated_hash, _ = hash_password(password, salt)
-    return hmac.compare_digest(calculated_hash, pwd_hash)
+    """Verifica si una contraseña coincide con su hash (scrypt o SHA-256 legado)."""
+    if not pwd_hash or not salt:
+        return False
+    if pwd_hash.startswith(_SCRYPT_PREFIX):
+        expected, _ = hash_password(password, salt)
+        return hmac.compare_digest(expected, pwd_hash)
+    legacy = _hash_legacy_sha256(password, salt)
+    return hmac.compare_digest(legacy, pwd_hash)
+
+
+def password_token_version(pwd_hash: str | None) -> str:
+    """Huella corta estable del hash vigente para revocar sesiones si cambia la clave."""
+    if not pwd_hash:
+        return ""
+    return hashlib.sha256(str(pwd_hash).encode("utf-8")).hexdigest()[:12]
 
 
 # --- Llaves de API de solo lectura (septiembre 2026) -------------------------
@@ -68,13 +99,14 @@ def verificar_api_key(api_key: str, key_hash: str) -> bool:
     return hmac.compare_digest(hash_api_key(api_key), key_hash)
 
 
-def verificar_usuario_odoo_activo(execute_fn: Any, email: str) -> dict[str, Any] | None:
-    """Consulta a Odoo para verificar que el correo corresponda a un usuario activo."""
-    if not email:
-        return None
+def _verificar_usuario_odoo_con_estado(
+    execute_fn: Any, email: str
+) -> tuple[dict[str, Any] | None, bool]:
+    """Consulta a Odoo indicando ``(usuario_activo_o_None, odoo_disponible)``."""
+    if not email or not callable(execute_fn):
+        return None, execute_fn is not None and bool(email)
     email_clean = email.strip().lower()
     try:
-        # Buscar en res.users usuarios activos
         users = execute_fn(
             "res.users",
             "search_read",
@@ -90,15 +122,25 @@ def verificar_usuario_odoo_activo(execute_fn: Any, email: str) -> dict[str, Any]
         )
         if users and len(users) > 0:
             u = users[0]
-            return {
-                "user_id": u.get("id"),
-                "name": u.get("name") or email_clean,
-                "login": u.get("login") or email_clean,
-                "email": u.get("email") or u.get("login") or email_clean,
-            }
+            return (
+                {
+                    "user_id": u.get("id"),
+                    "name": u.get("name") or email_clean,
+                    "login": u.get("login") or email_clean,
+                    "email": u.get("email") or u.get("login") or email_clean,
+                },
+                True,
+            )
+        return None, True
     except Exception as e:
         logger.warning("Error verificando usuario %s en Odoo: %s", email_clean, e)
-    return None
+        return None, False
+
+
+def verificar_usuario_odoo_activo(execute_fn: Any, email: str) -> dict[str, Any] | None:
+    """Consulta a Odoo para verificar que el correo corresponda a un usuario activo."""
+    user, _ok = _verificar_usuario_odoo_con_estado(execute_fn, email)
+    return user
 
 
 def obtener_usuarios_plataforma(repo: Repository) -> list[dict[str, str]]:
@@ -156,10 +198,9 @@ def registrar_o_actualizar_usuario(
 def autenticar_usuario(
     execute_fn: Any, repo: Repository, email: str, password: str
 ) -> tuple[dict[str, Any] | None, str | None]:
-    """Valida la contraseña y que el usuario siga activo en Odoo."""
+    """Valida la contraseña y verifica estado en Odoo (con respaldo si Odoo no responde)."""
     email_clean = email.strip().lower()
 
-    # 1. Verificar existencia en Google Sheets
     u_row = buscar_usuario_plataforma(repo, email_clean)
     if not u_row or not u_row.get("password_hash"):
         return None, "Usuario no registrado. Regístrate por primera vez para crear tu contraseña."
@@ -167,46 +208,95 @@ def autenticar_usuario(
     if u_row.get("activo") == "FALSE":
         return None, "Usuario desactivado en la plataforma."
 
-    # 2. Verificar contraseña
-    if not verificar_password(password, u_row["password_hash"], u_row["salt"]):
+    if not verificar_password(password, u_row["password_hash"], u_row.get("salt", "")):
         return None, "Contraseña incorrecta."
 
-    # 3. Verificar que siga activo en Odoo
-    odoo_user = verificar_usuario_odoo_activo(execute_fn, email_clean)
-    if not odoo_user:
-        return None, "Acceso denegado: Tu usuario no se encuentra activo en Odoo."
+    # Migración transparente de hashes SHA-256 legados a scrypt tras login válido
+    if not str(u_row["password_hash"]).startswith(_SCRYPT_PREFIX):
+        try:
+            nuevo_hash, nuevo_salt = hash_password(password)
+            repo.upsert_usuario_plataforma(
+                {**u_row, "password_hash": nuevo_hash, "salt": nuevo_salt}
+            )
+            u_row = {**u_row, "password_hash": nuevo_hash, "salt": nuevo_salt}
+        except Exception as e_mig:
+            logger.debug("No se pudo re-hashear contraseña legada de %s: %s", email_clean, e_mig)
 
+    odoo_user, odoo_disponible = _verificar_usuario_odoo_con_estado(execute_fn, email_clean)
+    if not odoo_user:
+        if odoo_disponible:
+            return None, "Acceso denegado: Tu usuario no se encuentra activo en Odoo."
+        logger.warning(
+            "Odoo no respondió durante login de %s; se usa respaldo local activo=%s.",
+            email_clean,
+            u_row.get("activo"),
+        )
+        odoo_user = {
+            "user_id": None,
+            "name": u_row.get("nombre_odoo") or email_clean,
+            "login": email_clean,
+            "email": email_clean,
+        }
+
+    rol = u_row.get("rol", "ventas")
     user_info = {
         "email": email_clean,
         "nombre": odoo_user.get("name") or u_row.get("nombre_odoo") or email_clean,
-        "rol": u_row.get("rol", "ventas"),
-        "permisos": efectivos(u_row.get("rol", "ventas")),
-        "nombre_rol": NOMBRES_ROLES.get(u_row.get("rol", "ventas"), "Ventas"),
+        "rol": rol,
+        "permisos": efectivos(rol),
+        "nombre_rol": NOMBRES_ROLES.get(rol, "Ventas"),
+        "_pwd_ver": password_token_version(u_row.get("password_hash")),
     }
     return user_info, None
 
 
-def crear_session_token(email: str, secret_key: str) -> str:
-    """Crea un token de sesión firmado."""
-    email_b64 = base64.urlsafe_b64encode(email.strip().lower().encode()).decode()
-    signature = hmac.new(secret_key.encode(), email_b64.encode(), hashlib.sha256).hexdigest()[:16]
-    return f"{email_b64}.{signature}"
+def crear_session_token(
+    email: str,
+    secret_key: str,
+    *,
+    ttl_seconds: int = _DEFAULT_SESSION_TTL_SECONDS,
+    pwd_version: str = "",
+) -> str:
+    """Crea un token de sesión firmado (HMAC-SHA256 completo, con expiración y versión)."""
+    exp = int(time.time()) + max(60, int(ttl_seconds))
+    raw_payload = f"{email.strip().lower()}|{exp}|{pwd_version[:12]}"
+    payload_b64 = base64.urlsafe_b64encode(raw_payload.encode("utf-8")).decode("ascii")
+    signature = hmac.new(
+        secret_key.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    return f"{payload_b64}.{signature}"
 
 
-def verificar_session_token(token: str, secret_key: str) -> str | None:
-    """Verifica y decodifica un token de sesión."""
+def verificar_session_token(
+    token: str,
+    secret_key: str,
+    *,
+    expected_pwd_version: str | None = None,
+) -> str | None:
+    """Verifica firma, expiración y versión de contraseña del token de sesión."""
     if not token or "." not in token:
         return None
     try:
-        email_b64, signature = token.split(".", 1)
+        payload_b64, signature = token.split(".", 1)
         expected_sig = hmac.new(
-            secret_key.encode(), email_b64.encode(), hashlib.sha256
-        ).hexdigest()[:16]
-        if hmac.compare_digest(signature, expected_sig):
-            return base64.urlsafe_b64decode(email_b64.encode()).decode()
+            secret_key.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+        decoded = base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8")
+        parts = decoded.split("|")
+        if len(parts) < 2:
+            return None
+        email = parts[0].strip().lower()
+        exp = int(parts[1])
+        pwd_ver = parts[2] if len(parts) >= 3 else ""
+        if exp < int(time.time()):
+            return None
+        if expected_pwd_version is not None and pwd_ver and pwd_ver != expected_pwd_version[:12]:
+            return None
+        return email or None
     except Exception:
-        pass
-    return None
+        return None
 
 
 # --- quien hizo una accion, sin creerle al navegador -------------------------

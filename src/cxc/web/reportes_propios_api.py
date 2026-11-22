@@ -39,7 +39,15 @@ PERMISOS_VER_REPORTES = (
     "cobranza",
     "compras",
 )
+PERMISOS_VER_CXP = ("compras", "compras.aprobar_documentos")
 PERMISOS_VER_AUDITORIA = ("auditoria", "reportes", "reporte")
+_PERMISOS_CARTERA_GLOBAL_CXC = (
+    "compras",
+    "auditoria.decidir",
+    "cobranza.aprobar_pagos",
+    "ventas.aprobar_pedidos",
+    "bancos.ver",
+)
 
 
 def _usuario_rep(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
@@ -53,8 +61,49 @@ def _usuario_rep(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
     return user
 
 
+def _es_alcance_global_cxc(user: dict[str, Any]) -> bool:
+    return user.get("rol") == "admin" or any(tiene(user, p) for p in _PERMISOS_CARTERA_GLOBAL_CXC)
+
+
+def _filtro_vendedor_para_usuario(
+    user: dict[str, Any], vendedor_solicitado: str | None
+) -> str | None:
+    """Acota reportes CxC al propio vendedor cuando su perfil no tiene alcance global."""
+    if _es_alcance_global_cxc(user):
+        return vendedor_solicitado
+    return str(user.get("email") or user.get("nombre") or "").strip() or "__sin_vendedor__"
+
+
+def _acotar_respuesta_cxc_vendedor(
+    rep: dict[str, Any], user: dict[str, Any]
+) -> dict[str, Any]:
+    if _es_alcance_global_cxc(user):
+        return rep
+    vend_email = str(user.get("email") or "").strip().lower()
+    salida = dict(rep)
+    salida["kpis_globales"] = salida.get("kpis") or {}
+    salida["vendedores"] = [
+        v
+        for v in (salida.get("vendedores") or [])
+        if str(v.get("vendedor_email") or "").strip().lower() == vend_email
+    ]
+    return salida
+
+
 def _es_admin_siembra(user: dict[str, Any]) -> bool:
     return user.get("rol") == "admin" or tiene(user, "sistema.recalcular")
+
+
+def _listar_todos_paginado(listar_fn: Any, *, batch: int = 2000) -> list[Any]:
+    todos: list[Any] = []
+    offset = 0
+    while True:
+        chunk, total, _res = listar_fn(limit=batch, offset=offset)
+        todos.extend(chunk)
+        offset += len(chunk)
+        if not chunk or offset >= total:
+            break
+    return todos
 
 
 def _cargar_extras_bd() -> tuple[Sequence[Any], Sequence[Any]]:
@@ -65,11 +114,11 @@ def _cargar_extras_bd() -> tuple[Sequence[Any], Sequence[Any]]:
     if engine is None:
         return (), ()
     try:
-        docs_com, _, _ = RepoDocumentosSQL(engine).listar(limit=5000, offset=0)
+        docs_com = _listar_todos_paginado(RepoDocumentosSQL(engine).listar)
     except Exception:
         docs_com = []
     try:
-        docs_op, _, _ = RepoOperativosSQL(engine).listar(limit=5000, offset=0)
+        docs_op = _listar_todos_paginado(RepoOperativosSQL(engine).listar)
     except Exception:
         docs_op = []
     return docs_com, docs_op
@@ -129,18 +178,19 @@ def obtener_saldos_propios(
 ) -> dict[str, Any]:
     from cxc.web.app import get_repo
 
-    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    user = _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
     docs_com, docs_op = extras
-    return calcular_saldos_propios(
+    rep = calcular_saldos_propios(
         get_repo(),
         docs_comerciales=docs_com,
         docs_operativos=docs_op,
         hoy=_parse_hoy(hoy),
-        vendedor=vendedor,
+        vendedor=_filtro_vendedor_para_usuario(user, vendedor),
         antiguedad=antiguedad,
         q=q,
         solo_con_saldo=solo_con_saldo,
     )
+    return _acotar_respuesta_cxc_vendedor(rep, user)
 
 
 @router.get("/api/reportes/estado-cuenta/{cliente_id}")
@@ -152,7 +202,7 @@ def obtener_estado_cuenta_propio(
 ) -> dict[str, Any]:
     from cxc.web.app import get_repo
 
-    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    user = _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
     docs_com, docs_op = extras
     res = estado_cuenta_cliente(
         get_repo(),
@@ -163,6 +213,14 @@ def obtener_estado_cuenta_propio(
     )
     if res is None:
         raise HTTPException(status_code=404, detail="Cliente sin movimientos en BD propia.")
+    if not _es_alcance_global_cxc(user):
+        vend_cliente = str((res.get("resumen") or {}).get("vendedor_email") or "").strip().lower()
+        vend_usr = str(user.get("email") or "").strip().lower()
+        if not vend_usr or vend_cliente != vend_usr:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo puedes consultar el estado de cuenta de tus clientes asignados.",
+            )
     return res
 
 
@@ -178,14 +236,14 @@ def descargar_saldos_propios_csv(
 ) -> Response:
     from cxc.web.app import get_repo
 
-    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    user = _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
     docs_com, docs_op = extras
     rep = calcular_saldos_propios(
         get_repo(),
         docs_comerciales=docs_com,
         docs_operativos=docs_op,
         hoy=_parse_hoy(hoy),
-        vendedor=vendedor,
+        vendedor=_filtro_vendedor_para_usuario(user, vendedor),
         antiguedad=antiguedad,
         q=q,
         solo_con_saldo=solo_con_saldo,
@@ -210,7 +268,7 @@ def obtener_saldos_cxp_propios(
 ) -> dict[str, Any]:
     from cxc.web.app import get_repo
 
-    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    _usuario_rep(cxc_session, *PERMISOS_VER_CXP)
     _docs_com, docs_op = extras
     return calcular_saldos_cxp(
         get_repo(),
@@ -233,7 +291,7 @@ def obtener_estado_cuenta_cxp(
 ) -> dict[str, Any]:
     from cxc.web.app import get_repo
 
-    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    _usuario_rep(cxc_session, *PERMISOS_VER_CXP)
     _docs_com, docs_op = extras
     repo = get_repo()
     res = estado_cuenta_proveedor(
@@ -289,7 +347,7 @@ def descargar_saldos_cxp_csv(
 ) -> Response:
     from cxc.web.app import get_repo
 
-    _usuario_rep(cxc_session, *PERMISOS_VER_REPORTES)
+    _usuario_rep(cxc_session, *PERMISOS_VER_CXP)
     _docs_com, docs_op = extras
     rep = calcular_saldos_cxp(
         get_repo(),

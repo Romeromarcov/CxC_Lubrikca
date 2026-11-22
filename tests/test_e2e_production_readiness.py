@@ -463,7 +463,7 @@ def test_e2e_07_receipt_generation():
         assert res.status_code == 200
         data = res.json()
         assert "numero_recibido" in data
-        assert data["recibido_por"] == "Caja Principal"
+        assert data["recibido_por"] == "Test Admin en nombre de Caja Principal"
         assert len(data["pagos"]) == 1
 
 

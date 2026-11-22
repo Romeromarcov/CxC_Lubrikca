@@ -12,6 +12,9 @@ from typing import Any
 from cxc.capturas.modelos import es_efectivo
 from cxc.capturas.repositorio import RepoCapturas
 from cxc.capturas.servicio import _Incompleto, resolver_diario
+from cxc.db.locks import advisory_lock_engine
+from cxc.decimal_utils import q2
+from cxc.engine.saldos_propios import indice_tasas_bcv_local, tasa_bcv_en_fecha
 from cxc.odoo.directorio import (
     ContactoOdoo,
     CuentaContable,
@@ -29,6 +32,7 @@ from .contabilidad_gastos import (
     resolver_cuenta_credito_gasto,
     resolver_cuenta_debito_gasto,
 )
+from .cuentas_receptoras import CuentaReceptora, validar_destino_pago
 from .modelos import (
     BORRADOR,
     CATEGORIAS_GASTO,
@@ -94,6 +98,7 @@ class ServicioOperativos:
         diarios_extra: dict[str, int] | None = None,
         repo_capturas: RepoCapturas | None = None,
         repo_terceros: RepoCuentasTerceros | None = None,
+        repo_cuentas_receptoras: Any | None = None,
     ) -> None:
         self._repo = repo
         self._fabrica = fabrica_escritor
@@ -103,6 +108,7 @@ class ServicioOperativos:
         self._diarios_extra = diarios_extra or {}
         self._repo_capturas = repo_capturas
         self._repo_terceros = repo_terceros
+        self._repo_cuentas_receptoras = repo_cuentas_receptoras
 
     def _cuentas_terceros(self, *, solo_activas: bool = False) -> list[CuentaTercero]:
         if self._repo_terceros is None:
@@ -111,6 +117,17 @@ class ServicioOperativos:
             return self._repo_terceros.listar(solo_activas=solo_activas)
         except Exception as e:
             logger.warning("No se pudo listar cuentas de terceros: %s", e)
+            return []
+
+    def _cuentas_receptoras_activas(self) -> list[CuentaReceptora]:
+        if self._repo_cuentas_receptoras is None:
+            return []
+        try:
+            return list(
+                self._repo_cuentas_receptoras.listar(solo_activas=True, solo_propias=True)
+            )
+        except Exception as e:
+            logger.warning("No se pudo listar cuentas receptoras propias: %s", e)
             return []
 
     def catalogos(self) -> dict[str, Any]:
@@ -154,6 +171,7 @@ class ServicioOperativos:
             "cuentas_contrapartida": cuentas_contrapartida[:150],
             "propuestas_categorias": propuestas,
             "cuentas_terceros": [c.a_dict() for c in self._cuentas_terceros(solo_activas=True)],
+            "cuentas_receptoras": [c.a_dict() for c in self._cuentas_receptoras_activas()],
         }
 
     def validar_en_vivo(
@@ -173,6 +191,7 @@ class ServicioOperativos:
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
             cuentas_terceros=self._cuentas_terceros(solo_activas=False),
+            cuentas_receptoras=self._cuentas_receptoras_activas(),
         )
         return {
             "tipo": tipo,
@@ -257,6 +276,7 @@ class ServicioOperativos:
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
             cuentas_terceros=self._cuentas_terceros(solo_activas=False),
+            cuentas_receptoras=self._cuentas_receptoras_activas(),
         )
         self._aplicar_sugerencias(datos, validacion)
 
@@ -351,6 +371,7 @@ class ServicioOperativos:
             "cuenta_contrapartida_id": doc.cuenta_contrapartida_id,
             "conciliado_banco_huella": doc.conciliado_banco_huella,
             "notas": doc.notas,
+            **((doc.validacion or {}).get("datos_destino") or {}),
         }
         cambios_norm = dict(cambios)
         if cambios_norm.get("es_zelle_tercero") is False and not cambios_norm.get(
@@ -391,6 +412,13 @@ class ServicioOperativos:
             "lote_caja_chica_id",
             "cuenta_contrapartida_id",
             "conciliado_banco_huella",
+            "banco_origen",
+            "banco_destino",
+            "cuenta_destino",
+            "rif_destino",
+            "telefono_destino",
+            "titular_destino",
+            "email_destino",
             "notas",
         ):
             if k in cambios and cambios[k] in (None, ""):
@@ -426,6 +454,7 @@ class ServicioOperativos:
             cuentas_odoo=cuentas,
             diarios_extra=self._diarios_extra,
             cuentas_terceros=self._cuentas_terceros(solo_activas=False),
+            cuentas_receptoras=self._cuentas_receptoras_activas(),
         )
         # Si cambió cuenta_contable_id manualmente, completar código y nombre desde plan de cuentas
         if datos.get("cuenta_contable_id") and cuentas:
@@ -456,16 +485,53 @@ class ServicioOperativos:
     def confirmar_por_token(
         self, token_preview: str, cambios: dict[str, Any] | None = None, *, actor: str = "preview"
     ) -> DocumentoOperativo:
-        """Completa/confirma datos desde el Preview público y deja en ``PENDIENTE_APROBACION``.
+        """Completa datos faltantes de un borrador ``INCOMPLETO`` desde el Preview público.
 
-        Nunca escribe en Odoo: la autorización final pertenece solo al panel con sesión y permiso.
+        Nunca permite mutar documentos ya confirmados (``CONFIRMADO_CXC``), pendientes de
+        aprobación ni enviados/rechazados, ni editar campos financieros/contables.
         """
         doc = self.obtener_por_token(token_preview)
         if doc.estado == ENVIADO_ODOO:
             raise OperativoYaEnviado(f"{doc.numero} ya fue enviado a Odoo ({doc.odoo_ref}).")
         if doc.estado == RECHAZADO:
             raise OperativoEstadoInvalido(f"{doc.numero} fue rechazado y no puede reactivarse.")
-        actualizado = self.editar(doc.documento_id, cambios or {}, actor=actor)
+        if doc.estado != INCOMPLETO:
+            raise OperativoEstadoInvalido(
+                f"{doc.numero} está en estado {doc.estado} y no puede "
+                "modificarse desde el enlace público."
+            )
+        campos_publicos_permitidos = {
+            "referencia",
+            "banco",
+            "banco_origen",
+            "banco_destino",
+            "cuenta_destino",
+            "rif_destino",
+            "rif_cedula_destino",
+            "telefono_destino",
+            "correo_destino",
+            "email_destino",
+            "titular_destino",
+            "beneficiario_destino",
+            "fecha",
+            "fecha_pago",
+            "fecha_emision",
+            "fecha_documento",
+            "contraparte_nombre",
+            "cliente",
+            "proveedor",
+            "nombre",
+            "rif",
+            "numero_documento",
+            "numero_factura",
+            "numero_control",
+            "concepto",
+            "notas",
+        }
+        cambios_limpios = {
+            k: v for k, v in (cambios or {}).items() if k in campos_publicos_permitidos
+        }
+        actualizado = self.editar(doc.documento_id, cambios_limpios, actor=actor)
         if actualizado.faltantes:
             raise OperativoInvalido(
                 "Faltan datos obligatorios: " + ", ".join(actualizado.faltantes),
@@ -567,6 +633,14 @@ class ServicioOperativos:
     def _resolver_o_crear_proveedor_doc(
         self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str
     ) -> tuple[int, bool]:
+        clave_lock = doc.rif or doc.contraparte_nombre or str(doc.documento_id)
+        eng = getattr(self._repo, "_engine", None)
+        with advisory_lock_engine(eng, "resolver_proveedor_odoo", clave_lock.strip().lower()):
+            return self._resolver_o_crear_proveedor_doc_locked(doc, escritor, marca)
+
+    def _resolver_o_crear_proveedor_doc_locked(
+        self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str
+    ) -> tuple[int, bool]:
         pid = self._verificar_partner_id(escritor, doc.partner_odoo_id)
         if pid is not None:
             return pid, False
@@ -629,9 +703,14 @@ class ServicioOperativos:
 
         journal_id = doc.diario_id
         if journal_id is None:
+            banco_resolver = doc.banco
+            if not es_cliente and not banco_resolver:
+                banco_resolver = str(
+                    ((doc.validacion or {}).get("datos_destino") or {}).get("banco_origen") or ""
+                ).strip()
             try:
                 journal_id = resolver_diario(
-                    {"moneda": doc.moneda, "banco": doc.banco, "metodo_pago": doc.metodo_pago},
+                    {"moneda": doc.moneda, "banco": banco_resolver, "metodo_pago": doc.metodo_pago},
                     self._diarios_extra,
                 )
             except _Incompleto as e:
@@ -663,6 +742,13 @@ class ServicioOperativos:
             f"Ref: {doc.referencia}" if doc.referencia else "Sin referencia (efectivo)",
             f"Aplica a pedido: {doc.pedido_ref}" if (es_cliente and doc.pedido_ref) else "",
             factura_txt,
+            (
+                "[OVERRIDE DESTINO AUDITADO] Autorizado por "
+                f"{(doc.validacion or {})['override_destino'].get('por')}: "
+                f"{(doc.validacion or {})['override_destino'].get('motivo')}"
+                if isinstance((doc.validacion or {}).get("override_destino"), dict)
+                else ""
+            ),
             f"Notas: {doc.notas}" if doc.notas else "",
         ]
         nota_chatter = "\n".join(p for p in partes if p)
@@ -685,6 +771,14 @@ class ServicioOperativos:
         if self._repo_cxc is None:
             return None
         try:
+            por_fecha, fallback = indice_tasas_bcv_local(self._repo_cxc)
+            fecha_d = fecha.date() if isinstance(fecha, datetime) else fecha
+            if fecha_d is not None:
+                tasa = tasa_bcv_en_fecha(fecha_d, por_fecha, fallback)
+                if tasa > 0:
+                    return Decimal(str(tasa))
+            if fallback > 0:
+                return Decimal(str(fallback))
             ultima = self._repo_cxc.last_serie_tasa()
             if ultima is not None and ultima.tasa_bcv > 0:
                 return Decimal(str(ultima.tasa_bcv))
@@ -974,8 +1068,29 @@ class ServicioOperativos:
         usa_base = (
             not es_gasto and doc.base_imponible is not None and doc.base_imponible > Decimal("0")
         )
-        monto_linea = doc.base_imponible if usa_base else doc.monto
-        assert monto_linea is not None
+        iva_dec = Decimal(str(doc.iva)) if doc.iva is not None else Decimal("0")
+        tax_ids: list[int] | None = None
+        aviso_tax = ""
+        if usa_base and iva_dec > Decimal("0") and hasattr(escritor, "buscar_impuesto_compra"):
+            base_dec = Decimal(str(doc.base_imponible))
+            tasa_pct = q2((iva_dec / base_dec) * Decimal("100"))
+            if abs(tasa_pct - Decimal("16")) <= Decimal("0.5"):
+                tasa_pct = Decimal("16")
+            tax_id = escritor.buscar_impuesto_compra(tasa_pct)
+            if tax_id is not None:
+                tax_ids = [tax_id]
+                monto_linea = base_dec
+            else:
+                monto_linea = Decimal(str(doc.monto))
+                tax_ids = []
+                aviso_tax = (
+                    f"Aviso CxC: sin impuesto compra {tasa_pct}% en Odoo; "
+                    "enviado monto total sin tax_ids."
+                )
+        else:
+            monto_linea_opt = doc.base_imponible if usa_base else doc.monto
+            assert monto_linea_opt is not None
+            monto_linea = Decimal(str(monto_linea_opt))
 
         etiqueta_num = numero or f"S/N-{doc.numero}"
         concepto = doc.concepto.strip() or (
@@ -1007,6 +1122,7 @@ class ServicioOperativos:
             if (es_gasto and (doc.metodo_pago or doc.referencia))
             else "",
             f"Orden de compra: {doc.orden_ref}" if doc.orden_ref else "",
+            aviso_tax,
             f"Notas: {doc.notas}" if doc.notas else "",
         ]
         resumen_str = " · ".join(x for x in detalles if x)
@@ -1021,6 +1137,11 @@ class ServicioOperativos:
             if es_gasto
             else (doc.fecha_vencimiento.isoformat() if doc.fecha_vencimiento else None)
         )
+        kwargs_fac: dict[str, Any] = {}
+        if tax_ids is not None:
+            kwargs_fac["tax_ids"] = tax_ids
+        if doc.numero_control and doc.numero_control.strip():
+            kwargs_fac["numero_control"] = doc.numero_control.strip()
         move_id = escritor.crear_factura_proveedor(
             partner_id=partner_id,
             numero=etiqueta_num,
@@ -1034,10 +1155,48 @@ class ServicioOperativos:
             journal_id=diario_id,
             account_id=doc.cuenta_contable_id,
             nota_chatter=nota_chatter,
+            **kwargs_fac,
         )
+        if not es_gasto and hasattr(escritor, "verificar_totales_factura"):
+            verif_odoo = escritor.verificar_totales_factura(
+                move_id,
+                esperado_subtotal=monto_linea if tax_ids else None,
+                esperado_iva=iva_dec if tax_ids else None,
+                esperado_total=Decimal(str(doc.monto)) if doc.monto is not None else None,
+            )
+            val_actual = dict(doc.validacion or {})
+            val_actual["verificacion_odoo"] = verif_odoo
+            self._repo.actualizar(doc.documento_id, {"validacion": val_actual})
         return "account.move", move_id, f"account.move:{move_id}", partner_id, diario_id
 
-    def aprobar_y_enviar_a_odoo(self, documento_id: int, *, actor: str = "") -> DocumentoOperativo:
+    def aprobar_y_enviar_a_odoo(
+        self,
+        documento_id: int,
+        *,
+        actor: str = "",
+        forzar_destino: bool = False,
+        motivo_override_destino: str = "",
+        diario_id_override: int | None = None,
+    ) -> DocumentoOperativo:
+        eng = getattr(self._repo, "_engine", None)
+        with advisory_lock_engine(eng, "operativo_enviar_odoo", str(documento_id)):
+            return self._aprobar_y_enviar_a_odoo_locked(
+                documento_id,
+                actor=actor,
+                forzar_destino=forzar_destino,
+                motivo_override_destino=motivo_override_destino,
+                diario_id_override=diario_id_override,
+            )
+
+    def _aprobar_y_enviar_a_odoo_locked(
+        self,
+        documento_id: int,
+        *,
+        actor: str = "",
+        forzar_destino: bool = False,
+        motivo_override_destino: str = "",
+        diario_id_override: int | None = None,
+    ) -> DocumentoOperativo:
         doc = self.obtener(documento_id)
         if doc.estado == ENVIADO_ODOO:
             raise OperativoYaEnviado(f"{doc.numero} ya fue enviado a Odoo ({doc.odoo_ref}).")
@@ -1051,6 +1210,44 @@ class ServicioOperativos:
             )
         if doc.estado not in (PENDIENTE_APROBACION, CONFIRMADO_CXC, ERROR_ODOO, BORRADOR):
             raise OperativoEstadoInvalido(f"Estado inválido para aprobar: {doc.estado}")
+
+        if doc.tipo == TIPO_PAGO and not doc.es_zelle_tercero and not es_efectivo(doc.metodo_pago):
+            ctas_prop = self._cuentas_receptoras_activas()
+            val_prev = dict(doc.validacion or {})
+            dest_val: dict[str, Any] | None
+            if ctas_prop:
+                datos_dest_eval = {
+                    **(val_prev.get("datos_destino") or {}),
+                    "banco": doc.banco,
+                    "moneda": doc.moneda,
+                }
+                dest_val = validar_destino_pago(
+                    datos_dest_eval,
+                    ctas_prop,
+                    es_zelle_tercero=False,
+                    es_efectivo_flag=False,
+                )
+            else:
+                dest_val = val_prev.get("destino_validacion")
+            if isinstance(dest_val, dict) and dest_val.get("bloqueante"):
+                if not forzar_destino or not motivo_override_destino.strip():
+                    raise OperativoInvalido(
+                        str(
+                            dest_val.get("mensaje")
+                            or "La cuenta destino del pago no pertenece a Lubrikca."
+                        ),
+                        ["banco_destino"],
+                    )
+                val_prev["override_destino"] = {
+                    "por": actor or "admin",
+                    "motivo": motivo_override_destino.strip(),
+                    "en": datetime.now().isoformat(),
+                    "estado_previo": dest_val,
+                }
+                cambios_ov: dict[str, Any] = {"validacion": val_prev}
+                if diario_id_override is not None:
+                    cambios_ov["diario_id"] = int(diario_id_override)
+                doc = self._repo.actualizar(doc.documento_id, cambios_ov)
 
         if doc.tipo in (TIPO_PAGO, TIPO_PAGO_PROVEEDOR) and not doc.confirmado_cxc:
             doc = self.confirmar_en_cxc(doc.documento_id, actor=actor, enviar_a_odoo=False)

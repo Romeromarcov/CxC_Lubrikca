@@ -179,9 +179,11 @@ def ingresos_desde_operativos(docs: Iterable[Any]) -> list[IngresoCxCCandidato]:
             continue
         if estado in ("RECHAZADO", "INCOMPLETO", "BORRADOR"):
             continue
-        if bool(getattr(d, "es_zelle_tercero", False)):
-            continue
         if es_efectivo(str(getattr(d, "metodo_pago", "") or "")):
+            continue
+        if str(getattr(d, "conciliado_banco_huella", "") or "").strip():
+            continue
+        if bool(getattr(d, "es_zelle_tercero", False)):
             continue
         monto = getattr(d, "monto", None)
         fecha = getattr(d, "fecha_documento", None) or getattr(d, "creado_en", None)
@@ -212,6 +214,10 @@ def egresos_desde_operativos(docs: Iterable[Any]) -> list[EgresoCxCCandidato]:
         if tipo not in ("gasto", "pago_proveedor"):
             continue
         if estado in ("RECHAZADO", "INCOMPLETO", "BORRADOR"):
+            continue
+        if es_efectivo(str(getattr(d, "metodo_pago", "") or "")):
+            continue
+        if str(getattr(d, "conciliado_banco_huella", "") or "").strip():
             continue
         monto = getattr(d, "monto", None)
         fecha = getattr(d, "fecha_documento", None) or getattr(d, "creado_en", None)

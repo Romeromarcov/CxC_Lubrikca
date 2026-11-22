@@ -428,6 +428,24 @@ def test_reporte_cxc_clientes_por_vendedor_y_motor_cxp() -> None:
             )
 
             usuario = dict(VENTAS_USER)
+            assert (
+                client.get("/api/reportes/cxp-propios", cookies={"cxc_session": "ok"}).status_code
+                == 403
+            )
+            assert (
+                client.get(
+                    "/api/reportes/cxp/estado-cuenta/901", cookies={"cxc_session": "ok"}
+                ).status_code
+                == 403
+            )
+            assert (
+                client.get(
+                    "/api/reportes/cxp-propios/csv", cookies={"cxc_session": "ok"}
+                ).status_code
+                == 403
+            )
+
+            usuario = dict(ADMIN_USER)
             r = client.get("/api/reportes/cxp-propios", cookies={"cxc_session": "ok"})
             assert r.status_code == 200
             assert r.json()["kpis"]["saldo_por_pagar_usd"] == 530.0

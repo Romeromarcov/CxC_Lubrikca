@@ -256,6 +256,12 @@
 
     function alertasPagosExtraHtml(d) {
         let extra = "";
+        const dest = d.destino_validacion || (d.validacion && d.validacion.destino_validacion) || null;
+        if (dest && (dest.bloqueante || dest.estado === "DESTINO_NO_PERTENECE_LUBRIKCA")) {
+            extra += `<div style="margin-top:3px;"><span class="semaphore rojo" style="font-size:0.71rem;" title="${_esc(dest.mensaje || "Destino no pertenece a Lubrikca")}">⛔ Destino NO es Lubrikca</span></div>`;
+        } else if (dest && dest.estado === "VALIDADO_LUBRIKCA") {
+            extra += `<div style="margin-top:3px;"><span class="semaphore verde" style="font-size:0.71rem;" title="${_esc(dest.mensaje || "Cuenta destino validada")}">✓ Destino Lubrikca</span></div>`;
+        }
         if (d.posible_duplicado) {
             const lista = Array.isArray(d.duplicado_de) ? d.duplicado_de.join(", ") : "";
             extra += `<div style="margin-top:3px;"><span class="semaphore rojo" style="font-size:0.71rem;" title="${_esc(lista)}">⚠️ Posible duplicado</span></div>`;

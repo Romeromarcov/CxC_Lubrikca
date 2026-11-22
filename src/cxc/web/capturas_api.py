@@ -47,10 +47,10 @@ logger = logging.getLogger("cxc.capturas.api")
 router = APIRouter()
 
 _RUTA_BOT_POST = re.compile(
-    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido|operativos/validar|contactos(?:/verificar)?)$"
+    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|stock/verificar|documentos/\d+/convertir-pedido|operativos/validar|contactos(?:/verificar)?)$"
 )
 _RUTA_BOT_GET = re.compile(
-    r"^/api/bots/(?:catalogo|contactos|descuentos/catalogo|operativos/catalogos)$"
+    r"^/api/bots/(?:catalogo|stock|listas-precio|contactos|descuentos/catalogo|operativos/catalogos|operativos/cuentas-receptoras)$"
 )
 _KINDS_SINCRONOS = frozenset({"contacto", "contacto_editar", "cotizacion", "pedido"})
 _KINDS_OPERATIVOS = frozenset({"pago", "pago_proveedor", "factura_proveedor", "gasto"})
@@ -288,8 +288,13 @@ def _sincronizar_documento_desde_captura(captura: Any) -> dict[str, Any]:
             out_doc["odoo_order_name"] = doc.odoo_order_name
             out_doc["odoo_name"] = doc.odoo_order_name
         return out_doc
-    except Exception:
+    except Exception as exc:
         # En tests unitarios aislados sin Postgres para documentos no interrumpe la captura.
+        logger.warning(
+            "No se pudo sincronizar documento desde captura #%s: %s",
+            getattr(captura, "captura_id", "?"),
+            exc,
+        )
         return {}
 
 
@@ -332,7 +337,12 @@ def _sincronizar_operativo_desde_captura(captura: Any) -> dict[str, Any]:
             ),
             "contraparte_resuelta": d["validacion"].get("contraparte_resuelta"),
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "No se pudo sincronizar operativo desde captura #%s: %s",
+            getattr(captura, "captura_id", "?"),
+            exc,
+        )
         return {}
 
 
@@ -360,7 +370,12 @@ def _sincronizar_contacto_desde_captura(captura: Any) -> dict[str, Any]:
             "completitud_pct": c.completitud_pct,
             "posibles_duplicados": c.posibles_duplicados,
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "No se pudo sincronizar contacto desde captura #%s: %s",
+            getattr(captura, "captura_id", "?"),
+            exc,
+        )
         return {}
 
 
@@ -442,7 +457,7 @@ def completar_captura(
             cuerpo["resultado"] = {**cuerpo.get("resultado", {}), **extra_op}
         return JSONResponse(content=cuerpo)
     if captura.estado == PENDIENTE:
-        tareas.add_task(servicio.procesar, captura.captura_id)
+        tareas.add_task(_procesar_y_sincronizar_en_segundo_plano, servicio, captura.captura_id)
     return JSONResponse(content=captura.a_dict())
 
 

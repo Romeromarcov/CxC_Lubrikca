@@ -172,13 +172,16 @@ def _a_doc(r: Any) -> DocumentoOperativo:
     )
 
 
+_COLS_DOCUMENTOS_OPERATIVOS: frozenset[str] = frozenset(c.name for c in documentos_operativos.c)
+
+
 def _serializar(campos: dict[str, Any]) -> dict[str, Any]:
     out = dict(campos)
     if "validacion" in out:
         out["validacion_json"] = json.dumps(out.pop("validacion") or {}, ensure_ascii=False)
     if "faltantes" in out:
         out["faltantes_json"] = json.dumps(list(out.pop("faltantes") or []), ensure_ascii=False)
-    return out
+    return {k: v for k, v in out.items() if k in _COLS_DOCUMENTOS_OPERATIVOS}
 
 
 class RepoOperativosSQL:
@@ -348,8 +351,11 @@ class RepoOperativosSQL:
 
     def siguiente_numero_recibo(self, prefijo: str, fecha: date) -> str:
         """Genera correlativo diario único ``REC-YYYYMMDD-NNN`` o ``EGR-YYYYMMDD-NNN``."""
+        from cxc.db.locks import advisory_lock_conn
+
         base = f"{prefijo.strip().upper()}-{fecha.strftime('%Y%m%d')}-"
-        with self._engine.connect() as conn:
+        with self._engine.begin() as conn:
+            advisory_lock_conn(conn, "numero_recibo", base)
             ultimo = conn.execute(
                 select(func.max(documentos_operativos.c.numero_recibo)).where(
                     documentos_operativos.c.numero_recibo.like(f"{base}%")
@@ -494,7 +500,10 @@ class RepoLotesCajaChicaSQL:
     ) -> dict[str, Any]:
         ahora = datetime.now()
         ids_limpios = list(dict.fromkeys(int(x) for x in documento_ids if int(x) > 0))
+        from cxc.db.locks import advisory_lock_conn
+
         with self._engine.begin() as conn:
+            advisory_lock_conn(conn, "lote_caja_chica", ahora.strftime("%Y%m%d"))
             total = Decimal("0")
             if ids_limpios:
                 filas_doc = conn.execute(

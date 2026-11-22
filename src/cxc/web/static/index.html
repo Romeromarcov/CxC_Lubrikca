@@ -3635,6 +3635,110 @@
 
                 <!-- Subpágina: Tesorería y Cuentas Zelle de Terceros -->
                 <div class="config-subpage-full config-subpage-hidden" data-subpage="tesoreria" style="grid-column: 1 / -1; display:flex; flex-direction:column; gap:1.5rem;">
+                    <section class="card" id="cfg-cuentas-receptoras-card" style="padding:1.5rem;">
+                        <div class="panel-header-row" style="margin-bottom:1rem;">
+                            <div>
+                                <h2 style="margin:0 0 0.25rem 0;">🏛️ Cuentas Receptoras Propias de Lubrikca</h2>
+                                <p style="color:#475569; margin:0;">Catálogo oficial de cuentas bancarias, Pago Móvil, Zelle y Binance pertenecientes a <strong>Lubrikca</strong>. El sistema valida automáticamente cada cobro comparando la cuenta/banco/RIF <strong>destino</strong> contra estas cuentas para rechazar pagos enviados a bancos externos.</p>
+                            </div>
+                            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+                                <button type="button" class="btn-secondary" id="cr-btn-sync">🔄 Sincronizar desde Odoo</button>
+                                <button type="button" class="btn-secondary" onclick="loadConfigTesoreria()">↻ Actualizar</button>
+                            </div>
+                        </div>
+                        <div class="table-wrapper" style="margin-bottom:1.25rem;">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>Cuenta / Canal / Moneda</th>
+                                        <th>Banco SUDEBAN / N° Cuenta</th>
+                                        <th>Titular / RIF / Teléfono o Email</th>
+                                        <th>Diario Odoo</th>
+                                        <th>Estado</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cr-table-body">
+                                    <tr><td colspan="6" class="table-empty">Cargando cuentas receptoras de Lubrikca...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <form id="cr-form" class="cxc-form" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:1.15rem;">
+                            <h3 id="cr-form-titulo" style="margin:0 0 0.85rem 0;">➕ Nueva Cuenta Receptora Propia de Lubrikca</h3>
+                            <input type="hidden" id="cr-id">
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:0.75rem;">
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Nombre identificativo *</label>
+                                    <input type="text" id="cr-nombre" class="filter-select" style="width:100%; cursor:text;" placeholder="Ej. Banesco Principal VES" required>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Canal</label>
+                                    <select id="cr-canal" class="filter-select" style="width:100%;">
+                                        <option value="banco">Banco / Transferencia</option>
+                                        <option value="pago_movil">Pago Móvil</option>
+                                        <option value="zelle">Zelle</option>
+                                        <option value="binance">Binance Pay</option>
+                                        <option value="efectivo">Efectivo / Caja</option>
+                                        <option value="otro">Otro</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Banco SUDEBAN (Venezuela)</label>
+                                    <select id="cr-banco-sudeban" class="filter-select" style="width:100%;">
+                                        <option value="">(N/A o Canal Internacional)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">N° Cuenta (20 dígitos)</label>
+                                    <input type="text" id="cr-numero-cuenta" class="filter-select" style="width:100%; cursor:text;" placeholder="0134-0000-00-0000000000">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Titular de la cuenta</label>
+                                    <input type="text" id="cr-titular" class="filter-select" style="width:100%; cursor:text;" placeholder="Lubrikca C.A.">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">RIF / Cédula titular</label>
+                                    <input type="text" id="cr-rif" class="filter-select" style="width:100%; cursor:text;" placeholder="J-40000000-0">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Teléfono Pago Móvil</label>
+                                    <input type="text" id="cr-telefono" class="filter-select" style="width:100%; cursor:text;" placeholder="0414-0000000">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Email Zelle / Binance</label>
+                                    <input type="text" id="cr-email" class="filter-select" style="width:100%; cursor:text;" placeholder="pagos@lubrikca.com">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">ID Binance Pay (opcional)</label>
+                                    <input type="text" id="cr-binance-id" class="filter-select" style="width:100%; cursor:text;" placeholder="ID Binance">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Moneda</label>
+                                    <select id="cr-moneda" class="filter-select" style="width:100%;">
+                                        <option value="VES">VES</option>
+                                        <option value="USD">USD</option>
+                                        <option value="EUR">EUR</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; font-weight:600; color:#475569;">Diario Odoo asociado</label>
+                                    <select id="cr-diario-id" class="filter-select" style="width:100%;">
+                                        <option value="">(Sin diario Odoo vinculado)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div style="margin-top:0.75rem;">
+                                <label style="font-size:0.78rem; font-weight:600; color:#475569;">Notas internas</label>
+                                <input type="text" id="cr-notas" class="filter-select" style="width:100%; cursor:text;" placeholder="Observaciones para tesorería y validación automática">
+                            </div>
+                            <div style="display:flex; gap:0.65rem; align-items:center; flex-wrap:wrap; margin-top:0.85rem;">
+                                <button type="submit" class="btn-primary">💾 Guardar Cuenta Propia</button>
+                                <button type="button" class="btn-secondary" id="cr-cancelar" style="display:none;">Cancelar edición</button>
+                                <span id="cr-status" style="font-size:0.85rem; font-weight:600;"></span>
+                            </div>
+                        </form>
+                    </section>
+
                     <section class="card" style="padding:1.5rem;">
                         <div class="panel-header-row" style="margin-bottom:1rem;">
                             <div>

@@ -646,7 +646,7 @@ def test_factura_proveedor_sugiere_cuenta_usa_diario_ves_y_deja_chatter_y_narrat
     linea = mv["invoice_line_ids"][0][2]
     assert linea["price_unit"] == 100.0
     assert linea["account_id"] == 710
-    assert linea["tax_ids"] == [(6, 0, [])]
+    assert linea["tax_ids"] == [(6, 0, [51])]
     assert "CXC-FPR-00001" in mv["narration"]
     chatter_mv = [txt for mod, _, txt in odoo.chatter if mod == "account.move"]
     assert len(chatter_mv) == 1

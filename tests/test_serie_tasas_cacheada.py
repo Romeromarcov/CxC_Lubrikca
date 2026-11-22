@@ -106,7 +106,7 @@ def test_los_tres_escritores_invalidan_el_cache() -> None:
         ventana = "\n".join(lineas[n : n + 8])
         assert "invalidar_tasas()" in ventana, f"la escritura de la línea {n} no invalida"
     # El scraper escribe desde `rates_scraper.py`; el demonio invalida al volver.
-    i = fuente.index("fila = await asyncio.to_thread(scraper.run, now_caracas)")
+    i = fuente.index("fila = await asyncio.to_thread(")
     assert "invalidar_tasas()" in fuente[i : i + 600]
 
 

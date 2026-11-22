@@ -20,6 +20,7 @@ from typing import Any
 
 from sqlalchemy import Engine, delete, insert, or_, select
 
+from ..db.locks import advisory_lock_conn
 from ..db.schema import (
     cuentas_terceros,
     documentos_comerciales,
@@ -127,12 +128,11 @@ def _tasa_binance_cercana(repo_cxc: Any, fecha_d: date, tasa_bcv_fallback: Decim
         series = []
     elegida = Decimal("0")
     for s in series:
+        if s.timestamp.date() > fecha_d:
+            break
         tb = dec(getattr(s, "tasa_binance", 0))
         if tb > 0:
             elegida = tb
-            if s.timestamp.date() <= fecha_d:
-                continue
-            break
     if elegida > 0:
         return elegida
     if hist_bin is not None and hist_bin > 0:
@@ -227,6 +227,8 @@ def _monto_orig_desde_usd_ruta(
 
 
 def _serializar_vinc_op_venta(row: Any) -> dict[str, Any]:
+    t_bin = getattr(row, "tasa_binance_aplicada", None)
+    eq_bin = getattr(row, "equiv_usd_binance", None)
     return {
         "origen_registro": "cxc_op",
         "vinc_id": int(row.id),
@@ -239,7 +241,9 @@ def _serializar_vinc_op_venta(row: Any) -> dict[str, Any]:
         "monto_aplicado": _f2(row.monto_aplicado),
         "moneda": str(row.moneda or "USD"),
         "equiv_usd_bcv": _f2(row.equiv_usd_bcv),
+        "equiv_usd_binance": _f2(eq_bin) if eq_bin is not None else _f2(row.equiv_usd_bcv),
         "tasa_bcv": float(row.tasa_bcv) if row.tasa_bcv is not None else None,
+        "tasa_binance": float(t_bin) if t_bin is not None else None,
         "origen_vinculacion": str(row.origen_vinculacion or "manual"),
         "estado": str(row.estado or "VINCULADO_CXC"),
         "conciliado_odoo": bool(row.odoo_reconciliado),
@@ -1140,6 +1144,22 @@ def vincular_pago_venta(
     if pago_mirror is None and op_row is None:
         raise VinculacionInvalida("Debes indicar un pago recibido válido.")
 
+    pid_pago_raw = (
+        getattr(pago_mirror, "cliente_id", None)
+        if pago_mirror is not None
+        else getattr(op_row, "partner_odoo_id", None)
+    )
+    if (
+        pid_pago_raw is not None
+        and str(pid_pago_raw).strip().isdigit()
+        and doc.get("partner_odoo_id") is not None
+        and int(str(pid_pago_raw).strip()) != int(doc["partner_odoo_id"])
+    ):
+        raise VinculacionInvalida(
+            f"El pago pertenece al cliente #{pid_pago_raw} "
+            f"y la orden al cliente #{doc['partner_odoo_id']}."
+        )
+
     if pago_mirror is not None:
         met_nombre, met_tt = _metodo_pago_info(repo_cxc, pago_mirror.metodo_pago)
     else:
@@ -1195,18 +1215,30 @@ def vincular_pago_venta(
             f"El monto ({monto_dec}) supera el saldo disponible del pago ({disp_orig} {mon})."
         )
 
-    equiv_usd, tasa_bcv = _equiv_usd_y_tasa_ruta(
-        monto_dec, mon, f_pago, ruta_doc, por_fecha, fallback, repo_cxc
-    )
+    equiv_usd_bcv, tasa_bcv = _equiv_usd_y_tasa(monto_dec, mon, f_pago, por_fecha, fallback)
+    t_bcv_base = tasa_bcv or tasa_bcv_en_fecha(f_pago, por_fecha, fallback) or Decimal("1")
+    tasa_binance = _tasa_binance_cercana(repo_cxc, f_pago, t_bcv_base)
+    if mon == "USD":
+        equiv_usd_binance = q2(monto_dec)
+    elif tasa_binance > 0:
+        equiv_usd_binance = q2(monto_dec / tasa_binance)
+    else:
+        equiv_usd_binance = Decimal("0.00")
 
-    # Intentar reconciliación en Odoo si el cliente/factura/pago existen allá
+    # Intentar reconciliación en Odoo si existe en Odoo y es elegible
+    es_parcial = (
+        monto_total_pago > Decimal("0") and (monto_dec + Decimal("0.05")) < monto_total_pago
+    )
     pago_res_odoo = (
         int(pid_str)
         if pid_str.isdigit()
         else (int(op_row.odoo_res_id) if (op_row is not None and op_row.odoo_res_id) else None)
     )
     pago_model_odoo = (
-        str(op_row.odoo_model or ("account.move" if op_row.es_zelle_tercero else "account.payment"))
+        str(
+            op_row.odoo_model
+            or ("account.move" if op_row.es_zelle_tercero else "account.payment")
+        )
         if op_row is not None
         else "account.payment"
     )
@@ -1221,6 +1253,8 @@ def vincular_pago_venta(
     )
     reconciliado = bool(rec_odoo.get("reconciliado"))
     odoo_motivo = str(rec_odoo.get("motivo") or "")
+    if es_parcial and not reconciliado and "parcial" not in odoo_motivo.lower():
+        odoo_motivo = f"{odoo_motivo} (aplicación parcial {monto_dec} de {monto_total_pago} {mon})"
     fact_move_id = rec_odoo.get("factura_move_id")
 
     # Ruta 1: tabla espejo `vinculaciones` cuando tanto pago como orden existen en espejo
@@ -1270,7 +1304,32 @@ def vincular_pago_venta(
 
     # Ruta 2: tabla operativa `vinculaciones_ventas_op` (PAG-*, Zelle 3ro o PED-* antes del sync)
     ahora = datetime.now()
+    lock_key = pid_str or (f"op:{op_row.documento_id}" if op_row is not None else doc["so_id"])
     with engine.begin() as conn:
+        advisory_lock_conn(conn, "vinc_pago_venta", lock_key)
+        stmt_prev = select(vinculaciones_ventas_op.c.monto_aplicado)
+        if pid_str:
+            stmt_prev = stmt_prev.where(vinculaciones_ventas_op.c.pago_odoo_id == pid_str)
+        elif op_row is not None:
+            stmt_prev = stmt_prev.where(
+                vinculaciones_ventas_op.c.pago_operativo_id == int(op_row.documento_id)
+            )
+        usado_bd_op = q2(sum((dec(r[0]) for r in conn.execute(stmt_prev).all()), Decimal("0")))
+        usado_mirror = q2(
+            sum(
+                (
+                    dec(v["monto_aplicado"])
+                    for v in prev_vincs
+                    if v.get("origen_registro") == "mirror"
+                ),
+                Decimal("0"),
+            )
+        )
+        disp_locked = max(Decimal("0.00"), q2(monto_total_pago - usado_bd_op - usado_mirror))
+        if monto_total_pago > 0 and monto_dec > disp_locked + Decimal("0.05"):
+            raise VinculacionInvalida(
+                f"El monto ({monto_dec}) supera el saldo disponible del pago ({disp_locked} {mon})."
+            )
         fila = conn.execute(
             insert(vinculaciones_ventas_op)
             .values(
@@ -1281,8 +1340,10 @@ def vincular_pago_venta(
                 partner_odoo_id=doc["partner_odoo_id"],
                 monto_aplicado=monto_dec,
                 moneda=mon,
-                equiv_usd_bcv=equiv_usd,
+                equiv_usd_bcv=equiv_usd_bcv,
                 tasa_bcv=tasa_bcv,
+                tasa_binance_aplicada=tasa_binance if mon != "USD" else None,
+                equiv_usd_binance=equiv_usd_binance,
                 origen_vinculacion=origen_vinculacion,
                 estado="RECONCILIADO_ODOO" if reconciliado else "VINCULADO_CXC",
                 odoo_reconciliado=reconciliado,
@@ -1913,6 +1974,22 @@ def vincular_pago_compra(
     if op_row is None and odoo_pago is None:
         raise VinculacionInvalida("Debes indicar un pago enviado válido.")
 
+    prov_pago_raw = (
+        getattr(op_row, "partner_odoo_id", None)
+        if op_row is not None
+        else odoo_pago.get("partner_odoo_id")  # type: ignore[union-attr]
+    )
+    if (
+        prov_pago_raw is not None
+        and str(prov_pago_raw).strip().isdigit()
+        and doc.get("proveedor_odoo_id") is not None
+        and int(str(prov_pago_raw).strip()) != int(doc["proveedor_odoo_id"])
+    ):
+        raise VinculacionInvalida(
+            f"El pago pertenece al proveedor #{prov_pago_raw} "
+            f"y la factura al proveedor #{doc['proveedor_odoo_id']}."
+        )
+
     monto_total_pago = q2(
         dec(op_row.monto if op_row is not None else odoo_pago.get("monto"))  # type: ignore[union-attr]
     )
@@ -1953,7 +2030,7 @@ def vincular_pago_compra(
 
     equiv_usd, tasa_bcv = _equiv_usd_y_tasa(monto_dec, mon, f_pago, por_fecha, fallback)
 
-    # Conciliación best-effort en Odoo cuando pago y factura de compra existen publicados
+    # Conciliación best-effort en Odoo solo cuando cubre el pago completo
     es_z3 = bool(op_row is not None and op_row.es_zelle_tercero)
     pago_model_od = "account.move" if es_z3 else "account.payment"
     pago_res_od = (
@@ -1969,7 +2046,15 @@ def vincular_pago_compra(
 
     reconciliado = False
     odoo_motivo = "Vinculado en CxC (compra o pago aún sin ID publicado en Odoo)."
-    if escritor is not None and pago_res_od is not None and fact_move_od is not None:
+    es_parcial = (
+        monto_total_pago > Decimal("0") and (monto_dec + Decimal("0.05")) < monto_total_pago
+    )
+    if es_parcial:
+        odoo_motivo = (
+            f"Vinculación parcial en CxC ({monto_dec} de {monto_total_pago} {mon}); "
+            "conciliación completa en Odoo omitida."
+        )
+    elif escritor is not None and pago_res_od is not None and fact_move_od is not None:
         rec = escritor.reconciliar_pago_con_documento(
             pago_model=pago_model_od,
             pago_res_id=int(pago_res_od),
@@ -1980,7 +2065,24 @@ def vincular_pago_compra(
         odoo_motivo = str(rec.get("motivo") or "")
 
     ahora = datetime.now()
+    lock_key = pid_str or (f"op:{op_row.documento_id}" if op_row is not None else doc["compra_ref"])
     with engine.begin() as conn:
+        advisory_lock_conn(conn, "vinc_pago_compra", lock_key)
+        stmt_prev_c = select(vinculaciones_compras.c.monto_aplicado)
+        if pid_str:
+            stmt_prev_c = stmt_prev_c.where(vinculaciones_compras.c.pago_odoo_id == pid_str)
+        elif op_row is not None:
+            stmt_prev_c = stmt_prev_c.where(
+                vinculaciones_compras.c.pago_operativo_id == int(op_row.documento_id)
+            )
+        usado_locked = q2(
+            sum((dec(r[0]) for r in conn.execute(stmt_prev_c).all()), Decimal("0"))
+        )
+        disp_locked = max(Decimal("0.00"), q2(monto_total_pago - usado_locked))
+        if monto_total_pago > 0 and monto_dec > disp_locked + Decimal("0.05"):
+            raise VinculacionInvalida(
+                f"El monto ({monto_dec}) supera el saldo disponible del pago ({disp_locked} {mon})."
+            )
         fila = conn.execute(
             insert(vinculaciones_compras)
             .values(

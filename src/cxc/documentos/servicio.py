@@ -764,10 +764,27 @@ class ServicioDocumentos:
 
     def evaluar_politica(self, doc: DocumentoComercial) -> dict[str, Any]:
         """Evalúa la política de auto-envío y límites de crédito para un documento."""
+        precios_catalogo: dict[str, Decimal] = {}
+        try:
+            for it in self.catalogo_items(refresh=False):
+                pid = str(getattr(it, "producto_id", "") or "").strip()
+                if not pid:
+                    continue
+                fn_p = getattr(it, "precio_para_lista", None)
+                p_cat = (
+                    fn_p(doc.lista_precios_id, doc.moneda_lista)
+                    if callable(fn_p)
+                    else (it.precio_usd if doc.moneda_lista == "USD" else it.precio_ves)
+                )
+                if p_cat and Decimal(str(p_cat)) > Decimal("0"):
+                    precios_catalogo[pid] = Decimal(str(p_cat))
+        except Exception:
+            precios_catalogo = {}
         return evaluar_politica_auto_envio(
             doc,
             self._repo_cxc,
             engine=getattr(self._repo, "_engine", None),
+            precios_catalogo=precios_catalogo or None,
         )
 
     def _aplicar_politica_y_auto_envio(
@@ -1220,6 +1237,25 @@ class ServicioDocumentos:
         auto_enviado: bool = False,
     ) -> DocumentoComercial:
         """Envía a Odoo con precios normales de lista (sin discount en línea) + chatter."""
+        from cxc.db.locks import advisory_lock_engine
+
+        eng = getattr(self._repo, "_engine", None)
+        with advisory_lock_engine(eng, "documento_enviar_odoo", str(documento_id)):
+            return self._enviar_a_odoo_locked(
+                documento_id,
+                actor=actor,
+                registrar_aprobacion=registrar_aprobacion,
+                auto_enviado=auto_enviado,
+            )
+
+    def _enviar_a_odoo_locked(
+        self,
+        documento_id: int,
+        *,
+        actor: str = "sistema",
+        registrar_aprobacion: bool = False,
+        auto_enviado: bool = False,
+    ) -> DocumentoComercial:
         doc = self.obtener(documento_id)
         if doc.estado == ENVIADO_ODOO:
             ref = doc.odoo_order_name or doc.odoo_order_id

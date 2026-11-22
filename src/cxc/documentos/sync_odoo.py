@@ -124,7 +124,14 @@ def sincronizar_documentos_desde_odoo(
     pricelist_mapeo: Mapping[str, Any] | None = None,
 ) -> dict[str, int]:
     """Refleja cambios de cantidades, lista de precios y confirmación de Odoo sobre docs CxC."""
-    docs, _tot, _res = repo_docs.listar(limit=2000, offset=0)
+    docs: list[DocumentoComercial] = []
+    offset = 0
+    while True:
+        chunk, tot, _res = repo_docs.listar(limit=500, offset=offset)
+        docs.extend(chunk)
+        offset += len(chunk)
+        if not chunk or offset >= tot:
+            break
     prod_map: dict[str, Producto] | None = None
     conteos = {"revisados": 0, "ajustados": 0, "confirmados": 0, "cancelados": 0}
 
@@ -168,9 +175,23 @@ def sincronizar_documentos_desde_odoo(
         lineas_cambio = bool(lineas_odoo) and (
             _huella_lineas_odoo(lineas_odoo) != _huella_lineas_doc(doc)
         )
-        total_cambio = bool(orden.monto_total > Decimal("0")) and (
-            q2(orden.monto_total) != q2(doc.total_con_iva)
+        sub_doc = q2(doc.subtotal)
+        desc_cxc_doc = min(sub_doc, q2(doc.total_descuentos))
+        tot_bruto_sin_desc = q2(sub_doc * (Decimal("1") + IVA_VENEZUELA))
+        solo_diferencia_desc_cxc = (
+            not lineas_cambio
+            and not lista_cambio
+            and desc_cxc_doc > Decimal("0")
+            and orden.monto_total > Decimal("0")
+            and abs(q2(orden.monto_total) - tot_bruto_sin_desc) <= Decimal("0.05")
         )
+        total_cambio = (
+            bool(orden.monto_total > Decimal("0"))
+            and q2(orden.monto_total) != q2(doc.total_con_iva)
+            and not solo_diferencia_desc_cxc
+        )
+        dias_odoo = int(getattr(orden, "dias_credito", 0) or 0)
+        dias_cambio = dias_odoo > 0 and dias_odoo != int(getattr(doc, "dias_credito", 0) or 0)
 
         vm_prev = dict(doc.validacion_motor or {})
         raw_sync = vm_prev.get("sync_odoo")
@@ -182,6 +203,7 @@ def sincronizar_documentos_desde_odoo(
             lista_cambio
             or lineas_cambio
             or total_cambio
+            or dias_cambio
             or (confirmado and not estado_prev_confirmado)
             or (est_odoo != est_prev_odoo)
             or (confirmado and doc.estado in (PENDIENTE_APROBACION,))
@@ -191,6 +213,9 @@ def sincronizar_documentos_desde_odoo(
 
         cambios_cab: dict[str, Any] = {}
         nuevas_lineas: list[dict[str, Any]] | None = None
+
+        if dias_cambio:
+            cambios_cab["dias_credito"] = dias_odoo
 
         if lista_cambio:
             cambios_cab["lista_precios_id"] = lista_odoo_id
@@ -216,14 +241,18 @@ def sincronizar_documentos_desde_odoo(
             if prod_map is None:
                 prod_map = _catalogo_por_id(repo_cxc, catalogo)
             nuevas_lineas, sub_odoo, lit_odoo = _construir_lineas_desde_odoo(lineas_odoo, prod_map)
-            tot_odoo = (
-                q2(orden.monto_total)
-                if orden.monto_total > Decimal("0")
-                else q2(sub_odoo * (Decimal("1") + IVA_VENEZUELA))
-            )
-            iva_odoo = max(Decimal("0.00"), q2(tot_odoo - sub_odoo))
             desc_cxc = min(sub_odoo, q2(doc.total_descuentos))
             sub_neto = q2(sub_odoo - desc_cxc)
+            if desc_cxc > Decimal("0"):
+                iva_odoo = q2(sub_neto * IVA_VENEZUELA)
+                tot_odoo = q2(sub_neto + iva_odoo)
+            else:
+                tot_odoo = (
+                    q2(orden.monto_total)
+                    if orden.monto_total > Decimal("0")
+                    else q2(sub_odoo * (Decimal("1") + IVA_VENEZUELA))
+                )
+                iva_odoo = max(Decimal("0.00"), q2(tot_odoo - sub_odoo))
             cambios_cab.update(
                 {
                     "subtotal": sub_odoo,
@@ -242,17 +271,19 @@ def sincronizar_documentos_desde_odoo(
             )
             if sub_base > tot_odoo:
                 sub_base = q2(tot_odoo / (Decimal("1") + IVA_VENEZUELA))
-            iva_odoo = max(Decimal("0.00"), q2(tot_odoo - sub_base))
+            desc_cxc = min(sub_base, q2(doc.total_descuentos))
+            sub_neto = q2(sub_base - desc_cxc)
+            iva_odoo = max(Decimal("0.00"), q2(tot_odoo - sub_neto))
             cambios_cab.update(
                 {
                     "subtotal": sub_base,
-                    "subtotal_neto": sub_base,
+                    "subtotal_neto": sub_neto,
                     "monto_iva": iva_odoo,
                     "total_con_iva": tot_odoo,
                 }
             )
 
-        hubo_ajuste = bool(lista_cambio or lineas_cambio or total_cambio)
+        hubo_ajuste = bool(lista_cambio or lineas_cambio or total_cambio or dias_cambio)
         if confirmado and doc.estado != ENVIADO_ODOO:
             cambios_cab["estado"] = ENVIADO_ODOO
             cambios_cab["tipo"] = "pedido"

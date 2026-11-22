@@ -840,9 +840,27 @@ def test_motor_saldos_propios_formula_exacta_fifo_y_conciliacion() -> None:
 # ---------------------------------------------------------------------------
 def test_endpoints_reportes_propios_y_siembra_auth_y_flujo() -> None:
     repo = InMemoryRepository()
-    repo.upsert_clientes([Cliente(cliente_id="101", nombre="ALFA", vendedor_email="v@x.com")])
+    repo.upsert_clientes(
+        [
+            Cliente(cliente_id="101", nombre="ALFA", vendedor_email="vendedor@lubrikca.com"),
+            Cliente(cliente_id="102", nombre="BETA", vendedor_email="otro@lubrikca.com"),
+        ]
+    )
     repo.upsert_ordenes(
-        [b.orden("S00900", cliente_id="101", monto_total="300.00", vendedor="v@x.com")]
+        [
+            b.orden(
+                "S00900",
+                cliente_id="101",
+                monto_total="300.00",
+                vendedor="vendedor@lubrikca.com",
+            ),
+            b.orden(
+                "S00901",
+                cliente_id="102",
+                monto_total="450.00",
+                vendedor="otro@lubrikca.com",
+            ),
+        ]
     )
     reader = _FakeReaderSiembra()
     srv = SiembraOdooService(repo, reader)

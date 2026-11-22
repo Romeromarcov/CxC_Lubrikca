@@ -205,6 +205,19 @@ def extraer_campos_canonicos(tipo: str, raw: dict[str, Any]) -> dict[str, Any]:
         "moneda": moneda if not vacio(raw.get("moneda")) else "",
         "metodo_pago": metodo,
         "banco": str(raw.get("banco") or "").strip(),
+        "banco_origen": str(raw.get("banco_origen") or "").strip(),
+        "banco_destino": str(raw.get("banco_destino") or "").strip(),
+        "cuenta_destino": str(raw.get("cuenta_destino") or "").strip(),
+        "rif_destino": str(
+            raw.get("rif_destino") or raw.get("rif_cedula_destino") or ""
+        ).strip(),
+        "telefono_destino": str(raw.get("telefono_destino") or "").strip(),
+        "titular_destino": str(
+            raw.get("titular_destino") or raw.get("beneficiario_destino") or ""
+        ).strip(),
+        "email_destino": str(
+            raw.get("email_destino") or raw.get("correo_destino") or ""
+        ).strip(),
         "diario_id": diario_id,
         "diario_nombre": str(raw.get("diario_nombre") or raw.get("diario_codigo") or "").strip(),
         "cuenta_contable_id": cuenta_id,
@@ -435,6 +448,8 @@ class DocumentoOperativo:
             "proveedor_direccion": self.proveedor_direccion,
             "notas": self.notas,
             "validacion": self.validacion,
+            "destino_validacion": self.validacion.get("destino_validacion"),
+            "datos_destino": self.validacion.get("datos_destino"),
             "alertas": alertas,
             "faltantes": list(self.faltantes),
             "confirmado_cxc": self.confirmado_cxc,

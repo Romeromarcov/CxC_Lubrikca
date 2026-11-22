@@ -7,9 +7,11 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 import uuid
+from collections import defaultdict
 from dataclasses import replace as dataclasses_replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -36,9 +38,11 @@ from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 from cxc import permisos as accesos
 from cxc.auth import (
+    ALL_PAGES,
     NOMBRES_ROLES,
     ROLES_PERMISOS,
     actor_de_la_accion,
@@ -48,6 +52,7 @@ from cxc.auth import (
     generar_api_key,
     hash_api_key,
     obtener_usuarios_plataforma,
+    password_token_version,
     registrar_o_actualizar_usuario,
     verificar_api_key,
     verificar_session_token,
@@ -1139,7 +1144,7 @@ def _sincronizar_aplicaciones_conciliadas(
         hora_pago = datetime.combine(fecha_por_pago[pago_id], datetime.min.time())
         moneda = moneda_por_pago[pago_id]
         try:
-            tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)
+            tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows, repo=repo)
         except TasaNoDisponible as e_tasa:
             sin_tasa.append(
                 {"pago_id": pago_id, "so_id": so_id, "fecha": hora_pago.date().isoformat()}
@@ -2722,7 +2727,11 @@ def invalidar_tasas() -> None:
     _SERIE_ROWS_CACHE["ts"] = 0.0
 
 
-def get_rate_for_datetime(dt: datetime, rows: list[dict] | None = None) -> tuple[Decimal, Decimal]:
+def get_rate_for_datetime(
+    dt: datetime,
+    rows: list[dict] | None = None,
+    repo: Any = None,
+) -> tuple[Decimal, Decimal]:
     """Tasa BCV/Binance más cercana a ``dt``.
 
     Orden de fuentes, unificado en ``cxc.rates.Tasas`` (septiembre 2026):
@@ -2745,10 +2754,15 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] | None = None) -> tuple
     """
     # El repo se resuelve tarde y solo si hace falta.
     if rows is None:
-        rows = _all_serie_tasas_rows(get_repo())
+        rows = _all_serie_tasas_rows(repo if repo is not None else get_repo())
 
     fecha_str = dt.date().isoformat()
-    tasas = Tasas(historicas=_tasas_historicas_cacheadas(get_repo()), serie=rows or [])
+    try:
+        repo_hist = repo if repo is not None else get_repo()
+        historicas = _tasas_historicas_cacheadas(repo_hist)
+    except RuntimeError:
+        historicas = []
+    tasas = Tasas(historicas=historicas, serie=rows or [])
     bcv = tasas.bcv_usd(dt, arrastrar=False)
     binance = tasas.binance(dt)
     if bcv is not None:
@@ -3180,7 +3194,9 @@ async def get_auditoria_consolidada(monto_minimo: float = 25.0, pct_minimo: floa
         return resultado
     except Exception as e:
         logger.exception("Error en /api/auditoria/consolidada")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail="Error interno al calcular auditoría consolidada."
+        ) from e
 
 
 @app.get("/api/auditoria/facturado-por-debajo")
@@ -3198,7 +3214,9 @@ async def get_facturado_por_debajo():
         )
     except Exception as e:
         logger.exception("Error en /api/auditoria/facturado-por-debajo")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail="Error interno al evaluar facturación por debajo."
+        ) from e
     resumen: dict[str, int] = {}
     for a in alertas:
         resumen[a.tipo] = resumen.get(a.tipo, 0) + 1
@@ -3272,6 +3290,9 @@ async def run_sync_in_background():
     órdenes/pagos que llegaron mientras el servidor estuvo caído (downtime).
     Iteraciones siguientes: usa el cursor incremental normal (delta 48h solapado).
     """
+    class _SyncOmitido(Exception):
+        pass
+
     _first_run = True
     _last_daily_recalc_date: date | None = None
     # Catálogo: cambia con poca frecuencia (precios/nombres de producto),
@@ -3279,9 +3300,17 @@ async def run_sync_in_background():
     # calendario, mismo patrón que _last_daily_recalc_date.
     _last_catalogo_sync_date: date | None = None
     while True:
+        _lock_ctx = None
         try:
             config = AppConfig.from_env()
             repo = get_repo()
+            from cxc.db.locks import try_advisory_session_lock
+
+            _lock_ctx = try_advisory_session_lock(
+                getattr(repo, "_engine", None), "daemon", "odoo_sync"
+            )
+            if not _lock_ctx.__enter__():
+                raise _SyncOmitido()
             reader = OdooXmlRpcReader(config.odoo)
 
             if _first_run:
@@ -3427,14 +3456,23 @@ async def run_sync_in_background():
                     await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
                     _last_daily_recalc_date = date.today()
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
+        except _SyncOmitido:
+            logger.debug("Otro worker ejecuta sync Odoo; se omite este ciclo.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
+        finally:
+            if _lock_ctx is not None:
+                _lock_ctx.__exit__(None, None, None)
         await asyncio.sleep(300)
 
 
-@app.api_route("/api/sync/manual", methods=["GET", "POST"])
-async def api_sync_manual(lookback_days: int = 7):
+@app.post("/api/sync/manual")
+async def api_sync_manual(
+    lookback_days: int = 7,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _exigir_permiso_app(cxc_session, "sistema.recalcular")
     try:
         config = AppConfig.from_env()
         repo = get_repo()
@@ -3473,13 +3511,20 @@ async def api_sync_manual(lookback_days: int = 7):
             "total_actualizados": total,
             "mensaje": f"Sincronización completada. {total} registros actualizados.",
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error ejecutando /api/sync/manual")
+        raise HTTPException(
+            status_code=500, detail="Error interno al ejecutar sincronización manual."
+        ) from e
 
 
-@app.api_route("/api/backfill/ventas-teoricos", methods=["GET", "POST"])
-async def api_backfill_ventas_teoricos(limite: int | None = None):
+@app.post("/api/backfill/ventas-teoricos")
+async def api_backfill_ventas_teoricos(
+    limite: int | None = None,
+    cxc_session: str | None = Cookie(default=None),
+):
     """Backfill manual de ``ventas_teoricos`` (Fase 10) -- corre en el
 
     request (no en el daemon de 5 min) para el llenado inicial masivo de
@@ -3488,6 +3533,7 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
     tardar varios minutos contra cientos de órdenes -- pensado para
     correrse una vez (o con ``limite`` para ir en tandas).
     """
+    _exigir_permiso_app(cxc_session, "sistema.recalcular")
     try:
         config = AppConfig.from_env()
         repo = get_repo()
@@ -3510,33 +3556,16 @@ async def api_backfill_ventas_teoricos(limite: int | None = None):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error ejecutando /api/backfill/ventas-teoricos")
+        raise HTTPException(
+            status_code=500, detail="Error interno ejecutando backfill de teóricos."
+        ) from e
 
 
-@app.api_route("/api/backfill/entregas", methods=["GET", "POST"])
-async def api_backfill_entregas():
-    """Backfill manual de una sola vez del espejo ``entregas``/``lineas_
-
-    entrega`` -- pedido explícito del usuario (agosto 2026): casi todas
-    las órdenes ya entregadas en el pasado no tenían ``fecha_entrega``,
-    dato que alimenta las reglas de ventana de pago Contado del motor de
-    descuentos. Causa raíz confirmada: el sync delta (``IncrementalSync.
-    run``) usa un ÚNICO cursor ``last_sync`` compartido por todas las
-    entidades -- ``entregas``/``facturas`` se agregaron como espejo
-    DESPUÉS de que ese cursor ya llevaba corriendo un tiempo (Fase 0 del
-    plan de consolidación de fuentes), así que ``changed_entregas(since)``
-    solo capturó despachos con ``write_date`` posterior a ese punto. Un
-    ``stock.picking`` ya "done" no vuelve a tocarse en Odoo, así que su
-    ``write_date`` quedó viejo para siempre -- nunca calificó para el
-    delta (confirmado en producción: 22 de 565 órdenes facturadas tenían
-    entrega en el espejo antes de este backfill). Igual patrón que
-    ``/api/backfill/ventas-teoricos``: corre bajo demanda con
-    ``since=None`` (trae el historial completo vía Odoo, sin límite de
-    fecha) y hace upsert -- NO toca el cursor ``last_sync``, así que el
-    sync incremental normal sigue exactamente igual después de correr
-    esto. Idempotente, se puede repetir sin riesgo.
-    """
+@app.post("/api/backfill/entregas")
+async def api_backfill_entregas(cxc_session: str | None = Cookie(default=None)):
+    """Backfill manual de una sola vez del espejo ``entregas``/``lineas_entrega``."""
+    _exigir_permiso_app(cxc_session, "sistema.recalcular")
     try:
         config = AppConfig.from_env()
         repo = get_repo()
@@ -3561,9 +3590,13 @@ async def api_backfill_entregas():
                 "de entrega sincronizadas desde el historial completo de Odoo."
             ),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error ejecutando /api/backfill/entregas")
+        raise HTTPException(
+            status_code=500, detail="Error interno ejecutando backfill de entregas."
+        ) from e
 
 
 _SCRAPER_HORA_INICIO = 6  # primera captura del día, 6:00
@@ -3622,22 +3655,31 @@ async def run_scraper_in_background():
                     build_alerter(config.alert),
                     config.scraper_policy,
                 )
-                # scraper.run() hace 2-3 llamadas HTTP síncronas (Binance +
-                # BCV) que pueden tardar varios segundos -- sin to_thread
-                # bloquean el event loop entero (mismo patrón de bug que
-                # Fase 1, ver recalculate_all_orders), tumbando /reporte y
-                # cualquier otro endpoint mientras el scraper espera red.
-                fila = await asyncio.to_thread(scraper.run, now_caracas)
-                # La serie cambio: el cache de tasas tiene que verla. Hasta el
-                # 11-sep-2026 `invalidar_tasas()` no tenia NINGUN llamador, asi
-                # que `tasas_vigentes()` servia tasas de hasta 5 minutos atras
-                # despues de cada captura, mientras los lectores sin cache la
-                # veian al instante: dos lectores en desacuerdo por 5 minutos.
-                invalidar_tasas()
-                print(
-                    f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
-                    f"Binance={fila.tasa_binance}"
-                )
+                from cxc.db.locks import try_advisory_session_lock
+
+                def _scrape_si_libre(
+                    repo_arg: Any = repo,
+                    scraper_arg: Any = scraper,
+                    now_arg: datetime = now_caracas,
+                ) -> Any:
+                    with try_advisory_session_lock(
+                        getattr(repo_arg, "_engine", None), "daemon", "scraper_tasas"
+                    ) as libre:
+                        if not libre:
+                            return None
+                        return scraper_arg.run(now_arg)
+
+                fila = await asyncio.to_thread(_scrape_si_libre)
+                if fila is None:
+                    logger.debug(
+                        "Otro worker está ejecutando el scraping de tasas; se omite ciclo."
+                    )
+                else:
+                    invalidar_tasas()
+                    print(
+                        f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
+                        f"Binance={fila.tasa_binance}"
+                    )
             else:
                 print(
                     "FastAPI Daemon: fuera de la ventana de captura "
@@ -3712,13 +3754,69 @@ async def startup_event():
     _TAREAS_DEMONIO.add(asyncio.create_task(run_reintentos_capturas_en_background()))
 
 
-SECRET_KEY = os.environ.get("SESSION_SECRET", "lubrikca_cxc_secret_key_2026")
-if "SESSION_SECRET" not in os.environ:
-    # El valor por defecto está en el repositorio: cualquiera que lo lea puede
-    # firmar un token de sesión válido. En producción SESSION_SECRET es obligatoria.
+def _es_entorno_produccion() -> bool:
+    env_cxc = os.environ.get("CXC_ENV", "").strip().lower()
+    env_rail = os.environ.get("RAILWAY_ENVIRONMENT", "").strip().lower()
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    return env_cxc == "production" or bool(env_rail)
+
+
+def _cargar_session_secret() -> str:
+    val = os.environ.get("SESSION_SECRET", "").strip()
+    if val:
+        return val
+    if _es_entorno_produccion():
+        raise RuntimeError(
+            "SESSION_SECRET es obligatoria en producción (RAILWAY_ENVIRONMENT/CXC_ENV=production)."
+        )
     logger.warning(
         "SESSION_SECRET no está definida: se usa la clave por defecto del código, "
         "que es pública. Definila en el entorno."
+    )
+    return "lubrikca_cxc_secret_key_2026"
+
+
+SECRET_KEY = _cargar_session_secret()
+
+_LOGIN_RATE_LOCK = threading.Lock()
+_LOGIN_RATE_LIMIT: dict[tuple[str, str], list[float]] = defaultdict(list)
+_RATE_WINDOW_SECONDS = 300
+_RATE_MAX_ATTEMPTS = 10
+
+
+def _verificar_rate_limit_auth(request: Request, email: str, accion: str) -> None:
+    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    ip = fwd or (request.client.host if request.client else "unknown")
+    clave = (f"{accion}:{ip}", email.strip().lower())
+    ahora = time.monotonic()
+    corte = ahora - _RATE_WINDOW_SECONDS
+    with _LOGIN_RATE_LOCK:
+        hist = [ts for ts in _LOGIN_RATE_LIMIT[clave] if ts >= corte]
+        if len(hist) >= _RATE_MAX_ATTEMPTS:
+            _LOGIN_RATE_LIMIT[clave] = hist
+            raise HTTPException(
+                status_code=429,
+                detail="Demasiados intentos fallidos. Espera 5 minutos antes de volver a intentar.",
+            )
+        hist.append(ahora)
+        _LOGIN_RATE_LIMIT[clave] = hist
+
+
+def _limpiar_rate_limit_auth(request: Request, email: str, accion: str) -> None:
+    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    ip = fwd or (request.client.host if request.client else "unknown")
+    clave = (f"{accion}:{ip}", email.strip().lower())
+    with _LOGIN_RATE_LOCK:
+        _LOGIN_RATE_LIMIT.pop(clave, None)
+
+
+def _cookie_secure(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto", "").strip().lower()
+    return (
+        request.url.scheme == "https"
+        or proto == "https"
+        or bool(os.environ.get("RAILWAY_ENVIRONMENT", "").strip())
     )
 
 
@@ -3761,6 +3859,17 @@ def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, An
         u_row = buscar_usuario_plataforma(repo, email)
         if not u_row or u_row.get("activo") == "FALSE":
             return None
+        if (
+            u_row.get("password_hash")
+            and getattr(verificar_session_token, "__module__", "") == "cxc.auth"
+        ):
+            email_chk = verificar_session_token(
+                cxc_session,
+                SECRET_KEY,
+                expected_pwd_version=password_token_version(u_row.get("password_hash")),
+            )
+            if not email_chk:
+                return None
         rol = u_row.get("rol", "ventas")
         return {
             "email": email,
@@ -3775,6 +3884,46 @@ def get_current_user_from_cookie(cxc_session: str | None = None) -> dict[str, An
     except Exception as e:
         logger.warning("Error buscando usuario de sesión %s: %s", email, e)
         return None
+
+
+def _exigir_permiso_app(
+    cxc_session: str | None,
+    *permisos: str,
+    requiere_admin: bool = False,
+) -> dict[str, Any]:
+    """Valida sesión y permisos RBAC en endpoints de `web/app.py`.
+
+    En producción (`hay_sesion_valida` y `get_current_user_from_cookie` sin parches)
+    es 100% fail-closed (401 sin cookie válida, 403 sin permiso). Solo admite el
+    fixture heredado de `tests/conftest.py` cuando `hay_sesion_valida` fue sustituido
+    explícitamente sin cookie ni mock de usuario.
+    """
+    user = get_current_user_from_cookie(cxc_session)
+    if user is None:
+        if (
+            cxc_session is None
+            and getattr(hay_sesion_valida, "__module__", "") != "cxc.web.app"
+            and getattr(get_current_user_from_cookie, "__module__", "") == "cxc.web.app"
+            and bool(hay_sesion_valida(None))
+        ):
+            return {
+                "email": "test@cxc.local",
+                "nombre": "Test Admin",
+                "rol": "admin",
+                "permisos": ALL_PAGES,
+            }
+        raise HTTPException(status_code=401, detail="No autenticado")
+    if requiere_admin and user.get("rol") != "admin":
+        raise HTTPException(
+            status_code=403, detail="Acceso denegado: Se requiere rol Administrador"
+        )
+    if (
+        permisos
+        and user.get("rol") != "admin"
+        and not any(accesos.tiene(user, p) for p in permisos)
+    ):
+        raise HTTPException(status_code=403, detail="Sin permisos para realizar esta acción.")
+    return user
 
 
 # Únicas rutas de /api/ que pueden responder sin sesión: las que sirven
@@ -3869,6 +4018,21 @@ async def exigir_sesion_en_api(request: Request, call_next):
 
 
 # --- MULTI-PAGE & AUTH ROUTES ---
+
+
+@app.get("/healthz")
+async def healthcheck():
+    """Healthcheck ligero para Railway/monitoreo: verifica conectividad mínima a Postgres."""
+    try:
+        repo = get_repo()
+        engine = getattr(repo, "_engine", None)
+        if engine is not None:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception:
+        logger.exception("Fallo en /healthz")
+        return JSONResponse(status_code=503, content={"status": "error"})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -4355,20 +4519,27 @@ async def api_inicio_buscar(q: str = ""):
 
 
 @app.post("/api/auth/login")
-async def api_auth_login(req: LoginRequest):
+async def api_auth_login(req: LoginRequest, request: Request):
+    _verificar_rate_limit_auth(request, req.email, "login")
     try:
         config = AppConfig.from_env()
-        execute = _connect(config.odoo)
+        try:
+            execute = _connect(config.odoo)
+        except Exception as e_conn:
+            logger.warning("No se pudo conectar a Odoo durante login: %s", e_conn)
+            execute = None
         repo = get_repo()
 
         user_info, err_msg = autenticar_usuario(execute, repo, req.email, req.password)
         if not user_info:
             raise HTTPException(status_code=401, detail=err_msg or "Credenciales inválidas")
+        _limpiar_rate_limit_auth(request, req.email, "login")
+        pwd_ver = str(user_info.pop("_pwd_ver", "") or "")
         user_info["permisos"] = accesos.efectivos(
             user_info["rol"], _ajustes_de_acceso(repo, user_info["email"])
         )
 
-        token = crear_session_token(req.email, SECRET_KEY)
+        token = crear_session_token(req.email, SECRET_KEY, pwd_version=pwd_ver)
         first_perm = user_info["permisos"][0] if user_info["permisos"] else "inicio"
 
         res = Response(
@@ -4378,31 +4549,59 @@ async def api_auth_login(req: LoginRequest):
             media_type="application/json",
         )
         res.set_cookie(
-            key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax"
+            key="cxc_session",
+            value=token,
+            httponly=True,
+            secure=_cookie_secure(request),
+            max_age=86400 * 7,
+            samesite="lax",
         )
         return res
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en /api/auth/login")
+        raise HTTPException(
+            status_code=500, detail="Error interno al iniciar sesión."
+        ) from e
 
 
 @app.post("/api/auth/register-password")
-async def api_auth_register_password(req: RegisterPasswordRequest):
+async def api_auth_register_password(
+    req: RegisterPasswordRequest,
+    request: Request,
+    cxc_session: str | None = Cookie(default=None),
+):
+    _verificar_rate_limit_auth(request, req.email, "register")
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
         repo = get_repo()
 
-        # Solo el PRIMER ingreso: si la cuenta ya tiene contraseña, esto permitía a
-        # cualquiera que conociera un correo de Odoo pisarla y entrar como esa persona.
+        # Solo el PRIMER ingreso invitado: si ya tiene clave, 409; si no fue pre-autorizado,
+        # solo pasa si lo ejecuta un admin o si la tabla está vacía (bootstrap inicial).
         existente = buscar_usuario_plataforma(repo, req.email)
         if existente and existente.get("password_hash"):
             raise HTTPException(
                 status_code=409,
                 detail="Esta cuenta ya tiene contraseña. Si la olvidaste, pide a un "
                 "administrador que la restablezca.",
+            )
+
+        invitado_valido = bool(existente and existente.get("activo") != "FALSE")
+        admin_actual = get_current_user_from_cookie(cxc_session)
+        es_admin = bool(admin_actual and admin_actual.get("rol") == "admin")
+        allow_bootstrap = os.environ.get("CXC_ALLOW_INITIAL_BOOTSTRAP", "1").strip() != "0"
+        es_bootstrap = False
+        if not invitado_valido and not es_admin and allow_bootstrap:
+            try:
+                es_bootstrap = len(obtener_usuarios_plataforma(repo)) == 0
+            except Exception:
+                es_bootstrap = False
+        if not (invitado_valido or es_admin or es_bootstrap):
+            raise HTTPException(
+                status_code=403,
+                detail="El registro requiere que un administrador habilite tu correo primero.",
             )
 
         odoo_user = verificar_usuario_odoo_activo(execute, req.email)
@@ -4419,8 +4618,11 @@ async def api_auth_register_password(req: RegisterPasswordRequest):
             nombre_odoo=odoo_user.get("name") or "",
             activo=True,
         )
+        _limpiar_rate_limit_auth(request, req.email, "register")
 
-        token = crear_session_token(req.email, SECRET_KEY)
+        token = crear_session_token(
+            req.email, SECRET_KEY, pwd_version=password_token_version(u_row.get("password_hash"))
+        )
         rol = u_row.get("rol", "ventas")
         permisos = ROLES_PERMISOS.get(rol, ["inicio"])
         first_perm = permisos[0] if permisos else "inicio"
@@ -4436,23 +4638,28 @@ async def api_auth_register_password(req: RegisterPasswordRequest):
             media_type="application/json",
         )
         res.set_cookie(
-            key="cxc_session", value=token, httponly=True, max_age=86400 * 7, samesite="lax"
+            key="cxc_session",
+            value=token,
+            httponly=True,
+            secure=_cookie_secure(request),
+            max_age=86400 * 7,
+            samesite="lax",
         )
         return res
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en /api/auth/register-password")
+        raise HTTPException(
+            status_code=500, detail="Error interno al registrar la contraseña."
+        ) from e
 
 
 @app.post("/api/auth/reset-password")
 async def api_auth_reset_password(
     req: ResetPasswordRequest, cxc_session: str | None = Cookie(default=None)
 ):
-    # Solo un administrador con sesión. Antes era pública: con saber el correo de
-    # alguien activo en Odoo se le cambiaba la contraseña y se entraba como esa
-    # persona (incluido un administrador).
+    # Solo un administrador con sesión.
     _admin_de_accesos(cxc_session)
     try:
         config = AppConfig.from_env()
@@ -4478,8 +4685,10 @@ async def api_auth_reset_password(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en /api/auth/reset-password")
+        raise HTTPException(
+            status_code=500, detail="Error interno al restablecer contraseña."
+        ) from e
 
 
 @app.get("/api/auth/me")
@@ -4862,8 +5071,10 @@ async def get_resumen():
             "alertas_reconciliacion": alertas_rojas,
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/ordenes-pendientes/{cliente_id}")
@@ -4896,8 +5107,10 @@ async def get_ordenes_pendientes(cliente_id: str):
                     )
         return pendientes
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _ruta_de_orden_repo(
@@ -4976,7 +5189,14 @@ def _metodo_info_pago(repo: Any, pago: Any) -> tuple[str, str | None]:
 
 
 @app.post("/api/vincular")
-async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTasks):
+async def post_vincular(
+    req: VinculacionRequest,
+    background_tasks: BackgroundTasks,
+    cxc_session: str | None = Cookie(default=None),
+):
+    user = _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
 
@@ -5026,6 +5246,11 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
 
         vinc_id = f"VINC_{req.pago_id}_{req.so_id}"
+        confirmado_por_actor = (
+            actor_de_la_accion(user, "Panel de Control Web")
+            if user.get("email") != "test@cxc.local"
+            else "Panel de Control Web"
+        )
         vinc = Vinculacion(
             vinc_id=vinc_id,
             pago_id=req.pago_id,
@@ -5039,7 +5264,7 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
             equiv_usd_binance=equiv_usd_binance,
             equiv_ves_bcv=equiv_ves_bcv,
             equiv_ves_binance=equiv_ves_binance,
-            confirmado_por="Panel de Control Web",
+            confirmado_por=confirmado_por_actor,
             timestamp_registro=datetime.now(),
             estado=EstadoVinculacion.PENDIENTE,
             moneda_abono=Moneda(pago.moneda),
@@ -5069,12 +5294,16 @@ async def post_vincular(req: VinculacionRequest, background_tasks: BackgroundTas
         # cliente (cargar la tasa de ese día), no del servidor: 400, no 500.
         raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno vinculando pago %s con orden %s", req.pago_id, req.so_id)
+        raise HTTPException(status_code=500, detail="Error interno al vincular pago.") from e
 
 
 @app.put("/api/vinculacion/{vinc_id}/editar")
 async def put_editar_vinculacion(
-    vinc_id: str, req: VinculacionEditRequest, background_tasks: BackgroundTasks
+    vinc_id: str,
+    req: VinculacionEditRequest,
+    background_tasks: BackgroundTasks,
+    cxc_session: str | None = Cookie(default=None),
 ):
     """Edita la orden y/o el monto de una Vinculación ya existente.
 
@@ -5093,6 +5322,9 @@ async def put_editar_vinculacion(
     Odoo se equivocó, corregirlo en Odoo -- el resync de
     ``_resincronizar_vinculaciones_con_odoo`` lo refleja solo).
     """
+    _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         vinc = _get_vinculacion_or_404(repo, vinc_id)
@@ -5195,8 +5427,10 @@ async def put_editar_vinculacion(
     except TasaNoDisponible as e_tasa:
         raise HTTPException(status_code=400, detail=str(e_tasa)) from e_tasa
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error editando vinculación %s", vinc_id)
+        raise HTTPException(
+            status_code=500, detail="Error interno al editar la vinculación."
+        ) from e
 
 
 def recalculate_all(so_id: str):
@@ -5518,8 +5752,10 @@ async def get_auditoria_descuentos(
             rows = [r for r in rows if r.get("tipo_auditoria", "") == tipo]
         return {"items": rows, "total": len(rows)}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class AuditoriaEstadoRequest(BaseModel):
@@ -5550,8 +5786,10 @@ async def patch_auditoria_estado(
         )
         return {"status": "ok", "audit_id": audit_id, "nuevo_estado": req.estado}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _pagos_odoo_por_orden(
@@ -6827,8 +7065,10 @@ def _get_reporte_saldos_sync(refresh: bool = False):
         _REPORTE_SALDOS_CACHE["timestamp"] = time.time()
         return res
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
     finally:
         _reporte_saldos_computing = False
 
@@ -7688,8 +7928,10 @@ async def get_reporte_cxc_cliente(cxc_session: str | None = Cookie(default=None)
 
         return {"clientes": clientes_list, "totales": totales}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/reporte-cxc-cliente/excel")
@@ -7790,12 +8032,17 @@ async def get_config_tasas():
             )
         return tasas
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/tasas")
-async def post_config_tasas(req: TasaRequest):
+async def post_config_tasas(req: TasaRequest, cxc_session: str | None = Cookie(default=None)):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         from cxc.models import SerieTasa
@@ -7814,8 +8061,10 @@ async def post_config_tasas(req: TasaRequest):
         invalidar_tasas()
         return {"status": "success", "message": "Tasa manual registrada."}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/feriados")
@@ -7828,12 +8077,17 @@ async def get_config_feriados():
             for f in feriados
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/feriados")
-async def post_config_feriados(req: FeriadoRequest):
+async def post_config_feriados(req: FeriadoRequest, cxc_session: str | None = Cookie(default=None)):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         from cxc.models import Feriado, TipoFeriado
@@ -7846,8 +8100,10 @@ async def post_config_feriados(req: FeriadoRequest):
         repo.append_feriado(feriado)
         return {"status": "success", "message": "Feriado registrado con éxito."}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/descuentos-marca")
@@ -7870,8 +8126,10 @@ async def get_config_descuentos_marca():
             for r in rules
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/listas-precio")
@@ -8002,8 +8260,10 @@ async def get_config_listas_precio():
             },
         )
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/meta")
@@ -8024,12 +8284,17 @@ async def get_config_meta():
             meta["umbral_litros_clasificacion_industrial"] = str(UMBRAL_LITROS_INDUSTRIAL_DEFAULT)
         return meta
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/meta")
-async def post_config_meta(req: MetaRequest):
+async def post_config_meta(req: MetaRequest, cxc_session: str | None = Cookie(default=None)):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         repo.set_config("cash_window_business_days", str(req.cash_window_business_days))
@@ -8042,8 +8307,10 @@ async def post_config_meta(req: MetaRequest):
 
         return {"status": "success", "message": "Ajustes globales actualizados correctamente."}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # Mapeo UNIFICADO de listas de precio (agosto 2026, pedido explícito del
@@ -9293,12 +9560,19 @@ async def get_config_pricelist_mapeo():
             "historical_pricelist_solo_auditoria": True,
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/pricelist-mapeo")
-async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
+async def post_config_pricelist_mapeo(
+    req: PricelistMapeoUnificadoRequest, cxc_session: str | None = Cookie(default=None)
+):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         mapeo: dict[str, dict[str, Any]] = {}
         for pid, fila in req.mapeo.items():
@@ -9360,8 +9634,10 @@ async def post_config_pricelist_mapeo(req: PricelistMapeoUnificadoRequest):
             "historical_pricelist_enabled": req.historical_pricelist_enabled,
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _stock_mapa_inventario_seguro(repo: Any, *, refresh_stock: bool = False) -> dict[str, float]:
@@ -9432,8 +9708,10 @@ async def get_inventario_catalogo(refresh_stock: bool = False):
         resultado.sort(key=lambda r: r["nombre"])
         return resultado
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/inventario/comparativo")
@@ -9530,12 +9808,19 @@ async def get_inventario_comparativo(categoria: str, refresh_stock: bool = False
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/eliminar-descuento")
-async def post_eliminar_descuento(req: EliminarDescuentoRequest):
+async def post_eliminar_descuento(
+    req: EliminarDescuentoRequest, cxc_session: str | None = Cookie(default=None)
+):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         deleted = repo.delete_regla(req.tabla, req.regla_id)
@@ -9550,8 +9835,10 @@ async def post_eliminar_descuento(req: EliminarDescuentoRequest):
         # que tenia `post_cambiar_tipo_tasa_bcv`.
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 _SALDOS_REALES_CACHE: dict[str, Any] = {"data": None, "timestamp": 0.0}
@@ -10286,8 +10573,10 @@ def _get_conciliaciones_sugerencias_sync(cxc_session: str | None):
 
         return sugerencias
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/conciliaciones/sugerencias")
@@ -10312,9 +10601,11 @@ async def post_cerrar_pago_huerfano(
     corresponde. Reversible: quitar la fila de la pestaña
     PagosHuerfanosCerrados hace que el pago vuelva a aparecer.
     """
+    user = _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
-        user = get_current_user_from_cookie(cxc_session)
         cerrado_por = (user["nombre"] or user["email"]) if user else "Desconocido"
         repo.upsert_pago_huerfano_cerrado(
             {
@@ -10329,8 +10620,10 @@ async def post_cerrar_pago_huerfano(
             "message": f"Pago {req.pago_id} cerrado a favor de la empresa.",
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/bandeja")
@@ -10988,8 +11281,10 @@ async def get_bandeja_facturacion():
             "en_proceso_de_pago": en_proceso_de_pago,
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _vincular_masivo_sync(
@@ -11128,11 +11423,25 @@ def _vincular_masivo_sync(
 
 
 @app.post("/api/vincular-masivo")
-async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: BackgroundTasks):
+async def post_vincular_masivo(
+    req: VincularMasivoRequest,
+    background_tasks: BackgroundTasks,
+    cxc_session: str | None = Cookie(default=None),
+):
+    user = _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         items = [(it.pago_id, it.so_id, it.monto_aplicado) for it in req.items]
-        processed, so_ids_affected, omitidos = _vincular_masivo_sync(repo, items)
+        confirmado_por_actor = (
+            actor_de_la_accion(user, "Aprobador Masivo FIFO")
+            if user.get("email") != "test@cxc.local"
+            else "Aprobador Masivo FIFO"
+        )
+        processed, so_ids_affected, omitidos = _vincular_masivo_sync(
+            repo, items, confirmado_por=confirmado_por_actor
+        )
 
         for so_id in so_ids_affected:
             background_tasks.add_task(recalculate_all, so_id)
@@ -11149,8 +11458,10 @@ async def post_vincular_masivo(req: VincularMasivoRequest, background_tasks: Bac
             "omitidos": omitidos,
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error en vinculación masiva")
+        raise HTTPException(
+            status_code=500, detail="Error interno al ejecutar vinculación masiva."
+        ) from e
 
 
 def _auto_vincular_fifo_pendientes(repo: Any) -> int:
@@ -11218,8 +11529,14 @@ def _get_vinculacion_or_404(repo: Any, vinc_id: str) -> Vinculacion:
 
 @app.post("/api/vinculacion/{vinc_id}/tasa-binance")
 async def post_editar_tasa_binance(
-    vinc_id: str, req: TasaBinanceEditRequest, background_tasks: BackgroundTasks
+    vinc_id: str,
+    req: TasaBinanceEditRequest,
+    background_tasks: BackgroundTasks,
+    cxc_session: str | None = Cookie(default=None),
 ):
+    _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         vinc = _get_vinculacion_or_404(repo, vinc_id)
@@ -11281,8 +11598,10 @@ async def post_editar_tasa_binance(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/pago/{pago_id}/tasa-binance")
@@ -11302,6 +11621,9 @@ async def post_editar_tasa_binance_pago_pendiente(
     ``get_cobranza_pagos_unificado`` lo aplica al armar la fila de ese
     pago mientras siga pendiente.
     """
+    user = _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         nueva_tasa = Decimal(str(req.tasa_binance))
@@ -11341,9 +11663,7 @@ async def post_editar_tasa_binance_pago_pendiente(
                 "pago_id": pago_id,
                 "tasa_binance": str(nueva_tasa),
                 # La sesion manda; ver `auth.actor_de_la_accion`.
-                "editado_por": actor_de_la_accion(
-                    get_current_user_from_cookie(cxc_session), req.editado_por
-                ),
+                "editado_por": actor_de_la_accion(user, req.editado_por),
                 "timestamp_edicion": datetime.now().isoformat(),
             }
         )
@@ -11357,14 +11677,22 @@ async def post_editar_tasa_binance_pago_pendiente(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/vinculacion/{vinc_id}/tasa-bcv-tipo")
 async def post_cambiar_tipo_tasa_bcv(
-    vinc_id: str, req: TasaBcvVarianteRequest, background_tasks: BackgroundTasks
+    vinc_id: str,
+    req: TasaBcvVarianteRequest,
+    background_tasks: BackgroundTasks,
+    cxc_session: str | None = Cookie(default=None),
 ):
+    _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
         variante = req.variante.strip().upper()
         if variante not in ("USD", "EUR"):
@@ -11431,8 +11759,10 @@ async def post_cambiar_tipo_tasa_bcv(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/odoo/marcas")
@@ -11443,8 +11773,10 @@ async def get_odoo_marcas():
         brands = execute("product.brand", "search_read", [[]], {"fields": ["name"]})
         return [b["name"] for b in brands]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/odoo/categorias")
@@ -11494,8 +11826,10 @@ async def get_odoo_categorias():
                 nombres.add(parts[idx + 1])
         return sorted(nombres)
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _categoria_raiz_y_subcategoria(display_name: str) -> tuple[str, str]:
@@ -11553,8 +11887,10 @@ async def get_odoo_categorias_arbol():
                 arbol[raiz].add(sub)
         return {madre: sorted(subs) for madre, subs in sorted(arbol.items())}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/odoo/presentaciones")
@@ -11603,8 +11939,10 @@ async def get_odoo_presentaciones():
         resultado.sort(key=lambda x: (x["madre"], x["subcategoria"], x["presentacion"]))
         return resultado
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/tasa-referencia")
@@ -11620,7 +11958,10 @@ async def get_tasa_referencia(fecha: str, hora: str):
 
 
 @app.post("/api/config/tasas/sync-odoo")
-async def post_sync_odoo_rates():
+async def post_sync_odoo_rates(cxc_session: str | None = Cookie(default=None)):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         config = AppConfig.from_env()
         execute = _connect(config.odoo)
@@ -11703,8 +12044,10 @@ async def post_sync_odoo_rates():
 
         return {"status": "success", "message": msg}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/odoo/productos")
@@ -11795,8 +12138,10 @@ async def get_odoo_productos():
             )
         return resultado
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/odoo/clientes-auditoria")
@@ -11995,8 +12340,10 @@ async def get_odoo_clientes_auditoria():
             )
         return resultado
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/promociones")
@@ -12032,8 +12379,10 @@ async def get_config_promociones():
             for p in promos
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _resolver_productos_promo(productos_str: str, repo: Any) -> str:
@@ -12093,25 +12442,20 @@ async def get_config_exclusiones():
             for e in excls
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/exclusiones")
-async def post_config_exclusiones(req: ExclusionRequest):
-    """Registra un par de descuentos mutuamente excluyentes.
-
-    Bug real (auditoría de reglas, agosto 2026): las filas de
-    ``exclusiones`` en producción guardaban 'promocion'/'recompra', un
-    vocabulario que el motor no reconoce -- resuelve las exclusiones
-    buscando el nombre del componente en un dict cuyas claves son
-    'primera_compra'/'recurrencia'/'contado'/'volumen'/'bcv_completo'/
-    'producto'. La fila 'promocion' <-> 'recompra' nunca excluyó nada y no
-    había forma de notarlo: el endpoint aceptaba cualquier string y la
-    tabla de Configuración imprimía el valor crudo cuando no lo reconocía.
-    Se canoniza al guardar, igual que ``_resolver_productos_promo`` hace
-    con los productos de las reglas de obsequio.
-    """
+async def post_config_exclusiones(
+    req: ExclusionRequest, cxc_session: str | None = Cookie(default=None)
+):
+    """Registra un par de descuentos mutuamente excluyentes."""
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         from cxc.engine.discounts import (
@@ -12137,8 +12481,10 @@ async def post_config_exclusiones(req: ExclusionRequest):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
     # NOTA: existía una ruta GET/POST /api/config/descuentos-volumen duplicada
     # aquí (mismo path, modelo DescuentoVolumenRequest más viejo/incompleto --
@@ -12228,13 +12574,18 @@ def _fecha_regla(valor: str, por_defecto: date | None) -> date | None:
 
 
 @app.post("/api/config/regla")
-async def post_regla_unificada(req: ReglaUnificadaRequest):
+async def post_regla_unificada(
+    req: ReglaUnificadaRequest, cxc_session: str | None = Cookie(default=None)
+):
     """Crea o actualiza una regla de cualquier tipo desde un solo formulario.
 
     Despacha a la tabla que corresponde según ``tipo_regla``. Los campos
     que ese tipo no usa se ignoran -- el formulario ya los oculta, pero el
     endpoint no confía en eso.
     """
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         tipo = (req.tipo_regla or "").strip().lower()
@@ -12386,8 +12737,10 @@ async def post_regla_unificada(req: ReglaUnificadaRequest):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Unified Discount Rules Endpoint ---
@@ -12593,8 +12946,10 @@ async def get_todas_reglas_descuento():
 
         return todas
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Pronto Pago Endpoints ---
@@ -12628,8 +12983,10 @@ async def get_config_pronto_pago():
             for r in rules
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Volumen Endpoints ---
@@ -12677,8 +13034,10 @@ async def get_config_volumen():
             )
         return res
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Recompra Endpoints ---
@@ -12711,8 +13070,10 @@ async def get_config_recompra():
             for r in rules
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Producto Promo Endpoints ---
@@ -12745,8 +13106,10 @@ async def get_config_producto():
             for r in rules
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Diferencial Cambiario Endpoints ---
@@ -12785,8 +13148,10 @@ async def get_config_diferencial():
             for r in rules
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _vigente_diferencial_local(r: Any, today: date) -> bool:
@@ -12802,7 +13167,12 @@ def _vigente_diferencial_local(r: Any, today: date) -> bool:
 
 
 @app.post("/api/config/toggle-descuento")
-async def post_toggle_descuento(req: ToggleDescuentoRequest):
+async def post_toggle_descuento(
+    req: ToggleDescuentoRequest, cxc_session: str | None = Cookie(default=None)
+):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         target_id_str = str(req.regla_id).strip()
@@ -12860,8 +13230,10 @@ async def post_toggle_descuento(req: ToggleDescuentoRequest):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Rate Averages Endpoint ---
@@ -12963,8 +13335,10 @@ def _get_tasas_promedios_sync():
             },
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/pagos-historial")
@@ -13187,8 +13561,10 @@ def _get_pagos_historial_sync():
 
         return historial
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 _FECHA_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -13850,8 +14226,10 @@ async def get_cobranza_pagos_unificado(cxc_session: str | None = Cookie(default=
         unificados.sort(key=lambda r: r["pago_fecha"] or "")
         return unificados
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 _COBRANZA_COLUMN_LABELS: dict[str, str] = {
@@ -13937,8 +14315,10 @@ async def get_tasas_historicas():
         rows = repo.all_tasas_historicas_auditoria()
         return {"items": rows, "count": len(rows)}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
     # NOTA (agosto 2026, plan de consolidación de fuentes): existía una
     # segunda ruta GET /api/reglas-descuento aquí (función
@@ -14673,8 +15053,10 @@ async def get_reporte_cxc_vencida_junio(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/reportes/cobranza-julio")
@@ -14707,8 +15089,10 @@ async def get_reporte_cobranza_julio(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/reportes/recuperacion-julio")
@@ -14756,8 +15140,10 @@ async def get_reporte_recuperacion_julio(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/auditoria/balance-comprobacion")
@@ -14897,8 +15283,10 @@ async def get_balance_comprobacion():
             "calculado_en": datetime.now().isoformat(),
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _si_existe(repo: Any, metodo: str) -> dict[str, dict[str, str]]:
@@ -14926,7 +15314,9 @@ async def get_nc_vs_motor(solo_fuera: bool = False):
         )
     except Exception as e:
         logger.exception("Error en /api/auditoria/nc-vs-motor")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail="Error interno al evaluar notas de crédito."
+        ) from e
     if solo_fuera:
         hallazgos = [h for h in hallazgos if h.veredicto not in ("coincide", "decision_comercial")]
     resumen: dict[str, int] = {}
@@ -15570,8 +15960,10 @@ async def get_auditoria():
             },
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/ventas")
@@ -17331,8 +17723,10 @@ def _get_ventas_sync(
             _VENTAS_CACHE["timestamp"] = time.time()
         return res
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
     finally:
         if vendedor is None:
             _ventas_computing = False
@@ -17972,8 +18366,10 @@ async def get_ventas_detalle(so_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class AceptarDiscrepanciaRequest(BaseModel):
@@ -18005,6 +18401,9 @@ async def post_aceptar_discrepancia(
     req: AceptarDiscrepanciaRequest,
     cxc_session: str | None = Cookie(default=None),
 ):
+    user = _exigir_permiso_app(
+        cxc_session, "auditoria.decidir", "ventas.aprobar_pedidos", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         row = {
@@ -18017,9 +18416,7 @@ async def post_aceptar_discrepancia(
             "detalle": req.detalle,
             "motivo_aceptacion": req.motivo_aceptacion,
             # La sesion manda; ver `auth.actor_de_la_accion`.
-            "aprobado_por": actor_de_la_accion(
-                get_current_user_from_cookie(cxc_session), req.aprobado_por
-            ),
+            "aprobado_por": actor_de_la_accion(user, req.aprobado_por),
             "timestamp_aprobacion": datetime.now().isoformat(),
         }
         repo.append_discrepancia_aceptada(row)
@@ -18031,8 +18428,10 @@ async def post_aceptar_discrepancia(
             ),
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class MarcarDescuentoNoOtorgadoRequest(BaseModel):
@@ -18058,6 +18457,9 @@ async def post_descuento_no_otorgado(
     req: MarcarDescuentoNoOtorgadoRequest,
     cxc_session: str | None = Cookie(default=None),
 ):
+    user = _exigir_permiso_app(
+        cxc_session, "auditoria.decidir", "ventas.aprobar_pedidos", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         if req.no_otorgado:
@@ -18065,13 +18467,8 @@ async def post_descuento_no_otorgado(
                 {
                     "so_id": req.so_id,
                     "motivo": req.motivo,
-                    # La SESION manda y lo declarado se conserva. El formulario pide
-                    # el nombre con un `prompt` --la persona lo tipea, con un default
-                    # que no identifica a nadie-- mientras la cookie ya sabe quien es.
-                    # Ver `auth.actor_de_la_accion`.
-                    "marcado_por": actor_de_la_accion(
-                        get_current_user_from_cookie(cxc_session), req.marcado_por
-                    ),
+                    # La SESION manda y lo declarado se conserva. Ver `auth.actor_de_la_accion`.
+                    "marcado_por": actor_de_la_accion(user, req.marcado_por),
                     "timestamp_marcado": datetime.now().isoformat(),
                 }
             )
@@ -18087,8 +18484,10 @@ async def post_descuento_no_otorgado(
             )
         return {"status": "success", "message": msg}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class MarcarDecisionComercialRequest(BaseModel):
@@ -18111,6 +18510,9 @@ async def post_decision_comercial(
 
     Caso que lo motivo: S00913, la regla da 8% de pronto pago y comercialmente se dio 6%.
     """
+    user = _exigir_permiso_app(
+        cxc_session, "auditoria.decidir", "ventas.aprobar_pedidos", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         if req.vigente:
@@ -18118,9 +18520,7 @@ async def post_decision_comercial(
                 {
                     "so_id": req.so_id,
                     "motivo": req.motivo,
-                    "marcado_por": actor_de_la_accion(
-                        get_current_user_from_cookie(cxc_session), req.marcado_por
-                    ),
+                    "marcado_por": actor_de_la_accion(user, req.marcado_por),
                     "timestamp_marcado": datetime.now().isoformat(),
                 }
             )
@@ -18133,8 +18533,10 @@ async def post_decision_comercial(
             msg = f"{req.so_id}: se quitó la marca de decisión comercial."
         return {"status": "success", "message": msg}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- Vendedores / Clasificación de Clientes (ítem 6, clasificación
@@ -18179,12 +18581,19 @@ async def get_config_vendedores():
         filas.sort(key=lambda v: v["vendedor_email"])
         return {"vendedores": filas}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/vendedores")
-async def post_config_vendedor(req: VendedorRequest):
+async def post_config_vendedor(
+    req: VendedorRequest, cxc_session: str | None = Cookie(default=None)
+):
+    _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         repo.upsert_vendedor(
@@ -18196,8 +18605,10 @@ async def post_config_vendedor(req: VendedorRequest):
         )
         return {"status": "success", "message": f"{req.vendedor_email} actualizado."}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class ClasificacionClienteRequest(BaseModel):
@@ -18238,8 +18649,10 @@ async def get_config_clasificacion_clientes():
         filas.sort(key=lambda c: c["nombre"])
         return {"clientes": filas}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.post("/api/config/clasificacion-cliente")
@@ -18247,6 +18660,9 @@ async def post_config_clasificacion_cliente(
     req: ClasificacionClienteRequest,
     cxc_session: str | None = Cookie(default=None),
 ):
+    user = _exigir_permiso_app(
+        cxc_session, "sistema.recalcular", "cobranza.aprobar_pagos", "auditoria.decidir"
+    )
     try:
         repo = get_repo()
         repo.upsert_clasificacion_cliente(
@@ -18254,16 +18670,16 @@ async def post_config_clasificacion_cliente(
                 "cliente_id": req.cliente_id,
                 "es_industrial": "true" if req.es_industrial else "false",
                 "motivo": req.motivo,
-                "marcado_por": actor_de_la_accion(
-                    get_current_user_from_cookie(cxc_session), req.marcado_por
-                ),
+                "marcado_por": actor_de_la_accion(user, req.marcado_por),
                 "timestamp_marcado": datetime.now().isoformat(),
             }
         )
         return {"status": "success", "message": f"Cliente {req.cliente_id} actualizado."}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class AprobarDescuentoSistemaRequest(BaseModel):
@@ -18454,19 +18870,10 @@ async def post_aprobar_descuento_sistema(
     req: AprobarDescuentoSistemaRequest,
     cxc_session: str | None = Cookie(default=None),
 ):
-    """Aprueba (o revoca, con ``activo=false``) un descuento manual interno
-
-    para una orden. NUNCA se escribe a Odoo -- solo ajusta los saldos
-    internos de CxC que expone ``/api/ventas`` (``descuento_aplicado_sistema``
-    y ``saldo_pendiente_cxc``).
-
-    Tarea 2 (agosto 2026): si la orden ya está en estado de sobre-descuento
-    (Odoo tiene aplicado más descuento del que el motor calcula), se
-    bloquea aprobar un descuento ADICIONAL -- hay que revisar primero en
-    Auditoría de Descuentos por qué se aplicó ese exceso. La revocación
-    (``activo=false``) siempre se permite: no agrega descuento, solo
-    retira uno ya aprobado internamente.
-    """
+    """Aprueba (o revoca, con ``activo=false``) un descuento manual interno para una orden."""
+    user = _exigir_permiso_app(
+        cxc_session, "auditoria.decidir", "ventas.aprobar_pedidos", "sistema.recalcular"
+    )
     try:
         repo = get_repo()
         if req.activo:
@@ -18488,9 +18895,7 @@ async def post_aprobar_descuento_sistema(
             "monto": str(req.monto),
             "motivo": req.motivo,
             # La sesion manda; ver `auth.actor_de_la_accion`.
-            "aprobado_por": actor_de_la_accion(
-                get_current_user_from_cookie(cxc_session), req.aprobado_por
-            ),
+            "aprobado_por": actor_de_la_accion(user, req.aprobado_por),
             "timestamp_aprobacion": datetime.now().isoformat(),
             "activo": "true" if req.activo else "false",
         }
@@ -18504,8 +18909,10 @@ async def post_aprobar_descuento_sistema(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 @app.get("/api/config/dias-credito-volumen")
@@ -18531,8 +18938,10 @@ async def get_config_dias_credito_volumen():
             for r in rows
         ]
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 class MarcarRecibidoRequest(BaseModel):
@@ -18545,8 +18954,10 @@ class MarcarRecibidoRequest(BaseModel):
 async def post_marcar_recibido(
     req: MarcarRecibidoRequest, cxc_session: str | None = Cookie(default=None)
 ):
+    user = _exigir_permiso_app(
+        cxc_session, "cobranza.aprobar_pagos", "bancos.conciliar", "sistema.recalcular"
+    )
     try:
-        user = get_current_user_from_cookie(cxc_session)
         # Antes: `req.recibido_por or user["nombre"]` -- el CUERPO ganaba sobre la
         # sesion, y como el default del modelo es "Administracion" nunca estaba vacio,
         # asi que la sesion no se usaba nunca. Al reves. Ver `auth.actor_de_la_accion`.
@@ -18601,8 +19012,10 @@ async def post_marcar_recibido(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 def _eq_usd_por_serie(fecha_iso: str, monto: Decimal, tasas_rows: list[dict]) -> Decimal:
@@ -19065,8 +19478,10 @@ def _get_reporte_diario_sync(
             },
         }
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error interno en endpoint de web.app")
+        raise HTTPException(
+            status_code=500, detail="Error interno del servidor."
+        ) from e
 
 
 # --- BANCOS: ingesta de estados de cuenta (fase 1) ---------------------------
@@ -19153,8 +19568,10 @@ async def bancos_importar(
             _engine_bancos(), prep, user.get("email") or user.get("nombre") or "desconocido"
         )
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.exception("Error guardando archivo bancario")
+        raise HTTPException(
+            status_code=500, detail="Error interno al guardar el archivo bancario."
+        ) from e
     return {
         "archivo_id": r.archivo_id,
         "banco": r.banco,

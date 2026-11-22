@@ -742,7 +742,7 @@ class ServicioContactos:
         escritor = self._escritor_factory()
         if escritor is None:
             raise RuntimeError(
-                "Escritura en Odoo deshabilitada (ODOO_ESCRITURA_ACTIVA debe estar activa)."
+                "Escritura en Odoo deshabilitada (CAPTURAS_ODOO_ESCRITURA debe estar activa)."
             )
 
         if c.rif and hasattr(escritor, "partners_por_rif"):
@@ -782,18 +782,29 @@ class ServicioContactos:
             "lon": float(c.longitud) if c.longitud is not None else None,
         }
         promover_cliente = c.rol in ("cliente", "ambos")
+        promover_proveedor = c.rol in ("proveedor", "ambos")
 
         if c.odoo_partner_id is None:
             marca = f"[CxC contacto #{c.contacto_id}]"
-            pid = int(escritor.crear_contacto_borrador(datos_odoo, marca=marca))
-            if promover_cliente:
-                escritor.actualizar_contacto(pid, {}, promover_cliente=True, marca=marca)
+            if c.rol == "proveedor" and hasattr(escritor, "crear_proveedor"):
+                pid = int(escritor.crear_proveedor(datos_odoo, marca=marca))
+            else:
+                pid = int(escritor.crear_contacto_borrador(datos_odoo, marca=marca))
+                if promover_cliente or promover_proveedor:
+                    escritor.actualizar_contacto(
+                        pid,
+                        {},
+                        promover_cliente=promover_cliente,
+                        promover_proveedor=promover_proveedor,
+                        marca=marca,
+                    )
             c.odoo_partner_id = pid
         else:
             escritor.actualizar_contacto(
                 c.odoo_partner_id,
                 datos_odoo,
                 promover_cliente=promover_cliente,
+                promover_proveedor=promover_proveedor,
                 marca=f"[CxC maestro #{c.contacto_id}]",
             )
 

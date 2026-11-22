@@ -157,6 +157,7 @@ class EscritorOdoo:
         self._diario_compras_consultado: bool = False
         self._moneda_compania: int | None = None
         self._moneda_compania_consultada: bool = False
+        self._impuestos_compra: dict[str, int | None] = {}
 
     # ── infraestructura ──────────────────────────────────────────────────────
 
@@ -269,7 +270,10 @@ class EscritorOdoo:
         """
         if not rif:
             return {}
-        letra, digs = normalizar_rif(str(rif)).split("-", 1)
+        try:
+            letra, digs = normalizar_rif(str(rif)).split("-", 1)
+        except ValueError:
+            return {}
         es_rif_completo = len(digs) >= 9
         vat = f"{letra}-{digs[:-1]}-{digs[-1]}" if es_rif_completo else f"{letra}-{digs}"
         out: dict[str, Any] = {"vat": vat}
@@ -348,9 +352,10 @@ class EscritorOdoo:
         datos: dict[str, Any],
         *,
         promover_cliente: bool = False,
+        promover_proveedor: bool = False,
         marca: str | None = None,
     ) -> int:
-        """Actualiza un contacto existente en Odoo (edición de prospecto/cliente o promoción)."""
+        """Actualiza un contacto existente en Odoo (edición o promoción a cliente/proveedor)."""
         actual = self.leer_partner(partner_id) or {}
         lat, lon = datos.get("lat"), datos.get("lon")
         gps_vals = self._gps("res.partner", lat, lon)
@@ -380,6 +385,12 @@ class EscritorOdoo:
         vals.update(gps_vals)
         if promover_cliente and int(actual.get("customer_rank") or 0) == 0:
             vals["customer_rank"] = 1
+        if (
+            promover_proveedor
+            and int(actual.get("supplier_rank") or 0) == 0
+            and "supplier_rank" in self.campos("res.partner")
+        ):
+            vals["supplier_rank"] = 1
         if datos.get("notas"):
             previo_c = str(actual.get("comment") or "").strip()
             nueva_nota = str(datos["notas"]).strip()
@@ -388,11 +399,16 @@ class EscritorOdoo:
         if vals:
             self._call("res.partner", "write", [[partner_id], vals])
         if marca:
+            etiquetas_prom = []
+            if promover_cliente:
+                etiquetas_prom.append("cliente")
+            if promover_proveedor:
+                etiquetas_prom.append("proveedor")
+            sufijo = f" y promovido a {'/'.join(etiquetas_prom)}" if etiquetas_prom else ""
             self.nota_chatter(
                 "res.partner",
                 partner_id,
-                f"{marca} · Contacto actualizado"
-                + (" y promovido a cliente" if promover_cliente else ""),
+                f"{marca} · Contacto actualizado{sufijo}",
             )
         return partner_id
 
@@ -644,6 +660,17 @@ class EscritorOdoo:
             nota.append(str(datos["notas"]))
         rif = str(datos["rif"]) if datos.get("rif") else None
         telefono = str(datos["telefono"]).strip() if datos.get("telefono") else None
+        lat, lon = datos.get("lat"), datos.get("lon")
+        gps_vals = self._gps("res.partner", lat, lon)
+        plus_raw = str(datos.get("plus_code") or "").strip()
+        plus_code = (
+            plus_raw
+            if plus_raw and plus_raw != "6FG22222+22"
+            else (encode_plus_code(lat, lon) if gps_vals else None)
+        )
+        calle2 = (
+            {"street2": plus_code} if plus_code and "street2" in self.campos("res.partner") else {}
+        )
         vals = _vals(
             name=str(datos["nombre"]).strip(),
             phone=telefono,
@@ -656,8 +683,9 @@ class EscritorOdoo:
             customer_rank=0,
             comment=SALTO.join(nota),
             ref=marca,
+            **calle2,
             **self._identificacion_odoo(rif),
-            **self._gps("res.partner", datos.get("lat"), datos.get("lon")),
+            **gps_vals,
         )
         return self._crear("res.partner", vals)
 
@@ -740,6 +768,115 @@ class EscritorOdoo:
                 return self._diario_compras_ves
         return None
 
+    def buscar_impuesto_compra(self, tasa_pct: Decimal = Decimal("16")) -> int | None:
+        """Busca un impuesto de compra activo en Odoo cercano a ``tasa_pct`` (cacheado)."""
+        clave = f"{Decimal(str(tasa_pct)):.2f}"
+        if not hasattr(self, "_impuestos_compra"):
+            self._impuestos_compra = {}
+        if clave in self._impuestos_compra:
+            return self._impuestos_compra[clave]
+        objetivo = Decimal(str(tasa_pct))
+        filas = self._call(
+            "account.tax",
+            "search_read",
+            [
+                [
+                    ["type_tax_use", "=", "purchase"],
+                    ["active", "=", True],
+                    ["amount_type", "=", "percent"],
+                ]
+            ],
+            {"fields": ["id", "name", "amount"], "limit": 40},
+        )
+        elegido: int | None = None
+        mejor_diff: Decimal | None = None
+        for f in filas or []:
+            try:
+                amt = Decimal(str(f.get("amount") or 0))
+            except Exception:
+                continue
+            diff = abs(amt - objetivo)
+            if diff <= Decimal("0.1") and (mejor_diff is None or diff < mejor_diff):
+                mejor_diff = diff
+                elegido = int(f["id"])
+        self._impuestos_compra[clave] = elegido
+        return elegido
+
+    def verificar_totales_factura(
+        self,
+        move_id: int,
+        *,
+        esperado_subtotal: Decimal | None = None,
+        esperado_iva: Decimal | None = None,
+        esperado_total: Decimal | None = None,
+        tolerancia: Decimal = Decimal("0.05"),
+    ) -> dict[str, Any]:
+        """Verifica tras crear ``account.move`` que Odoo calcule subtotal/IVA/total esperados."""
+        try:
+            filas = self._call(
+                "account.move",
+                "read",
+                [[int(move_id)]],
+                {"fields": ["id", "amount_untaxed", "amount_tax", "amount_total"]},
+            )
+        except Exception as exc:
+            logger.debug("No se pudo verificar totales de account.move %s: %s", move_id, exc)
+            return {"ok": True, "omitido": True}
+        if not filas or not isinstance(filas[0], dict):
+            return {"ok": True, "omitido": True}
+        row = filas[0]
+        if not any(k in row for k in ("amount_untaxed", "amount_tax", "amount_total")):
+            return {"ok": True, "omitido": True}
+
+        q2 = Decimal("0.01")
+        odoo_vals = {
+            "subtotal": Decimal(str(row.get("amount_untaxed") or 0)).quantize(q2, ROUND_HALF_UP),
+            "iva": Decimal(str(row.get("amount_tax") or 0)).quantize(q2, ROUND_HALF_UP),
+            "total": Decimal(str(row.get("amount_total") or 0)).quantize(q2, ROUND_HALF_UP),
+        }
+        esperados: dict[str, Decimal] = {}
+        diferencias: dict[str, float] = {}
+        pares = (
+            ("subtotal", esperado_subtotal),
+            ("iva", esperado_iva),
+            ("total", esperado_total),
+        )
+        for campo, esp_raw in pares:
+            if esp_raw is None:
+                continue
+            esp = Decimal(str(esp_raw)).quantize(q2, ROUND_HALF_UP)
+            esperados[campo] = esp
+            diff = odoo_vals[campo] - esp
+            if abs(diff) > tolerancia:
+                diferencias[campo] = float(diff)
+
+        ok = not diferencias
+        if not ok:
+            resumen_diff = ", ".join(
+                f"{k}: Odoo={float(odoo_vals[k]):.2f} vs CxC={float(esperados[k]):.2f}"
+                for k in diferencias
+            )
+            logger.warning(
+                "Discrepancia post-creación en factura proveedor Odoo %s: %s",
+                move_id,
+                resumen_diff,
+            )
+            if "message_ids" in self.campos("account.move"):
+                try:
+                    self.nota_chatter(
+                        "account.move",
+                        move_id,
+                        f"[ALERTA CXC] Diferencia de totales al crear factura: {resumen_diff}",
+                    )
+                except Exception as exc_chat:
+                    logger.debug("No se pudo publicar alerta en chatter: %s", exc_chat)
+        return {
+            "ok": ok,
+            "odoo": {k: float(v) for k, v in odoo_vals.items()},
+            "esperado": {k: float(v) for k, v in esperados.items()},
+            "diferencias": diferencias,
+        }
+
     def crear_factura_proveedor(
         self,
         *,
@@ -754,13 +891,16 @@ class EscritorOdoo:
         narration: str,
         journal_id: int | None = None,
         account_id: int | None = None,
+        tax_ids: list[int] | None = None,
+        numero_control: str | None = None,
         nota_chatter: str | None = None,
     ) -> int:
-        """``account.move`` ``in_invoice`` en BORRADOR (no se publica) con una línea.
+        """``account.move`` ``in_invoice`` en BORRADOR con una línea.
 
         Por defecto va siempre al diario de compras en VES (salvo ``journal_id`` explícito).
-        No inventa impuestos: la línea va con ``tax_ids`` vacío y el IVA y el número de control que
-        dio el bot quedan en ``narration`` (y opcionalmente en el chatter) para contabilidad.
+        Cuando recibe ``tax_ids`` explícitos desde CxC los asigna a la línea para que Odoo
+        calcule IVA y subtotal; si ``tax_ids`` es ``None`` mantiene lista vacía sin inventar
+        impuestos. Si Odoo expone campo de número de control y llega ``numero_control``, lo escribe.
         """
         con_impuestos = self._validar_campos_factura()
         previo = self.factura_por_marca(marca)
@@ -771,22 +911,32 @@ class EscritorOdoo:
         if account_id is not None and "account_id" in self.campos("account.move.line"):
             linea["account_id"] = int(account_id)
         if con_impuestos:
-            linea["tax_ids"] = [(6, 0, [])]
+            ids_imp = [int(t) for t in tax_ids if t is not None] if tax_ids else []
+            linea["tax_ids"] = [(6, 0, ids_imp)]
+        move_campos = self.campos("account.move")
+        extra_ctrl: dict[str, Any] = {}
+        ctrl_txt = str(numero_control or "").strip()
+        if ctrl_txt:
+            for cand_ctrl in ("l10n_ve_control_number", "nro_ctrl", "control_number"):
+                if cand_ctrl in move_campos:
+                    extra_ctrl[cand_ctrl] = ctrl_txt
+                    break
         vals = _vals(
             move_type="in_invoice",
             partner_id=partner_id,
-            journal_id=diario if diario and "journal_id" in self.campos("account.move") else None,
+            journal_id=diario if diario and "journal_id" in move_campos else None,
             ref=numero.strip(),
             invoice_date=fecha_emision,
             invoice_date_due=fecha_vencimiento
-            if fecha_vencimiento and "invoice_date_due" in self.campos("account.move")
+            if fecha_vencimiento and "invoice_date_due" in move_campos
             else None,
             currency_id=moneda_id,
             narration=f"{marca} · {narration}",
             invoice_line_ids=[(0, 0, linea)],
+            **extra_ctrl,
         )
         move_id = self._crear("account.move", vals)
-        if nota_chatter and "message_ids" in self.campos("account.move"):
+        if nota_chatter and "message_ids" in move_campos:
             self.nota_chatter("account.move", move_id, nota_chatter)
         return move_id
 
@@ -990,7 +1140,7 @@ class EscritorOdoo:
                         [
                             ["move_type", "=", "out_invoice"],
                             ["state", "=", "posted"],
-                            ["payment_state", "!=", "paid"],
+                            ["payment_state", "not in", ["paid", "reversed"]],
                             ["invoice_origin", "ilike", so_limpia],
                         ]
                     ],
@@ -1009,8 +1159,6 @@ class EscritorOdoo:
                     }
                     if so_limpia.upper() in tokens or orig.strip().upper() == so_limpia.upper():
                         return int(row["id"])
-                if candidatas:
-                    return int(candidatas[0]["id"])
             if order_id is not None:
                 ords = self._call(
                     "sale.order",
@@ -1028,7 +1176,7 @@ class EscritorOdoo:
                                 ["id", "in", inv_ids],
                                 ["move_type", "=", "out_invoice"],
                                 ["state", "=", "posted"],
-                                ["payment_state", "!=", "paid"],
+                                ["payment_state", "not in", ["paid", "reversed"]],
                             ]
                         ],
                         {"fields": ["id"], "order": "id desc", "limit": 1},
@@ -1057,13 +1205,14 @@ class EscritorOdoo:
         devuelve dict estructurado ``{reconciliado, pago_move_id, factura_move_id, motivo}``.
         """
         pago_move_id: int | None = None
+        pago_partner_id: int | None = None
         try:
             if pago_model == "account.payment":
                 pags = self._call(
                     "account.payment",
                     "read",
                     [[int(pago_res_id)]],
-                    {"fields": ["id", "name", "state", "move_id"]},
+                    {"fields": ["id", "name", "state", "move_id", "partner_id"]},
                 )
                 if not pags:
                     return {
@@ -1074,6 +1223,7 @@ class EscritorOdoo:
                     }
                 pag = pags[0]
                 pago_move_id = self._m2o_id_val(pag.get("move_id"))
+                pago_partner_id = self._m2o_id_val(pag.get("partner_id"))
                 est_p = str(pag.get("state") or "").lower()
                 if pago_move_id is None:
                     return {
@@ -1086,8 +1236,10 @@ class EscritorOdoo:
                     "account.move",
                     "read",
                     [[pago_move_id]],
-                    {"fields": ["id", "state", "name"]},
+                    {"fields": ["id", "state", "name", "partner_id"]},
                 )
+                if pm_rows and pago_partner_id is None:
+                    pago_partner_id = self._m2o_id_val(pm_rows[0].get("partner_id"))
                 pm_state = str((pm_rows or [{}])[0].get("state") or "").lower()
                 if pm_state != "posted" and est_p not in ("posted", "paid", "in_process"):
                     est_lbl = pm_state or est_p
@@ -1105,7 +1257,7 @@ class EscritorOdoo:
                     "account.move",
                     "read",
                     [[pago_move_id]],
-                    {"fields": ["id", "state", "name"]},
+                    {"fields": ["id", "state", "name", "partner_id"]},
                 )
                 if not pm_rows:
                     return {
@@ -1114,6 +1266,7 @@ class EscritorOdoo:
                         "factura_move_id": int(factura_move_id),
                         "motivo": f"Asiento #{pago_move_id} no encontrado en Odoo.",
                     }
+                pago_partner_id = self._m2o_id_val(pm_rows[0].get("partner_id"))
                 pm_state = str(pm_rows[0].get("state") or "").lower()
                 if pm_state != "posted":
                     return {
@@ -1130,7 +1283,7 @@ class EscritorOdoo:
                 "account.move",
                 "read",
                 [[int(factura_move_id)]],
-                {"fields": ["id", "name", "state", "payment_state", "move_type"]},
+                {"fields": ["id", "name", "state", "payment_state", "move_type", "partner_id"]},
             )
             if not inv_rows:
                 return {
@@ -1140,6 +1293,21 @@ class EscritorOdoo:
                     "motivo": f"Factura #{factura_move_id} no encontrada en Odoo.",
                 }
             inv = inv_rows[0]
+            inv_partner_id = self._m2o_id_val(inv.get("partner_id"))
+            if (
+                pago_partner_id is not None
+                and inv_partner_id is not None
+                and pago_partner_id != inv_partner_id
+            ):
+                return {
+                    "reconciliado": False,
+                    "pago_move_id": pago_move_id,
+                    "factura_move_id": int(factura_move_id),
+                    "motivo": (
+                        "El pago y la factura pertenecen a terceros distintos en Odoo "
+                        f"(partner {pago_partner_id} vs {inv_partner_id})."
+                    ),
+                }
             if str(inv.get("state") or "").lower() != "posted":
                 return {
                     "reconciliado": False,

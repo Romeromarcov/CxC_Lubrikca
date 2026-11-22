@@ -411,25 +411,22 @@ def ver_preview_cotizacion(token: str, servicio: ServicioDocsDep) -> HTMLRespons
         doc = servicio.obtener_por_token(token)
     except DocumentoNoEncontrado as e:
         raise HTTPException(status_code=404, detail="Cotización no encontrada") from e
-    return HTMLResponse(content=renderizar_preview_cotizacion(doc))
+    return HTMLResponse(content=renderizar_preview_cotizacion(doc, solo_lectura_publico=True))
 
 
 @router.post("/cotizacion/{token}/convertir-pedido")
-def convertir_preview_a_pedido(
-    token: str,
-    servicio: ServicioDocsDep,
-    body: Annotated[dict[str, Any], Body(default_factory=dict)],
-) -> JSONResponse:
-    try:
-        ped = servicio.convertir_por_token(token, body, actor="preview_cotizacion")
-    except DocumentoNoEncontrado as e:
-        raise HTTPException(status_code=404, detail="Cotización no encontrada") from e
-    except DocumentoYaEnviado as e:
-        return JSONResponse(status_code=409, content={"error": str(e)})
-    except (DocumentoInvalido, CapturaInvalida) as e:
-        faltan = getattr(e, "faltan", [])
-        return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
-    return JSONResponse(status_code=200, content=ped.a_dict(incluir_lineas=True))
+def convertir_preview_a_pedido(token: str) -> JSONResponse:
+    """Enlace público estrictamente de solo lectura: no permite mutar ni enviar a Odoo."""
+    _ = token
+    return JSONResponse(
+        status_code=403,
+        content={
+            "error": (
+                "El enlace público de cotización es estrictamente de solo lectura. "
+                "Convierte la cotización desde el panel CxC o desde el bot de Ventas."
+            )
+        },
+    )
 
 
 # ── Endpoints Web de CxC (Sección Ventas → Cotizaciones y Pedidos) ───────────
@@ -630,7 +627,13 @@ def aprobar_y_enviar_pedido_a_odoo(
         faltan = getattr(e, "faltan", [])
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
     except Exception as e:
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        logger.exception("Error aprobando documento #%s en Odoo", documento_id)
+        msg = (
+            str(e)
+            if type(e).__name__ == "OdooEscrituraError"
+            else "Error interno al enviar el pedido a Odoo."
+        )
+        return JSONResponse(status_code=502, content={"error": msg})
     return JSONResponse(status_code=200, content=aprobado.a_dict(incluir_lineas=True))
 
 
@@ -686,7 +689,13 @@ def enviar_documento_a_odoo(
         faltan = getattr(e, "faltan", [])
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
     except Exception as e:
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        logger.exception("Error enviando documento #%s a Odoo", documento_id)
+        msg = (
+            str(e)
+            if type(e).__name__ == "OdooEscrituraError"
+            else "Error interno al enviar el documento a Odoo."
+        )
+        return JSONResponse(status_code=502, content={"error": msg})
     return JSONResponse(status_code=200, content=enviado.a_dict(incluir_lineas=True))
 
 

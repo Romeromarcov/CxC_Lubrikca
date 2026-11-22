@@ -159,21 +159,22 @@ def validar_compatibilidad_ruta_pago(
 ) -> tuple[bool, str]:
     """Valida si un pago es compatible con la ruta de la orden.
 
-    Un pago con ruta explícita o perteneciente a un diario exclusivo de Binance
+    Un pago con ruta explícita o perteneciente a un diario/método exclusivo de Binance
     o BCV solo puede aplicarse a órdenes de esa misma ruta. Pagos genéricos en
-    efectivo USD, Zelle o diarios bancarios VES se adaptan a la tasa de la
-    orden destino y son compatibles.
+    efectivo USD, Zelle o diarios bancarios sin tipo exclusivo se adaptan a la ruta
+    de la orden destino y son compatibles.
     """
-    del tipo_tasa_metodo
     r_ord = normalizar_ruta(ruta_orden) or RUTA_BCV
 
+    met_low = str(metodo_pago_nombre or "").strip().lower()
     r_pago = normalizar_ruta(ruta_pago_declarada)
     if not r_pago:
-        met_low = str(metodo_pago_nombre or "").strip().lower()
         if "binance" in met_low:
             r_pago = RUTA_BINANCE
         elif "bcv" in met_low:
             r_pago = RUTA_BCV
+        elif not met_low and normalizar_ruta(tipo_tasa_metodo) in RUTAS_VALIDAS:
+            r_pago = normalizar_ruta(tipo_tasa_metodo)
 
     if not r_pago:
         return True, ""
