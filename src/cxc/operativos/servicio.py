@@ -456,16 +456,50 @@ class ServicioOperativos:
     def confirmar_por_token(
         self, token_preview: str, cambios: dict[str, Any] | None = None, *, actor: str = "preview"
     ) -> DocumentoOperativo:
-        """Completa/confirma datos desde el Preview público y deja en ``PENDIENTE_APROBACION``.
+        """Completa datos faltantes de un borrador ``INCOMPLETO`` desde el Preview público.
 
-        Nunca escribe en Odoo: la autorización final pertenece solo al panel con sesión y permiso.
+        Nunca permite mutar documentos ya confirmados (``CONFIRMADO_CXC``), pendientes de
+        aprobación ni enviados/rechazados, ni editar campos financieros/contables.
         """
         doc = self.obtener_por_token(token_preview)
         if doc.estado == ENVIADO_ODOO:
             raise OperativoYaEnviado(f"{doc.numero} ya fue enviado a Odoo ({doc.odoo_ref}).")
         if doc.estado == RECHAZADO:
             raise OperativoEstadoInvalido(f"{doc.numero} fue rechazado y no puede reactivarse.")
-        actualizado = self.editar(doc.documento_id, cambios or {}, actor=actor)
+        if doc.estado != INCOMPLETO:
+            raise OperativoEstadoInvalido(
+                f"{doc.numero} está en estado {doc.estado} y no puede "
+                "modificarse desde el enlace público."
+            )
+        campos_publicos_permitidos = {
+            "referencia",
+            "banco",
+            "banco_origen",
+            "banco_destino",
+            "cuenta_destino",
+            "rif_cedula_destino",
+            "telefono_destino",
+            "correo_destino",
+            "beneficiario_destino",
+            "fecha",
+            "fecha_pago",
+            "fecha_emision",
+            "fecha_documento",
+            "contraparte_nombre",
+            "cliente",
+            "proveedor",
+            "nombre",
+            "rif",
+            "numero_documento",
+            "numero_factura",
+            "numero_control",
+            "concepto",
+            "notas",
+        }
+        cambios_limpios = {
+            k: v for k, v in (cambios or {}).items() if k in campos_publicos_permitidos
+        }
+        actualizado = self.editar(doc.documento_id, cambios_limpios, actor=actor)
         if actualizado.faltantes:
             raise OperativoInvalido(
                 "Faltan datos obligatorios: " + ", ".join(actualizado.faltantes),

@@ -15,6 +15,7 @@ la pantalla sea instantáneo sin saturar el XML-RPC de Odoo.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Annotated, Any
@@ -37,6 +38,8 @@ from cxc.odoo.directorio import (
     sugerir_para_concepto,
 )
 from cxc.permisos import tiene
+
+logger = logging.getLogger("cxc.directorio.api")
 
 router = APIRouter()
 
@@ -93,7 +96,10 @@ def get_lector_odoo() -> LectorDirectorioOdoo:
     try:
         return LectorDirectorioOdoo(conectar_lectura(cfg))
     except OdooDirectorioError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        logger.exception("Error conectando al directorio Odoo")
+        raise HTTPException(
+            status_code=502, detail="No se pudo conectar con el directorio de Odoo."
+        ) from e
 
 
 LectorDep = Annotated[LectorDirectorioOdoo, Depends(get_lector_odoo)]
@@ -110,7 +116,10 @@ def _obtener_contactos(lector: LectorDirectorioOdoo, refresh: bool = False) -> l
     try:
         nuevos = lector.leer_contactos()
     except OdooDirectorioError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        logger.exception("Error leyendo contactos de Odoo")
+        raise HTTPException(
+            status_code=502, detail="No se pudo consultar los contactos de Odoo."
+        ) from e
     with _lock:
         _cache_contactos = (ahora, nuevos)
     return nuevos
@@ -127,7 +136,10 @@ def _obtener_cuentas(lector: LectorDirectorioOdoo, refresh: bool = False) -> lis
     try:
         nuevas = lector.leer_plan_cuentas()
     except OdooDirectorioError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+        logger.exception("Error leyendo plan de cuentas de Odoo")
+        raise HTTPException(
+            status_code=502, detail="No se pudo consultar el plan de cuentas de Odoo."
+        ) from e
     with _lock:
         _cache_cuentas = (ahora, nuevas)
     return nuevas

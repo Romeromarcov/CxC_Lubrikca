@@ -764,10 +764,27 @@ class ServicioDocumentos:
 
     def evaluar_politica(self, doc: DocumentoComercial) -> dict[str, Any]:
         """Evalúa la política de auto-envío y límites de crédito para un documento."""
+        precios_catalogo: dict[str, Decimal] = {}
+        try:
+            for it in self.catalogo_items(refresh=False):
+                pid = str(getattr(it, "producto_id", "") or "").strip()
+                if not pid:
+                    continue
+                fn_p = getattr(it, "precio_para_lista", None)
+                p_cat = (
+                    fn_p(doc.lista_precios_id, doc.moneda_lista)
+                    if callable(fn_p)
+                    else (it.precio_usd if doc.moneda_lista == "USD" else it.precio_ves)
+                )
+                if p_cat and Decimal(str(p_cat)) > Decimal("0"):
+                    precios_catalogo[pid] = Decimal(str(p_cat))
+        except Exception:
+            precios_catalogo = {}
         return evaluar_politica_auto_envio(
             doc,
             self._repo_cxc,
             engine=getattr(self._repo, "_engine", None),
+            precios_catalogo=precios_catalogo or None,
         )
 
     def _aplicar_politica_y_auto_envio(

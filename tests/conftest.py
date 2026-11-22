@@ -92,6 +92,7 @@ def _sesion_valida_por_defecto(request):
         "test_api_keys.py",
         "test_capturas_api_auth.py",
         "test_bots_api_auth.py",
+        "test_fase0_seguridad_produccion.py",
     ):
         yield
         return

@@ -800,18 +800,26 @@ def test_flujo_completo_bot_preview_conversion_permisos_y_aprobacion(
     assert res_cot["preview_path"].startswith("/cotizacion/")
     preview_path = res_cot["preview_path"]
 
-    # 4. Abrir el enlace del Preview HTML (sin sesión) -> detalle y botón Convertir en Pedido
+    # 4. Abrir el enlace del Preview HTML (sin sesión) -> vista solo lectura sin conversión pública
     r_html = client.get(preview_path)
     assert r_html.status_code == 200
     assert "COT-00001" in r_html.text
     assert "Pago VES Nov 2026" in r_html.text
-    assert "Convertir en Pedido" in r_html.text
+    assert "solo lectura" in r_html.text.lower()
 
-    # 5. Pulsar «Convertir en Pedido» desde el Preview -> pasa a PED-00001 en PENDIENTE_APROBACION
-    r_conv_prev = client.post(
+    # 5. Enlace público bloqueado para mutación (403); conversión pasa por vendedor autenticado
+    r_conv_pub = client.post(
         f"{preview_path}/convertir-pedido",
-        json={"condiciones_negociacion": "Confirmado por cliente desde preview"},
+        json={"condiciones_negociacion": "Intento sin sesión"},
     )
+    assert r_conv_pub.status_code == 403
+    assert len(odoo.creados_de("sale.order")) == 0
+
+    with patch("cxc.web.app.get_current_user_from_cookie", return_value=VENTAS_USER):
+        r_conv_prev = client.post(
+            "/api/documentos/1/convertir-pedido",
+            json={"condiciones_negociacion": "Confirmado por vendedor en CxC"},
+        )
     assert r_conv_prev.status_code == 200
     assert r_conv_prev.json()["numero"] == "PED-00001"
     assert r_conv_prev.json()["estado"] == PENDIENTE_APROBACION

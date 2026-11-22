@@ -452,6 +452,7 @@ def evaluar_politica_auto_envio(
     *,
     engine: Engine | None = None,
     hoy: date | None = None,
+    precios_catalogo: dict[str, Decimal] | None = None,
 ) -> dict[str, Any]:
     """Evalúa si ``doc`` (Pedido) califica para auto-envío inmediato a Odoo."""
     pol_global = cargar_politica_global(repo_cxc)
@@ -510,7 +511,7 @@ def evaluar_politica_auto_envio(
     if politica_efectiva["bloquear_auto_envio"]:
         motivos.append("Cliente marcado con revisión manual obligatoria en su política de crédito.")
 
-    # 1. Catálogo real y precios válidos
+    # 1. Catálogo real y precios válidos (incluyendo piso contra precio de lista)
     sin_cat = [ln for ln in doc.lineas if not (ln.producto_id and ln.producto_id.isdigit())]
     sin_precio = [ln for ln in doc.lineas if ln.precio_unitario <= Decimal("0")]
     if sin_cat or sin_precio:
@@ -518,6 +519,20 @@ def evaluar_politica_auto_envio(
             f"Hay {max(len(sin_cat), len(sin_precio))} línea(s) sin producto válido "
             "del catálogo de Odoo o sin precio de lista."
         )
+    if precios_catalogo:
+        bajo_lista = [
+            ln
+            for ln in doc.lineas
+            if ln.producto_id
+            and ln.producto_id in precios_catalogo
+            and precios_catalogo[ln.producto_id] > Decimal("0")
+            and ln.precio_unitario < precios_catalogo[ln.producto_id] - Decimal("0.01")
+        ]
+        if bajo_lista:
+            motivos.append(
+                f"{len(bajo_lista)} línea(s) con precio unitario inferior "
+                "al precio de lista vigente."
+            )
 
     # 2. Descuentos manuales en línea y descuentos especiales fuera del motor
     if any(ln.descuento_pct > Decimal("0") for ln in doc.lineas):

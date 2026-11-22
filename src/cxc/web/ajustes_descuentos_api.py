@@ -19,8 +19,13 @@ from cxc.permisos import tiene
 
 router = APIRouter()
 
-PERMISOS_VER_AJUSTES = ("ventas", "facturacion", "configuracion")
-PERMISOS_EDITAR_AJUSTES = ("ventas", "facturacion")
+PERMISOS_VER_AJUSTES = ("facturacion", "auditoria", "configuracion")
+PERMISOS_EDITAR_AJUSTES = (
+    "auditoria.decidir",
+    "cobranza.aprobar_pagos",
+    "ventas.aprobar_pedidos",
+    "sistema.recalcular",
+)
 
 
 def _usuario_ajustes(cxc_session: str | None, *permisos: str) -> dict[str, Any]:
@@ -156,7 +161,7 @@ def guardar_estado_limpieza_descuentos(
     srv: AjustesDep,
     cxc_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
-    user = _usuario_ajustes(cxc_session, "configuracion")
+    user = _usuario_ajustes(cxc_session, "sistema.recalcular", "auditoria.decidir")
     activa = srv.set_limpieza_activa(bool(body.activa))
     _invalidar_caches_ventas()
     return {

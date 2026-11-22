@@ -440,7 +440,13 @@ def confirmar_operativo_en_cxc(
         faltan = getattr(e, "faltan", [])
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
     except Exception as e:
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        logger.exception("Error confirmando documento operativo #%s en CxC/Odoo", documento_id)
+        msg = (
+            str(e)
+            if type(e).__name__ == "OdooEscrituraError"
+            else "Error al confirmar/enviar el documento."
+        )
+        return JSONResponse(status_code=502, content={"error": msg})
     return JSONResponse(status_code=200, content=confirmado.a_dict())
 
 
@@ -465,7 +471,13 @@ def aprobar_y_enviar_operativo_a_odoo(
         faltan = getattr(e, "faltan", [])
         return JSONResponse(status_code=422, content={"error": str(e), "faltan": faltan})
     except Exception as e:
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        logger.exception("Error aprobando documento operativo #%s en Odoo", documento_id)
+        msg = (
+            str(e)
+            if type(e).__name__ == "OdooEscrituraError"
+            else "Error al aprobar y enviar el documento a Odoo."
+        )
+        return JSONResponse(status_code=502, content={"error": msg})
     return JSONResponse(status_code=200, content=aprobado.a_dict())
 
 

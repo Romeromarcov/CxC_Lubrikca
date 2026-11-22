@@ -47,10 +47,10 @@ logger = logging.getLogger("cxc.capturas.api")
 router = APIRouter()
 
 _RUTA_BOT_POST = re.compile(
-    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|documentos/\d+/convertir-pedido|operativos/validar|contactos(?:/verificar)?)$"
+    r"^/api/bots/(?:capturas(?:/\d+/completar)?|heartbeat|descuentos/evaluar|stock/verificar|documentos/\d+/convertir-pedido|operativos/validar|contactos(?:/verificar)?)$"
 )
 _RUTA_BOT_GET = re.compile(
-    r"^/api/bots/(?:catalogo|contactos|descuentos/catalogo|operativos/catalogos)$"
+    r"^/api/bots/(?:catalogo|stock|listas-precio|contactos|descuentos/catalogo|operativos/catalogos|operativos/cuentas-receptoras)$"
 )
 _KINDS_SINCRONOS = frozenset({"contacto", "contacto_editar", "cotizacion", "pedido"})
 _KINDS_OPERATIVOS = frozenset({"pago", "pago_proveedor", "factura_proveedor", "gasto"})

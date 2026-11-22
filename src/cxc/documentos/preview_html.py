@@ -13,8 +13,10 @@ def _esc(val: Any) -> str:
     return html.escape(str(val or ""))
 
 
-def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
-    """Genera el documento HTML autónomo de preview (móvil, escritorio e impresión PDF)."""
+def renderizar_preview_cotizacion(
+    doc: DocumentoComercial, *, solo_lectura_publico: bool = True
+) -> str:
+    """Genera el documento HTML autónomo de preview (estrictamente solo lectura)."""
     d = doc.a_dict(incluir_lineas=True)
     es_cot = doc.tipo == COTIZACION
     titulo_tipo = "Cotización Comercial" if es_cot else "Pedido de Venta"
@@ -107,27 +109,28 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
         </div>
         """
 
-    alertas_globales: list[str] = d.get("alertas_motor") or []
     alertas_banner = ""
-    if alertas_globales:
-        lis = "".join(f"<li>{_esc(a)}</li>" for a in alertas_globales)
-        alertas_banner = f"""
-        <div class="alert-box">
-          <strong>⚠️ Alertas de validación del Motor CxC:</strong>
-          <ul>{lis}</ul>
-        </div>
-        """
-
-    motivos_ret: list[str] = d.get("motivos_retencion") or []
     retencion_banner = ""
-    if doc.estado == PENDIENTE_APROBACION and motivos_ret:
-        lis_r = "".join(f"<li>{_esc(m)}</li>" for m in motivos_ret)
-        retencion_banner = f"""
-        <div class="alert-box">
-          <strong>⏳ Motivos de retención para revisión en CxC:</strong>
-          <ul>{lis_r}</ul>
-        </div>
-        """
+    if not solo_lectura_publico:
+        alertas_globales: list[str] = d.get("alertas_motor") or []
+        if alertas_globales:
+            lis = "".join(f"<li>{_esc(a)}</li>" for a in alertas_globales)
+            alertas_banner = f"""
+            <div class="alert-box">
+              <strong>⚠️ Alertas de validación del Motor CxC:</strong>
+              <ul>{lis}</ul>
+            </div>
+            """
+
+        motivos_ret: list[str] = d.get("motivos_retencion") or []
+        if doc.estado == PENDIENTE_APROBACION and motivos_ret:
+            lis_r = "".join(f"<li>{_esc(m)}</li>" for m in motivos_ret)
+            retencion_banner = f"""
+            <div class="alert-box">
+              <strong>⏳ Motivos de retención para revisión en CxC:</strong>
+              <ul>{lis_r}</ul>
+            </div>
+            """
 
     val_motor = d.get("validacion_motor") or {}
     tasa_bcv = val_motor.get("tasa_bcv")
@@ -152,51 +155,22 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
             partes_n.append(f"<div><strong>Observaciones:</strong> {_esc(doc.observaciones)}</div>")
         notas_html = f'<div class="section-box">{"".join(partes_n)}</div>'
 
-    puede_convertir = es_cot and doc.estado not in (ENVIADO_ODOO, RECHAZADO)
     bloque_conversion = ""
-    if puede_convertir:
-        bloque_conversion = f"""
-        <div class="convert-card no-print" id="convert-card">
+    if es_cot and doc.estado not in (ENVIADO_ODOO, RECHAZADO):
+        bloque_conversion = """
+        <div class="convert-card no-print">
           <div class="convert-header">
             <div>
-              <h3 style="margin:0 0 4px 0;font-size:16px;">¿Deseas confirmar esta cotización como Pedido?</h3>
+              <h3 style="margin:0 0 4px 0;font-size:15px;">Vista informativa de solo lectura</h3>
               <p style="margin:0;font-size:13px;color:#475569;">
-                Al convertirla pasará al panel de CxC en estado <strong>Pedido pendiente por aprobación</strong>.
+                Para aprobar y convertir esta cotización en Pedido formal, solicita confirmación a tu asesor comercial
+                o ingresa al panel administrativo de CxC Lubrikca.
               </p>
             </div>
-            <button type="button" class="btn btn-primary" id="btn-abrir-convertir" onclick="mostrarFormularioPedido()">
-              🛒 Convertir en Pedido
-            </button>
           </div>
-          <form id="form-convertir" style="display:none;margin-top:14px;border-top:1px solid #e2e8f0;padding-top:14px;" onsubmit="enviarConversion(event)">
-            <div class="form-grid">
-              <div>
-                <label>RIF / Cédula</label>
-                <input type="text" id="inp-rif" value="{_esc(doc.rif)}" placeholder="Ej. J-123456789">
-              </div>
-              <div>
-                <label>Correo electrónico</label>
-                <input type="email" id="inp-email" value="{_esc(doc.email)}" placeholder="correo@cliente.com">
-              </div>
-              <div class="full">
-                <label>Dirección fiscal / entrega</label>
-                <input type="text" id="inp-dir" value="{_esc(doc.direccion)}" placeholder="Dirección principal del cliente">
-              </div>
-              <div class="full">
-                <label>Condiciones de negociación / comentarios</label>
-                <input type="text" id="inp-cond" value="{_esc(doc.condiciones_negociacion)}" placeholder="Ej. Pago divisas contado, entrega inmediata...">
-              </div>
-            </div>
-            <div style="margin-top:12px;display:flex;gap:10px;justify-content:flex-end;">
-              <button type="button" class="btn btn-light" onclick="document.getElementById('form-convertir').style.display='none'">Cancelar</button>
-              <button type="submit" class="btn btn-primary" id="btn-confirmar-pedido">✅ Confirmar conversión a Pedido</button>
-            </div>
-            <div id="msg-conversion" style="margin-top:10px;font-size:13px;"></div>
-          </form>
         </div>
         """
 
-    token_js = _esc(doc.token_preview)
     fecha_str = doc.creado_en.strftime("%d/%m/%Y %H:%M")
 
     return f"""<!DOCTYPE html>
@@ -454,65 +428,5 @@ def renderizar_preview_cotizacion(doc: DocumentoComercial) -> str:
       de las condiciones de pago y validación del motor de CxC al momento de facturación.
     </div>
   </div>
-
-  <script>
-    function mostrarFormularioPedido() {{
-      var f = document.getElementById('form-convertir');
-      if (f) f.style.display = 'block';
-    }}
-    async function enviarConversion(ev) {{
-      ev.preventDefault();
-      var btn = document.getElementById('btn-confirmar-pedido');
-      var msg = document.getElementById('msg-conversion');
-      btn.disabled = true;
-      msg.style.color = '#1e40af';
-      msg.textContent = 'Procesando conversión a pedido...';
-      try {{
-        var payload = {{
-          rif: (document.getElementById('inp-rif').value || '').trim(),
-          email: (document.getElementById('inp-email').value || '').trim(),
-          direccion: (document.getElementById('inp-dir').value || '').trim(),
-          condiciones_negociacion: (document.getElementById('inp-cond').value || '').trim()
-        }};
-        var res = await fetch('/cotizacion/{token_js}/convertir-pedido', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify(payload)
-        }});
-        var data = await res.json();
-        if (!res.ok) {{
-          msg.style.color = '#b91c1c';
-          msg.textContent = data.error || data.detail || 'No se pudo convertir la cotización.';
-          btn.disabled = false;
-          return;
-        }}
-        document.getElementById('lbl-doc-num').textContent = data.numero;
-        var badge = document.getElementById('lbl-doc-badge');
-        var card = document.getElementById('convert-card');
-        if (data.estado === 'ENVIADO_ODOO') {{
-          var refOdoo = data.odoo_order_name || ('#' + data.odoo_order_id);
-          badge.className = 'badge badge-ok';
-          badge.textContent = (data.auto_enviado ? '⚡ Auto-enviado a Odoo' : '✅ En Odoo') + ' · ' + refOdoo;
-          card.innerHTML = '<div style="color:#166534;font-weight:700;font-size:14.5px;">' +
-            '⚡ Convertido en Pedido ' + data.numero + ' y enviado automáticamente a Odoo → ' + refOdoo + '.</div>';
-        }} else {{
-          badge.className = 'badge badge-warn';
-          badge.textContent = '⏳ Pedido pendiente por aprobación en CxC';
-          var motHtml = '';
-          if (Array.isArray(data.motivos_retencion) && data.motivos_retencion.length) {{
-            motHtml = '<ul style="margin:8px 0 0 18px;font-weight:500;color:#92400e;">' +
-              data.motivos_retencion.map(function (m) {{ return '<li>' + String(m).replace(/</g, '&lt;') + '</li>'; }}).join('') +
-              '</ul>';
-          }}
-          card.innerHTML = '<div style="color:#92400e;font-weight:700;font-size:14.5px;">' +
-            '⏳ Convertido en Pedido ' + data.numero + '. Quedó retenido en CxC pendiente por aprobación.' + motHtml + '</div>';
-        }}
-      }} catch (err) {{
-        msg.style.color = '#b91c1c';
-        msg.textContent = 'Error de conexión al convertir la cotización.';
-        btn.disabled = false;
-      }}
-    }}
-  </script>
 </body>
 </html>"""

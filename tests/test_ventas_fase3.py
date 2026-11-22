@@ -380,7 +380,8 @@ def test_conversion_preview_y_bot_disparan_autosend_y_retencion(
     repo_cxc.set_config(KEY_AUTOSEND_ACTIVO, "1")
     repo_cxc.set_config(KEY_LIMITE_CREDITO_USD, "1000.00")
 
-    # Cotización con RIF -> convertir desde preview AUTO-ENVÍA directo a Odoo
+    # Cotización con RIF -> enlace público solo lectura (403);
+    # conversión por ruta autenticada/bot AUTO-ENVÍA a Odoo
     cot_ok = svc_docs.crear(
         {
             "tipo": COTIZACION,
@@ -390,7 +391,15 @@ def test_conversion_preview_y_bot_disparan_autosend_y_retencion(
             "lineas": [{"codigo": "0761", "cantidad": 2}],
         }
     )
-    r_prev = client.post(f"/cotizacion/{cot_ok.token_preview}/convertir-pedido", json={})
+    assert (
+        client.post(f"/cotizacion/{cot_ok.token_preview}/convertir-pedido", json={}).status_code
+        == 403
+    )
+    r_prev = client.post(
+        f"/api/bots/documentos/{cot_ok.documento_id}/convertir-pedido",
+        headers=BOT,
+        json={"vendedor_email": "vendedor@lubrikca.com"},
+    )
     assert r_prev.status_code == 200
     d_prev = r_prev.json()
     assert d_prev["estado"] == ENVIADO_ODOO

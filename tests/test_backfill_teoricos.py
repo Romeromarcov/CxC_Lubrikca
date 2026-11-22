@@ -17,7 +17,6 @@ from __future__ import annotations
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 import cxc.web.app as app
@@ -54,14 +53,13 @@ def _pedir(ruta, *, execute=None, procesadas=7, usd=("11",), ves=("10",), runner
         ):
             pila.enter_context(parche)
         cliente = pila.enter_context(TestClient(app.app, raise_server_exceptions=False))
-        r = cliente.get(ruta)
+        r = cliente.post(ruta)
     return r, runner, repo
 
 
-@pytest.mark.parametrize("metodo", ["get", "post"])
-def test_responde_por_GET_y_por_POST(metodo) -> None:
-    """Está declarado con `api_route(methods=["GET", "POST"])`: se corre a mano desde
-    el navegador, así que el GET tiene que servir."""
+def test_solo_acepta_POST_y_rechaza_GET() -> None:
+    """Mutación de estado: ``GET`` no puede disparar un backfill (devuelve 405)."""
+
     async def _nada():
         return None
 
@@ -81,7 +79,10 @@ def test_responde_por_GET_y_por_POST(metodo) -> None:
         ):
             pila.enter_context(parche)
         cliente = pila.enter_context(TestClient(app.app))
-        r = getattr(cliente, metodo)("/api/backfill/ventas-teoricos")
+        assert cliente.get("/api/backfill/ventas-teoricos").status_code == 405
+        assert cliente.get("/api/backfill/entregas").status_code == 405
+        assert cliente.get("/api/sync/manual").status_code == 405
+        r = cliente.post("/api/backfill/ventas-teoricos")
     assert r.status_code == 200
 
 
@@ -156,7 +157,7 @@ def test_las_listas_salen_del_MAPEO_UNIFICADO_y_no_de_las_claves() -> None:
         ):
             pila.enter_context(parche)
         cliente = pila.enter_context(TestClient(app.app))
-        r = cliente.get("/api/backfill/ventas-teoricos")
+        r = cliente.post("/api/backfill/ventas-teoricos")
 
     assert r.status_code == 200
     lector.assert_called_once()
