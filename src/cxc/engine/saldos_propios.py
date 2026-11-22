@@ -64,11 +64,16 @@ def _f(val: Decimal | float | int) -> float:
     return float(q2(_dec(val)))
 
 
-def _indice_tasas_bcv_local(repo: Repository) -> tuple[dict[date, Decimal], Decimal]:
-    """Construye mapa ``fecha → tasa_bcv`` y tasa fallback más reciente solo desde BD CxC."""
+def _indice_tasas_bcv_y_eur_local(
+    repo: Repository,
+) -> tuple[dict[date, Decimal], Decimal, dict[date, Decimal], Decimal]:
+    """Construye mapas ``fecha -> tasa_bcv_usd`` y ``fecha -> tasa_bcv_euro`` desde BD CxC."""
     por_fecha: dict[date, Decimal] = {}
+    eur_por_fecha: dict[date, Decimal] = {}
     ultima_tasa = Decimal("0")
+    ultima_eur = Decimal("0")
     ultima_fecha: date | None = None
+    ultima_eur_fecha: date | None = None
 
     try:
         hist = repo.all_tasas_historicas_auditoria()
@@ -77,28 +82,48 @@ def _indice_tasas_bcv_local(repo: Repository) -> tuple[dict[date, Decimal], Deci
     for row in hist:
         f_raw = str(row.get("fecha") or "")[:10]
         t_val = _dec(row.get("tasa_bcv_usd"))
-        if f_raw and t_val > 0:
-            try:
-                f_d = date.fromisoformat(f_raw)
-                por_fecha[f_d] = t_val
-                if ultima_fecha is None or f_d >= ultima_fecha:
-                    ultima_fecha = f_d
-                    ultima_tasa = t_val
-            except ValueError:
-                continue
+        e_val = _dec(row.get("tasa_bcv_eur") or row.get("tasa_bcv_euro"))
+        if not f_raw:
+            continue
+        try:
+            f_d = date.fromisoformat(f_raw)
+        except ValueError:
+            continue
+        if t_val > 0:
+            por_fecha[f_d] = t_val
+            if ultima_fecha is None or f_d >= ultima_fecha:
+                ultima_fecha = f_d
+                ultima_tasa = t_val
+        if e_val > 0:
+            eur_por_fecha[f_d] = e_val
+            if ultima_eur_fecha is None or f_d >= ultima_eur_fecha:
+                ultima_eur_fecha = f_d
+                ultima_eur = e_val
 
     try:
         series = repo.all_serie_tasas()
     except Exception:
         series = []
     for s in sorted(series, key=lambda x: x.timestamp):
+        f_d = s.timestamp.date()
         if s.tasa_bcv and s.tasa_bcv > 0:
-            f_d = s.timestamp.date()
             por_fecha[f_d] = Decimal(str(s.tasa_bcv))
             if ultima_fecha is None or f_d >= ultima_fecha:
                 ultima_fecha = f_d
                 ultima_tasa = Decimal(str(s.tasa_bcv))
+        t_eu = _dec(getattr(s, "tasa_bcv_euro", 0))
+        if t_eu > 0:
+            eur_por_fecha[f_d] = t_eu
+            if ultima_eur_fecha is None or f_d >= ultima_eur_fecha:
+                ultima_eur_fecha = f_d
+                ultima_eur = t_eu
 
+    return por_fecha, ultima_tasa, eur_por_fecha, ultima_eur
+
+
+def _indice_tasas_bcv_local(repo: Repository) -> tuple[dict[date, Decimal], Decimal]:
+    """Construye mapa ``fecha → tasa_bcv`` y tasa fallback más reciente solo desde BD CxC."""
+    por_fecha, ultima_tasa, _eur, _u_eur = _indice_tasas_bcv_y_eur_local(repo)
     return por_fecha, ultima_tasa
 
 
@@ -121,9 +146,27 @@ def _a_usd_local(
     fecha_doc: date,
     por_fecha: dict[date, Decimal],
     fallback_tasa: Decimal,
+    *,
+    eur_por_fecha: dict[date, Decimal] | None = None,
+    fallback_eur: Decimal = Decimal("0"),
+    usd_bcv_por_fecha: dict[date, Decimal] | None = None,
+    fallback_usd_bcv: Decimal = Decimal("0"),
 ) -> Decimal:
     mon = (moneda or "USD").strip().upper()
     if mon == "USD" or monto <= 0:
+        return q2(monto)
+    if mon == "EUR":
+        t_usd = _tasa_bcv_en_fecha(
+            fecha_doc, usd_bcv_por_fecha if usd_bcv_por_fecha is not None else por_fecha,
+            fallback_usd_bcv if fallback_usd_bcv > 0 else fallback_tasa,
+        )
+        t_eur = (
+            _tasa_bcv_en_fecha(fecha_doc, eur_por_fecha or {}, fallback_eur)
+            if (eur_por_fecha is not None or fallback_eur > 0)
+            else Decimal("0")
+        )
+        if t_eur > 0 and t_usd > 0:
+            return q2((monto * t_eur) / t_usd)
         return q2(monto)
     tasa = _tasa_bcv_en_fecha(fecha_doc, por_fecha, fallback_tasa)
     if tasa <= 0:
@@ -283,7 +326,9 @@ def _recolectar_estado_bd(
     hoy: date | None = None,
 ) -> dict[str, Any]:
     hoy_d = hoy or date.today()
-    por_fecha_tasa, fallback_tasa = _indice_tasas_bcv_local(repo)
+    por_fecha_tasa, fallback_tasa, eur_por_fecha, fallback_eur = _indice_tasas_bcv_y_eur_local(
+        repo
+    )
     por_fecha_binance, fallback_binance = _indice_tasas_binance_local(repo)
     mapeo_listas = _cargar_mapeo_listas_repo(repo)
     ruta_por_so: dict[str, str] = {}
@@ -397,7 +442,8 @@ def _recolectar_estado_bd(
         else:
             b["ventas_bcv_usd"] += monto
         b["n_ordenes"] += 1
-        b["ordenes_fifo"].append((f_doc, f_doc, monto, ref_doc))
+        f_venc_dc = f_doc + timedelta(days=int(getattr(dc, "dias_credito", 0) or 0))
+        b["ordenes_fifo"].append((f_doc, f_venc_dc, monto, ref_doc))
         b["movimientos"].append(
             {
                 "fecha": f_doc.isoformat(),
@@ -446,11 +492,26 @@ def _recolectar_estado_bd(
             }
         )
 
+    try:
+        facturas_all = repo.all_facturas()
+    except NotImplementedError:
+        facturas_all = []
+    so_con_nc_odoo: set[str] = set()
+    for fac in facturas_all:
+        if fac.move_type != "out_refund" or fac.estado != "posted":
+            continue
+        if q2(abs(_dec(fac.monto_total_signed_usd))) > 0:
+            for s in _so_ids_csv(fac.so_id):
+                if s in ordenes_por_so:
+                    so_con_nc_odoo.add(s)
+
     so_con_especiales_aplicados: set[str] = set()
     for bf in repo.all_bandeja():
         if bf.so_id in so_con_desc_aprobado or bf.so_id in no_otorgados:
             continue
         if bf.estado not in (EstadoBandeja.APROBADO, EstadoBandeja.FACTURADO):
+            continue
+        if bf.estado == EstadoBandeja.FACTURADO and bf.so_id in so_con_nc_odoo:
             continue
         ord_obj = ordenes_por_so.get(bf.so_id)
         if ord_obj is None or ord_obj.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
@@ -505,10 +566,6 @@ def _recolectar_estado_bd(
             }
         )
 
-    try:
-        facturas_all = repo.all_facturas()
-    except NotImplementedError:
-        facturas_all = []
     for fac in facturas_all:
         if fac.move_type != "out_refund" or fac.estado != "posted":
             continue
@@ -636,7 +693,9 @@ def _recolectar_estado_bd(
     for dop in docs_operativos:
         if getattr(dop, "tipo", "") != "pago":
             continue
-        est = str(getattr(dop, "estado", "") or "")
+        est = str(getattr(dop, "estado", "") or "").upper()
+        if est == "RECHAZADO":
+            continue
         huella_banco = str(getattr(dop, "conciliado_banco_huella", "") or "").strip()
         confirmado = (
             bool(getattr(dop, "confirmado_cxc", False))
@@ -663,7 +722,32 @@ def _recolectar_estado_bd(
         if not isinstance(f_doc_op, date):
             cre = getattr(dop, "creado_en", None)
             f_doc_op = cre.date() if isinstance(cre, datetime) else hoy_d
-        monto_usd = _a_usd_local(monto_raw, mon_op, f_doc_op, por_fecha_tasa, fallback_tasa)
+        pedido_dop = str(getattr(dop, "pedido_ref", "") or "").strip()
+        ruta_dop = normalizar_ruta(getattr(dop, "ruta_pago", "")) or ruta_por_so.get(pedido_dop, "")
+        if not ruta_dop and "binance" in str(getattr(dop, "metodo_pago", "") or "").lower():
+            ruta_dop = RUTA_BINANCE
+        if ruta_dop == RUTA_BINANCE and (por_fecha_binance or fallback_binance > 0):
+            monto_usd = _a_usd_local(
+                monto_raw,
+                mon_op,
+                f_doc_op,
+                por_fecha_binance,
+                fallback_binance,
+                eur_por_fecha=eur_por_fecha,
+                fallback_eur=fallback_eur,
+                usd_bcv_por_fecha=por_fecha_tasa,
+                fallback_usd_bcv=fallback_tasa,
+            )
+        else:
+            monto_usd = _a_usd_local(
+                monto_raw,
+                mon_op,
+                f_doc_op,
+                por_fecha_tasa,
+                fallback_tasa,
+                eur_por_fecha=eur_por_fecha,
+                fallback_eur=fallback_eur,
+            )
         if monto_usd <= 0:
             continue
 

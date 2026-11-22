@@ -42,6 +42,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 
 metadata = MetaData()
@@ -1322,6 +1323,7 @@ compras_gastos_odoo = Table(
     Column("diario_nombre", String, nullable=False, server_default=""),
     Column("referencia", String, nullable=False, server_default=""),
     Column("fecha_documento", Date, nullable=False, index=True),
+    Column("fecha_vencimiento", Date, nullable=True),
     Column("estado_odoo", String, nullable=False, server_default="posted"),
     Column("estado_pago", String, nullable=False, server_default=""),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
@@ -1424,6 +1426,13 @@ documentos_operativos = Table(
     Column("creado_por", String, nullable=False, server_default="sistema"),
     Column("creado_en", DateTime(timezone=False), nullable=False),
     Column("actualizado_en", DateTime(timezone=False), nullable=False),
+    Index(
+        "uq_documentos_operativos_numero_recibo",
+        "numero_recibo",
+        unique=True,
+        postgresql_where=text("numero_recibo <> ''"),
+        sqlite_where=text("numero_recibo <> ''"),
+    ),
 )
 
 # --- Política de Crédito y Auto-Envío por Cliente (Fase 3, nov-2026) -------------
@@ -1566,6 +1575,8 @@ vinculaciones_ventas_op = Table(
     Column("moneda", String(8), nullable=False, server_default="USD"),
     Column("equiv_usd_bcv", Numeric(14, 2), nullable=False, server_default="0"),
     Column("tasa_bcv", Numeric(14, 6), nullable=True),
+    Column("tasa_binance_aplicada", RATE, nullable=True),
+    Column("equiv_usd_binance", Numeric(14, 2), nullable=True),
     Column("origen_vinculacion", String(20), nullable=False, server_default="manual"),
     Column("estado", String(32), nullable=False, server_default="VINCULADO_CXC"),
     Column("odoo_reconciliado", Boolean, nullable=False, server_default="false"),
@@ -1598,4 +1609,36 @@ vinculaciones_compras = Table(
     Column("odoo_detalle", Text, nullable=False, server_default=""),
     Column("vinculado_por", String(160), nullable=False, server_default=""),
     Column("creado_en", DateTime(timezone=False), nullable=False),
+)
+
+# --- Fase 0: Cuentas Receptoras Propias de Lubrikca (validación de destino) ---
+cuentas_receptoras_lubrikca = Table(
+    "cuentas_receptoras_lubrikca",
+    metadata,
+    Column("cuenta_id", Integer, primary_key=True, autoincrement=True),
+    Column("nombre", String(120), nullable=False, server_default=""),
+    # banco_ves | banco_usd | pago_movil | zelle | binance | efectivo
+    Column("tipo_canal", String(32), nullable=False, server_default="banco_ves", index=True),
+    Column("banco_codigo_sudeban", String(4), nullable=False, server_default="", index=True),
+    Column("banco_nombre", String(120), nullable=False, server_default=""),
+    Column("numero_cuenta", String(40), nullable=False, server_default=""),
+    Column("numero_cuenta_norm", String(40), nullable=False, server_default="", index=True),
+    Column("titular_nombre", String(160), nullable=False, server_default=""),
+    Column("titular_rif", String(32), nullable=False, server_default=""),
+    Column("titular_rif_norm", String(32), nullable=False, server_default="", index=True),
+    Column("telefono", String(32), nullable=False, server_default=""),
+    Column("telefono_norm", String(32), nullable=False, server_default="", index=True),
+    Column("email_zelle", String(160), nullable=False, server_default=""),
+    Column("email_norm", String(160), nullable=False, server_default="", index=True),
+    Column("binance_id", String(120), nullable=False, server_default="", index=True),
+    Column("moneda", String(10), nullable=False, server_default="VES"),
+    Column("diario_odoo_id", Integer, nullable=True, index=True),
+    Column("diario_odoo_codigo", String(32), nullable=False, server_default=""),
+    Column("diario_odoo_nombre", String(120), nullable=False, server_default=""),
+    Column("activa", Boolean, nullable=False, server_default="true", index=True),
+    Column("es_propia", Boolean, nullable=False, server_default="true"),
+    Column("notas", Text, nullable=False, server_default=""),
+    Column("creado_por", String(160), nullable=False, server_default="sistema"),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
 )

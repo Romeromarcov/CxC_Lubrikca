@@ -12,6 +12,9 @@ from typing import Any
 from cxc.capturas.modelos import es_efectivo
 from cxc.capturas.repositorio import RepoCapturas
 from cxc.capturas.servicio import _Incompleto, resolver_diario
+from cxc.db.locks import advisory_lock_engine
+from cxc.decimal_utils import q2
+from cxc.engine.saldos_propios import indice_tasas_bcv_local, tasa_bcv_en_fecha
 from cxc.odoo.directorio import (
     ContactoOdoo,
     CuentaContable,
@@ -601,6 +604,14 @@ class ServicioOperativos:
     def _resolver_o_crear_proveedor_doc(
         self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str
     ) -> tuple[int, bool]:
+        clave_lock = doc.rif or doc.contraparte_nombre or str(doc.documento_id)
+        eng = getattr(self._repo, "_engine", None)
+        with advisory_lock_engine(eng, "resolver_proveedor_odoo", clave_lock.strip().lower()):
+            return self._resolver_o_crear_proveedor_doc_locked(doc, escritor, marca)
+
+    def _resolver_o_crear_proveedor_doc_locked(
+        self, doc: DocumentoOperativo, escritor: EscritorOdoo, marca: str
+    ) -> tuple[int, bool]:
         pid = self._verificar_partner_id(escritor, doc.partner_odoo_id)
         if pid is not None:
             return pid, False
@@ -719,6 +730,14 @@ class ServicioOperativos:
         if self._repo_cxc is None:
             return None
         try:
+            por_fecha, fallback = indice_tasas_bcv_local(self._repo_cxc)
+            fecha_d = fecha.date() if isinstance(fecha, datetime) else fecha
+            if fecha_d is not None:
+                tasa = tasa_bcv_en_fecha(fecha_d, por_fecha, fallback)
+                if tasa > 0:
+                    return Decimal(str(tasa))
+            if fallback > 0:
+                return Decimal(str(fallback))
             ultima = self._repo_cxc.last_serie_tasa()
             if ultima is not None and ultima.tasa_bcv > 0:
                 return Decimal(str(ultima.tasa_bcv))
@@ -1008,8 +1027,29 @@ class ServicioOperativos:
         usa_base = (
             not es_gasto and doc.base_imponible is not None and doc.base_imponible > Decimal("0")
         )
-        monto_linea = doc.base_imponible if usa_base else doc.monto
-        assert monto_linea is not None
+        iva_dec = Decimal(str(doc.iva)) if doc.iva is not None else Decimal("0")
+        tax_ids: list[int] | None = None
+        aviso_tax = ""
+        if usa_base and iva_dec > Decimal("0") and hasattr(escritor, "buscar_impuesto_compra"):
+            base_dec = Decimal(str(doc.base_imponible))
+            tasa_pct = q2((iva_dec / base_dec) * Decimal("100"))
+            if abs(tasa_pct - Decimal("16")) <= Decimal("0.5"):
+                tasa_pct = Decimal("16")
+            tax_id = escritor.buscar_impuesto_compra(tasa_pct)
+            if tax_id is not None:
+                tax_ids = [tax_id]
+                monto_linea = base_dec
+            else:
+                monto_linea = Decimal(str(doc.monto))
+                tax_ids = []
+                aviso_tax = (
+                    f"Aviso CxC: sin impuesto compra {tasa_pct}% en Odoo; "
+                    "enviado monto total sin tax_ids."
+                )
+        else:
+            monto_linea_opt = doc.base_imponible if usa_base else doc.monto
+            assert monto_linea_opt is not None
+            monto_linea = Decimal(str(monto_linea_opt))
 
         etiqueta_num = numero or f"S/N-{doc.numero}"
         concepto = doc.concepto.strip() or (
@@ -1041,6 +1081,7 @@ class ServicioOperativos:
             if (es_gasto and (doc.metodo_pago or doc.referencia))
             else "",
             f"Orden de compra: {doc.orden_ref}" if doc.orden_ref else "",
+            aviso_tax,
             f"Notas: {doc.notas}" if doc.notas else "",
         ]
         resumen_str = " · ".join(x for x in detalles if x)
@@ -1055,6 +1096,11 @@ class ServicioOperativos:
             if es_gasto
             else (doc.fecha_vencimiento.isoformat() if doc.fecha_vencimiento else None)
         )
+        kwargs_fac: dict[str, Any] = {}
+        if tax_ids is not None:
+            kwargs_fac["tax_ids"] = tax_ids
+        if doc.numero_control and doc.numero_control.strip():
+            kwargs_fac["numero_control"] = doc.numero_control.strip()
         move_id = escritor.crear_factura_proveedor(
             partner_id=partner_id,
             numero=etiqueta_num,
@@ -1068,10 +1114,28 @@ class ServicioOperativos:
             journal_id=diario_id,
             account_id=doc.cuenta_contable_id,
             nota_chatter=nota_chatter,
+            **kwargs_fac,
         )
+        if not es_gasto and hasattr(escritor, "verificar_totales_factura"):
+            verif_odoo = escritor.verificar_totales_factura(
+                move_id,
+                esperado_subtotal=monto_linea if tax_ids else None,
+                esperado_iva=iva_dec if tax_ids else None,
+                esperado_total=Decimal(str(doc.monto)) if doc.monto is not None else None,
+            )
+            val_actual = dict(doc.validacion or {})
+            val_actual["verificacion_odoo"] = verif_odoo
+            self._repo.actualizar(doc.documento_id, {"validacion": val_actual})
         return "account.move", move_id, f"account.move:{move_id}", partner_id, diario_id
 
     def aprobar_y_enviar_a_odoo(self, documento_id: int, *, actor: str = "") -> DocumentoOperativo:
+        eng = getattr(self._repo, "_engine", None)
+        with advisory_lock_engine(eng, "operativo_enviar_odoo", str(documento_id)):
+            return self._aprobar_y_enviar_a_odoo_locked(documento_id, actor=actor)
+
+    def _aprobar_y_enviar_a_odoo_locked(
+        self, documento_id: int, *, actor: str = ""
+    ) -> DocumentoOperativo:
         doc = self.obtener(documento_id)
         if doc.estado == ENVIADO_ODOO:
             raise OperativoYaEnviado(f"{doc.numero} ya fue enviado a Odoo ({doc.odoo_ref}).")

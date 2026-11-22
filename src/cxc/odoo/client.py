@@ -1470,6 +1470,7 @@ class OdooXmlRpcReader(OdooReader):
             "journal_id",
             "ref",
             "invoice_date",
+            "invoice_date_due",
             "date",
             "state",
             "payment_state",
@@ -1516,6 +1517,7 @@ class OdooXmlRpcReader(OdooReader):
             es_gasto = mtype == "entry" or ref_val.upper().startswith("S/N-GAS-")
             moneda = "USD" if _m2o_name(r.get("currency_id")).upper() == "USD" else "VES"
             fecha_val = _to_date(r.get("invoice_date")) or _to_date(r.get("date")) or ahora.date()
+            fecha_venc = _to_date(r.get("invoice_date_due"))
             out.append(
                 {
                     "move_id": str(r["id"]),
@@ -1531,6 +1533,7 @@ class OdooXmlRpcReader(OdooReader):
                     "diario_nombre": _m2o_name(r.get("journal_id")),
                     "referencia": ref_val,
                     "fecha_documento": fecha_val,
+                    "fecha_vencimiento": fecha_venc,
                     "estado_odoo": str(r.get("state") or "posted"),
                     "estado_pago": str(r.get("payment_state") or ""),
                     "actualizado_en": ahora,
@@ -1811,11 +1814,35 @@ class OdooXmlRpcReader(OdooReader):
 def _connect(config: OdooConfig) -> ExecuteFn:  # pragma: no cover - red externa
     import xmlrpc.client
 
-    common = xmlrpc.client.ServerProxy(f"{config.url}/xmlrpc/2/common")
+    class _TimeoutTransport(xmlrpc.client.Transport):
+        def __init__(self, timeout: int = 30, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._timeout = timeout
+
+        def make_connection(self, host: Any) -> Any:
+            conn = super().make_connection(host)
+            conn.timeout = self._timeout
+            return conn
+
+    class _TimeoutSafeTransport(xmlrpc.client.SafeTransport):
+        def __init__(self, timeout: int = 30, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self._timeout = timeout
+
+        def make_connection(self, host: Any) -> Any:
+            conn = super().make_connection(host)
+            conn.timeout = self._timeout
+            return conn
+
+    es_https = str(config.url or "").strip().lower().startswith("https://")
+    transport: xmlrpc.client.Transport = (
+        _TimeoutSafeTransport(timeout=30) if es_https else _TimeoutTransport(timeout=30)
+    )
+    common = xmlrpc.client.ServerProxy(f"{config.url}/xmlrpc/2/common", transport=transport)
     uid = common.authenticate(config.db, config.username, config.password, {})
     if not uid:
         raise PermissionError("Autenticación Odoo fallida")
-    models = xmlrpc.client.ServerProxy(f"{config.url}/xmlrpc/2/object")
+    models = xmlrpc.client.ServerProxy(f"{config.url}/xmlrpc/2/object", transport=transport)
 
     def execute(model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
         return models.execute_kw(config.db, uid, config.password, model, method, args, kwargs)

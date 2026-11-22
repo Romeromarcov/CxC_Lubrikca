@@ -21,7 +21,7 @@ from cxc.contactos.modelos import (
 from cxc.contactos.repositorio import RepoContactosSQL
 from cxc.contactos.servicio import ServicioContactos
 from cxc.odoo.directorio import OdooDirectorioError
-from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, conectar
+from cxc.odoo.escritura import EscritorOdoo, EscrituraConfig, OdooEscrituraError, conectar
 from cxc.permisos import tiene
 from cxc.web.capturas_api import exigir_bot_key
 from cxc.web.directorio_api import (
@@ -303,6 +303,9 @@ def crear_contacto_maestro(
         )
     except ContactoInvalido as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OdooEscrituraError:
+        logger.exception("Error de Odoo al crear/enviar contacto maestro")
+        raise HTTPException(status_code=502, detail="Error de comunicación con Odoo.") from None
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return JSONResponse(status_code=201, content={"ok": True, "contacto": creado.a_dict()})
@@ -334,6 +337,9 @@ def editar_contacto_maestro(
         )
     except ContactoInvalido as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OdooEscrituraError:
+        logger.exception("Error de Odoo al editar contacto maestro %s", contacto_id)
+        raise HTTPException(status_code=502, detail="Error de comunicación con Odoo.") from None
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return JSONResponse(status_code=200, content={"ok": True, "contacto": act.a_dict()})
@@ -357,6 +363,9 @@ def validar_y_enviar_contacto_odoo(
         )
     except ContactoInvalido as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OdooEscrituraError:
+        logger.exception("Error de Odoo al validar contacto maestro %s", contacto_id)
+        raise HTTPException(status_code=502, detail="Error de comunicación con Odoo.") from None
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return JSONResponse(status_code=200, content={"ok": True, "contacto": act.a_dict()})

@@ -1144,7 +1144,7 @@ def _sincronizar_aplicaciones_conciliadas(
         hora_pago = datetime.combine(fecha_por_pago[pago_id], datetime.min.time())
         moneda = moneda_por_pago[pago_id]
         try:
-            tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows)
+            tasa_bcv_dia, tasa_binance = get_rate_for_datetime(hora_pago, tasas_rows, repo=repo)
         except TasaNoDisponible as e_tasa:
             sin_tasa.append(
                 {"pago_id": pago_id, "so_id": so_id, "fecha": hora_pago.date().isoformat()}
@@ -2727,7 +2727,11 @@ def invalidar_tasas() -> None:
     _SERIE_ROWS_CACHE["ts"] = 0.0
 
 
-def get_rate_for_datetime(dt: datetime, rows: list[dict] | None = None) -> tuple[Decimal, Decimal]:
+def get_rate_for_datetime(
+    dt: datetime,
+    rows: list[dict] | None = None,
+    repo: Any = None,
+) -> tuple[Decimal, Decimal]:
     """Tasa BCV/Binance más cercana a ``dt``.
 
     Orden de fuentes, unificado en ``cxc.rates.Tasas`` (septiembre 2026):
@@ -2749,11 +2753,19 @@ def get_rate_for_datetime(dt: datetime, rows: list[dict] | None = None) -> tuple
     siempre un par de números, pero por eso mismo va al final.
     """
     # El repo se resuelve tarde y solo si hace falta.
+    if repo is None and rows is None:
+        repo = get_repo()
+    elif repo is None:
+        try:
+            repo = get_repo()
+        except RuntimeError:
+            repo = None
     if rows is None:
-        rows = _all_serie_tasas_rows(get_repo())
+        rows = _all_serie_tasas_rows(repo)
 
     fecha_str = dt.date().isoformat()
-    tasas = Tasas(historicas=_tasas_historicas_cacheadas(get_repo()), serie=rows or [])
+    historicas = _tasas_historicas_cacheadas(repo) if repo is not None else []
+    tasas = Tasas(historicas=historicas, serie=rows or [])
     bcv = tasas.bcv_usd(dt, arrastrar=False)
     binance = tasas.binance(dt)
     if bcv is not None:
@@ -3281,6 +3293,9 @@ async def run_sync_in_background():
     órdenes/pagos que llegaron mientras el servidor estuvo caído (downtime).
     Iteraciones siguientes: usa el cursor incremental normal (delta 48h solapado).
     """
+    class _SyncOmitido(Exception):
+        pass
+
     _first_run = True
     _last_daily_recalc_date: date | None = None
     # Catálogo: cambia con poca frecuencia (precios/nombres de producto),
@@ -3288,9 +3303,17 @@ async def run_sync_in_background():
     # calendario, mismo patrón que _last_daily_recalc_date.
     _last_catalogo_sync_date: date | None = None
     while True:
+        _lock_ctx = None
         try:
             config = AppConfig.from_env()
             repo = get_repo()
+            from cxc.db.locks import try_advisory_session_lock
+
+            _lock_ctx = try_advisory_session_lock(
+                getattr(repo, "_engine", None), "daemon", "odoo_sync"
+            )
+            if not _lock_ctx.__enter__():
+                raise _SyncOmitido()
             reader = OdooXmlRpcReader(config.odoo)
 
             if _first_run:
@@ -3436,9 +3459,14 @@ async def run_sync_in_background():
                     await asyncio.to_thread(_correr_auditoria_sobre_descuento_diaria, repo)
                     _last_daily_recalc_date = date.today()
                 print(f"FastAPI Daemon: Sync completado. {result.total} filas actualizadas.")
+        except _SyncOmitido:
+            logger.debug("Otro worker ejecuta sync Odoo; se omite este ciclo.")
         except Exception as e:
             print(f"Error en daemon de sincronización: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
+        finally:
+            if _lock_ctx is not None:
+                _lock_ctx.__exit__(None, None, None)
         await asyncio.sleep(300)
 
 
@@ -3630,22 +3658,31 @@ async def run_scraper_in_background():
                     build_alerter(config.alert),
                     config.scraper_policy,
                 )
-                # scraper.run() hace 2-3 llamadas HTTP síncronas (Binance +
-                # BCV) que pueden tardar varios segundos -- sin to_thread
-                # bloquean el event loop entero (mismo patrón de bug que
-                # Fase 1, ver recalculate_all_orders), tumbando /reporte y
-                # cualquier otro endpoint mientras el scraper espera red.
-                fila = await asyncio.to_thread(scraper.run, now_caracas)
-                # La serie cambio: el cache de tasas tiene que verla. Hasta el
-                # 11-sep-2026 `invalidar_tasas()` no tenia NINGUN llamador, asi
-                # que `tasas_vigentes()` servia tasas de hasta 5 minutos atras
-                # despues de cada captura, mientras los lectores sin cache la
-                # veian al instante: dos lectores en desacuerdo por 5 minutos.
-                invalidar_tasas()
-                print(
-                    f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
-                    f"Binance={fila.tasa_binance}"
-                )
+                from cxc.db.locks import try_advisory_session_lock
+
+                def _scrape_si_libre(
+                    repo_arg: Any = repo,
+                    scraper_arg: Any = scraper,
+                    now_arg: datetime = now_caracas,
+                ) -> Any:
+                    with try_advisory_session_lock(
+                        getattr(repo_arg, "_engine", None), "daemon", "scraper_tasas"
+                    ) as libre:
+                        if not libre:
+                            return None
+                        return scraper_arg.run(now_arg)
+
+                fila = await asyncio.to_thread(_scrape_si_libre)
+                if fila is None:
+                    logger.debug(
+                        "Otro worker está ejecutando el scraping de tasas; se omite ciclo."
+                    )
+                else:
+                    invalidar_tasas()
+                    print(
+                        f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
+                        f"Binance={fila.tasa_binance}"
+                    )
             else:
                 print(
                     "FastAPI Daemon: fuera de la ventana de captura "

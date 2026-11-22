@@ -291,6 +291,9 @@ class OdooFalso:
                 {},
             ),
             "account.move.line:fields_get": {"tax_ids": {}, "name": {}, "account_id": {}},
+            "account.tax:search_read": [
+                {"id": 51, "name": "IVA 16% Compras", "amount": 16.0},
+            ],
             "res.currency:search_read": [{"id": 1, "name": "USD"}, {"id": 2, "name": "VES"}],
             "account.journal:search_read": [
                 {"id": 99, "name": "Compras USD", "code": "BUSD", "currency_id": [1, "USD"]},
@@ -348,6 +351,9 @@ class OdooFalso:
                 if ids
                 else []
             )
+        if model == "account.move" and method == "read":
+            ids = list(args[0]) if args else []
+            return [{"id": int(ids[0])}] if ids else []
         if method == "search":
             return []
         raise AssertionError(f"Odoo falso: sin respuesta para {model}.{method}")

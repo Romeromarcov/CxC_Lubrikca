@@ -22,11 +22,11 @@ from ..decimal_utils import q2
 from ..repositories import Repository
 from .saldos_propios import (
     TRAMOS_MORA,
+    _indice_tasas_bcv_y_eur_local,
     a_usd_local,
     cumple_antiguedad,
     dec,
     fifo_antiguedad,
-    indice_tasas_bcv_local,
     norm_nombre,
     round_usd,
 )
@@ -75,7 +75,20 @@ def _recolectar_cxp_bd(
     hoy: date | None = None,
 ) -> dict[str, Any]:
     hoy_d = hoy or date.today()
-    por_fecha_tasa, fallback_tasa = indice_tasas_bcv_local(repo)
+    por_fecha_tasa, fallback_tasa, eur_por_fecha, fallback_eur = _indice_tasas_bcv_y_eur_local(
+        repo
+    )
+
+    def _usd_cxp(monto_val: Decimal, mon_val: str, fecha_val: date) -> Decimal:
+        return a_usd_local(
+            monto_val,
+            mon_val,
+            fecha_val,
+            por_fecha_tasa,
+            fallback_tasa,
+            eur_por_fecha=eur_por_fecha,
+            fallback_eur=fallback_eur,
+        )
 
     # Mapa de cuentas Zelle de terceros -> proveedor configurado
     terceros_por_id: dict[int, dict[str, Any]] = {}
@@ -150,7 +163,7 @@ def _recolectar_cxp_bd(
             continue
         mon = str(r.get("moneda") or "VES").strip().upper()
         f_doc = _fecha_de(r.get("fecha_documento"), hoy_d)
-        monto_usd = a_usd_local(monto_raw, mon, f_doc, por_fecha_tasa, fallback_tasa)
+        monto_usd = _usd_cxp(monto_raw, mon, f_doc)
         if monto_usd <= 0:
             continue
 
@@ -177,9 +190,10 @@ def _recolectar_cxp_bd(
             # Gasto menor pagado sin cuenta por pagar abierta
             b["gastos_sin_factura_usd"] += monto_usd
         else:
+            f_venc = _fecha_de(r.get("fecha_vencimiento"), f_doc)
             b["compras_confirmadas_usd"] += monto_usd
             b["n_facturas"] += 1
-            b["facturas_fifo"].append((f_doc, f_doc, monto_usd, ref))
+            b["facturas_fifo"].append((f_doc, f_venc, monto_usd, ref))
             b["movimientos"].append(
                 {
                     "fecha": f_doc.isoformat(),
@@ -209,7 +223,7 @@ def _recolectar_cxp_bd(
             getattr(dop, "fecha_documento", None) or getattr(dop, "creado_en", None), hoy_d
         )
         f_venc = _fecha_de(getattr(dop, "fecha_vencimiento", None), f_doc)
-        monto_usd = a_usd_local(monto_raw, mon, f_doc, por_fecha_tasa, fallback_tasa)
+        monto_usd = _usd_cxp(monto_raw, mon, f_doc)
         if monto_usd <= 0:
             continue
         _pid, b = resolver_pid(
@@ -252,7 +266,7 @@ def _recolectar_cxp_bd(
             continue
         mon = str(p.get("moneda") or "USD").strip().upper()
         f_p = _fecha_de(p.get("fecha_pago"), hoy_d)
-        monto_usd = a_usd_local(monto_raw, mon, f_p, por_fecha_tasa, fallback_tasa)
+        monto_usd = _usd_cxp(monto_raw, mon, f_p)
         if monto_usd <= 0:
             continue
         _pid, b = resolver_pid(
@@ -279,7 +293,9 @@ def _recolectar_cxp_bd(
     # 2b. Pagos a proveedor CxC-first confirmados + Zelle 3ros confirmados (contrapartida CxP)
     for dop in docs_operativos:
         tipo_op = getattr(dop, "tipo", "")
-        est = str(getattr(dop, "estado", "") or "")
+        est = str(getattr(dop, "estado", "") or "").upper()
+        if est == "RECHAZADO":
+            continue
         confirmado = bool(getattr(dop, "confirmado_cxc", False)) or est in (
             "CONFIRMADO_CXC",
             "ENVIADO_ODOO",
@@ -308,7 +324,7 @@ def _recolectar_cxp_bd(
         f_p = _fecha_de(
             getattr(dop, "fecha_documento", None) or getattr(dop, "creado_en", None), hoy_d
         )
-        monto_usd = a_usd_local(monto_raw, mon, f_p, por_fecha_tasa, fallback_tasa)
+        monto_usd = _usd_cxp(monto_raw, mon, f_p)
         if monto_usd <= 0:
             continue
 

@@ -1237,6 +1237,25 @@ class ServicioDocumentos:
         auto_enviado: bool = False,
     ) -> DocumentoComercial:
         """Envía a Odoo con precios normales de lista (sin discount en línea) + chatter."""
+        from cxc.db.locks import advisory_lock_engine
+
+        eng = getattr(self._repo, "_engine", None)
+        with advisory_lock_engine(eng, "documento_enviar_odoo", str(documento_id)):
+            return self._enviar_a_odoo_locked(
+                documento_id,
+                actor=actor,
+                registrar_aprobacion=registrar_aprobacion,
+                auto_enviado=auto_enviado,
+            )
+
+    def _enviar_a_odoo_locked(
+        self,
+        documento_id: int,
+        *,
+        actor: str = "sistema",
+        registrar_aprobacion: bool = False,
+        auto_enviado: bool = False,
+    ) -> DocumentoComercial:
         doc = self.obtener(documento_id)
         if doc.estado == ENVIADO_ODOO:
             ref = doc.odoo_order_name or doc.odoo_order_id

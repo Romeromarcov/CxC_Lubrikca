@@ -367,7 +367,7 @@ def test_factura_completa_se_envia_en_borrador_con_la_nota_contable() -> None:
     assert (
         linea["name"] == "Aceite 20W50"
         and linea["price_unit"] == 100.0
-        and linea["tax_ids"] == [(6, 0, [])]
+        and linea["tax_ids"] == [(6, 0, [51])]
     )
     for pieza in (
         f"BOT-{c.captura_id}",

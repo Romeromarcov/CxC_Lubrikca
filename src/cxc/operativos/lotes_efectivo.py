@@ -462,7 +462,10 @@ class RepoLotesEfectivo:
 
         ahora = datetime.now()
         f_lote = fecha_lote or ahora.date()
+        from cxc.db.locks import advisory_lock_conn
+
         with self._engine.begin() as conn:
+            advisory_lock_conn(conn, "lote_recibo_efectivo", f_lote.strftime("%Y%m%d"))
             num_recibo = self._siguiente_numero_recibo(conn, f_lote)
             row = conn.execute(
                 insert(lotes_recibo_efectivo)

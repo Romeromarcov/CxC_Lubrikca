@@ -359,6 +359,13 @@ class PostgresRepository(Repository):
                 fecha_d = fecha_d.date()
             elif isinstance(fecha_d, str):
                 fecha_d = date.fromisoformat(fecha_d[:10])
+            fecha_v = f.get("fecha_vencimiento")
+            if isinstance(fecha_v, datetime):
+                fecha_v = fecha_v.date()
+            elif isinstance(fecha_v, str) and fecha_v.strip():
+                fecha_v = date.fromisoformat(fecha_v.strip()[:10])
+            elif not isinstance(fecha_v, date):
+                fecha_v = None
             norm.append(
                 {
                     "move_id": str(f["move_id"]),
@@ -374,6 +381,7 @@ class PostgresRepository(Repository):
                     "diario_nombre": str(f.get("diario_nombre") or ""),
                     "referencia": str(f.get("referencia") or ""),
                     "fecha_documento": fecha_d or ahora.date(),
+                    "fecha_vencimiento": fecha_v,
                     "estado_odoo": str(f.get("estado_odoo") or "posted"),
                     "estado_pago": str(f.get("estado_pago") or ""),
                     "actualizado_en": f.get("actualizado_en") or ahora,
@@ -407,6 +415,11 @@ class PostgresRepository(Repository):
                 "diario_nombre": str(r.diario_nombre or ""),
                 "referencia": str(r.referencia or ""),
                 "fecha_documento": r.fecha_documento.isoformat() if r.fecha_documento else "",
+                "fecha_vencimiento": (
+                    r.fecha_vencimiento.isoformat()
+                    if getattr(r, "fecha_vencimiento", None)
+                    else ""
+                ),
                 "estado_odoo": str(r.estado_odoo or "posted"),
                 "estado_pago": str(r.estado_pago or ""),
             }

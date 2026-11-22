@@ -873,7 +873,34 @@ class ServicioCapturas:
             raise _Incompleto([f"moneda: «{p['moneda']}» no existe en Odoo"])
         base = p.get("base_imponible")
         usa_base = not vacio(base) and Decimal(str(base)) > 0
-        monto = Decimal(str(base if usa_base else p["monto_total"]))
+        iva_raw = p.get("iva")
+        iva_dec = Decimal(str(iva_raw)) if not vacio(iva_raw) else Decimal("0")
+        total_dec = Decimal(str(p["monto_total"]))
+        tax_ids: list[int] | None = None
+        aviso_tax = ""
+        if (
+            not es_gasto
+            and usa_base
+            and iva_dec > Decimal("0")
+            and hasattr(odoo, "buscar_impuesto_compra")
+        ):
+            base_dec = Decimal(str(base))
+            tasa_pct = ((iva_dec / base_dec) * Decimal("100")).quantize(Decimal("0.01"))
+            if abs(tasa_pct - Decimal("16")) <= Decimal("0.5"):
+                tasa_pct = Decimal("16")
+            tax_id = odoo.buscar_impuesto_compra(tasa_pct)
+            if tax_id is not None:
+                tax_ids = [tax_id]
+                monto = base_dec
+            else:
+                monto = total_dec
+                tax_ids = []
+                aviso_tax = (
+                    f"Aviso CxC: sin impuesto compra {tasa_pct}% en Odoo; "
+                    "enviado monto total en 1 línea."
+                )
+        else:
+            monto = Decimal(str(base if usa_base else total_dec))
         etiqueta = numero or f"S/N-{c.captura_id}"
         proveedor_txt = "proveedor"
         if not vacio(p.get("proveedor")):
@@ -888,6 +915,7 @@ class ServicioCapturas:
             f"IVA {p['iva']}" if not vacio(p.get("iva")) else "",
             f"Monto total {p['monto_total']} {p['moneda']}",
             f"Orden {p['orden_ref']}" if not vacio(p.get("orden_ref")) else "",
+            aviso_tax,
             str(p["notas"]) if not vacio(p.get("notas")) else "",
         ]
         if not vacio(p.get("concepto")):
@@ -895,6 +923,12 @@ class ServicioCapturas:
         else:
             concepto = f"Compra en {proveedor_txt}" if es_gasto else f"Factura proveedor {etiqueta}"
         diario_id = odoo.diario_compras_ves_id(p.get("diario_id") or p.get("diario_codigo"))
+        ctrl_txt = str(p.get("numero_control") or "").strip() or None
+        kwargs_fac: dict[str, Any] = {}
+        if tax_ids is not None:
+            kwargs_fac["tax_ids"] = tax_ids
+        if ctrl_txt:
+            kwargs_fac["numero_control"] = ctrl_txt
         factura = odoo.crear_factura_proveedor(
             partner_id=partner,
             numero=etiqueta,
@@ -906,12 +940,23 @@ class ServicioCapturas:
             marca=marca,
             narration=" · ".join(x for x in notas if x),
             journal_id=diario_id,
+            **kwargs_fac,
         )
+        verif_odoo: dict[str, Any] | None = None
+        if hasattr(odoo, "verificar_totales_factura"):
+            verif_odoo = odoo.verificar_totales_factura(
+                factura,
+                esperado_subtotal=monto if tax_ids else None,
+                esperado_iva=iva_dec if tax_ids else None,
+                esperado_total=total_dec,
+            )
         res_doc: dict[str, Any] = {
             "partner_id": partner,
             **extra,
             "monto_linea": str(monto),
         }
+        if verif_odoo is not None:
+            res_doc["verificacion_odoo"] = verif_odoo
         if diario_id is not None:
             res_doc["diario_id"] = diario_id
         return f"account.move:{factura}", res_doc
