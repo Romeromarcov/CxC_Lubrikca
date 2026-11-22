@@ -202,6 +202,8 @@ from cxc.sync.incremental import IncrementalSync
 from cxc.sync.siembra_odoo import SiembraOdooService
 from cxc.web import reporte_cxc_excel, reporte_cxc_vendedor
 from cxc.web.ajustes_descuentos_api import router as ajustes_descuentos_router
+from cxc.web.api_v1 import es_ruta_v1_publica as _es_ruta_v1_publica
+from cxc.web.api_v1 import router as api_v1_router
 from cxc.web.bots_api import router as bots_router
 from cxc.web.capturas_api import es_ruta_bot as _es_ruta_bot_capturas
 from cxc.web.capturas_api import router as capturas_router
@@ -228,6 +230,7 @@ app.include_router(bots_router)
 app.include_router(directorio_router)  # directorio y plan de cuentas Odoo (directorio_api.py)
 app.include_router(reportes_propios_router)  # reportes BD propia y siembra Odoo (Fase 5)
 app.include_router(ajustes_descuentos_router)  # ajustes por regla y especiales Odoo
+app.include_router(api_v1_router)  # Backend API v1 móvil offline y portal clientes (Fase 1)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -4004,6 +4007,16 @@ async def exigir_sesion_en_api(request: Request, call_next):
     ``api_keys`` en cada request de un usuario logueado normal.
     """
     ruta = request.url.path
+    if ruta.startswith("/api/v1/"):
+        if ruta.startswith("/api/v1/portal/invitaciones"):
+            if hay_sesion_valida(request):
+                return await call_next(request)
+            return JSONResponse(status_code=401, content={"detail": "No autenticado"})
+        if _es_ruta_v1_publica(request.method, ruta):
+            return await call_next(request)
+        if request.headers.get("authorization", "").lower().startswith("bearer "):
+            return await call_next(request)
+        return JSONResponse(status_code=401, content={"detail": "Token Bearer requerido."})
     if ruta.startswith("/api/") and ruta not in _API_RUTAS_PUBLICAS:
         if hay_sesion_valida(request):
             return await call_next(request)
