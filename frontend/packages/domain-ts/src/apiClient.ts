@@ -279,4 +279,63 @@ export class LubrikcaApiClient {
       body: JSON.stringify(payload),
     });
   }
+
+  portalPedidos(): Promise<Record<string, unknown>> {
+    return this.requestJson("/api/v1/portal/pedidos", { authMode: "portal" });
+  }
+
+  async portalExportEstadoCuenta(formato: "csv" | "html" = "csv"): Promise<string> {
+    const tok = this.cfg.getAccessToken ? await this.cfg.getAccessToken() : null;
+    const headers: Record<string, string> = {};
+    if (tok) headers.Authorization = `Bearer ${tok}`;
+    const res = await this.fetchFn(
+      `${this.baseUrl}/api/v1/portal/estado-cuenta/export?formato=${encodeURIComponent(formato)}`,
+      { method: "GET", headers },
+    );
+    if (!res.ok) {
+      throw new ApiHttpError(res.status, `Error exportando estado de cuenta (${res.status})`);
+    }
+    return res.text();
+  }
+
+  async portalDescargarReciboHtml(documentoId: number, tipo: "operativo" | "comercial" = "operativo"): Promise<string> {
+    const tok = this.cfg.getAccessToken ? await this.cfg.getAccessToken() : null;
+    const headers: Record<string, string> = {};
+    if (tok) headers.Authorization = `Bearer ${tok}`;
+    const res = await this.fetchFn(
+      `${this.baseUrl}/api/v1/portal/documentos/${documentoId}/recibo?tipo=${encodeURIComponent(tipo)}`,
+      { method: "GET", headers },
+    );
+    if (!res.ok) {
+      throw new ApiHttpError(res.status, `Error descargando recibo (${res.status})`);
+    }
+    return res.text();
+  }
+
+  portalListarUsuarios(): Promise<Record<string, unknown>> {
+    return this.requestJson("/api/v1/portal/usuarios", { authMode: "portal" });
+  }
+
+  portalInvitarUsuario(body: {
+    email: string;
+    rol_portal: "titular" | "compras" | "tesoreria";
+    ttl_horas?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.requestJson("/api/v1/portal/usuarios", {
+      method: "POST",
+      authMode: "portal",
+      body: JSON.stringify(body),
+    });
+  }
+
+  portalActualizarUsuario(
+    cuentaId: number,
+    body: { activo?: boolean; rol_portal?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.requestJson(`/api/v1/portal/usuarios/${cuentaId}`, {
+      method: "PUT",
+      authMode: "portal",
+      body: JSON.stringify(body),
+    });
+  }
 }

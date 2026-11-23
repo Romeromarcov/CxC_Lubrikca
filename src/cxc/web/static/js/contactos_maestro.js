@@ -140,6 +140,7 @@
                 <button type="button" class="btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.76rem;" onclick="abrirModalContactoMaestro(${Number(c.contacto_id)})" title="Editar contacto">✏️</button>
                 ${!c.odoo_partner_id ? `<button type="button" class="btn-primary" style="padding:0.25rem 0.5rem; font-size:0.76rem; background:#16a34a;" onclick="validarEnviarContactoOdoo(${Number(c.contacto_id)})" title="Validar y enviar a Odoo">✅ Odoo</button>` : ""}
                 <button type="button" class="btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.76rem;" onclick="abrirModalFusionarContacto(${Number(c.contacto_id)})" title="Fusionar como duplicado">🔀</button>
+                ${(c.rol === "cliente" || c.rol === "ambos") ? `<button type="button" class="btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.76rem;" onclick="invitarContactoAlPortal(${Number(c.contacto_id)})" title="Invitar al Portal de Clientes">🌐 Portal</button>` : ""}
             </div>
         ` : `<span style="color:#94a3b8; font-size:0.76rem;">Solo lectura</span>`;
 
@@ -282,6 +283,7 @@
             maestro: "contactos-subtab-maestro",
             duplicados: "contactos-subtab-duplicados",
             "odoo-raw": "contactos-subtab-odoo-raw",
+            portal: "contactos-subtab-portal",
         };
         Object.entries(panels).forEach(([k, id]) => {
             const el = document.getElementById(id);
@@ -291,9 +293,120 @@
             window.cargarColaDuplicados();
         } else if (sub === "odoo-raw" && typeof window.loadContactosOdoo === "function") {
             window.loadContactosOdoo(false);
+        } else if (sub === "portal") {
+            window.cargarCuentasPortal();
         } else if (sub === "maestro") {
             loadContactosMaestro(false);
         }
+    };
+
+    window.invitarContactoAlPortal = function (contactoId) {
+        const c = _itemsPorId.get(Number(contactoId));
+        window.switchContactosSubtab("portal");
+        if (!c) return;
+        const cid = c.odoo_partner_id ? String(c.odoo_partner_id) : String(c.contacto_id || "");
+        const elCid = document.getElementById("portal-inv-cliente-id");
+        const elPid = document.getElementById("portal-inv-partner-id");
+        const elNom = document.getElementById("portal-inv-cliente-nombre");
+        const elMail = document.getElementById("portal-inv-email");
+        if (elCid) elCid.value = cid;
+        if (elPid) elPid.value = c.odoo_partner_id ? String(c.odoo_partner_id) : "";
+        if (elNom) elNom.value = c.nombre || "";
+        if (elMail) elMail.value = c.email || "";
+    };
+
+    window.cargarCuentasPortal = async function () {
+        const body = document.getElementById("portal-cuentas-body");
+        if (!body) return;
+        body.innerHTML = `<tr><td colspan="7" class="table-empty">Consultando cuentas del portal...</td></tr>`;
+        try {
+            const data = await _reqJson("/api/v1/portal/invitaciones/cuentas");
+            const items = Array.isArray(data.items) ? data.items : [];
+            if (!items.length) {
+                body.innerHTML = `<tr><td colspan="7" class="table-empty">Aún no hay cuentas de clientes activadas en el portal.</td></tr>`;
+                return;
+            }
+            body.innerHTML = items.map((u) => {
+                const cid = Number(u.cuenta_id);
+                const act = Boolean(u.activo);
+                const estBadge = act
+                    ? `<span class="state-badge" style="background:#dcfce7; color:#166534;">Activa</span>`
+                    : `<span class="state-badge" style="background:#fee2e2; color:#991b1b;">Revocada</span>`;
+                return `<tr>
+                    <td>#${cid}</td>
+                    <td><strong>${_esc(u.cliente_nombre || ("Cliente #" + u.cliente_id))}</strong><div style="font-size:0.74rem; color:#64748b;">ID: ${_esc(u.cliente_id)}</div></td>
+                    <td>${_esc(u.email)}</td>
+                    <td>
+                        <select class="filter-select" onchange="actualizarCuentaPortal(${cid}, { rol_portal: this.value })">
+                            <option value="titular" ${u.rol_portal === "titular" ? "selected" : ""}>titular</option>
+                            <option value="compras" ${u.rol_portal === "compras" ? "selected" : ""}>compras</option>
+                            <option value="tesoreria" ${u.rol_portal === "tesoreria" ? "selected" : ""}>tesoreria</option>
+                        </select>
+                    </td>
+                    <td>${estBadge}</td>
+                    <td style="font-size:0.78rem;">${_esc(u.ultimo_acceso_en || "—")}</td>
+                    <td>
+                        <button type="button" class="btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.78rem;" onclick="actualizarCuentaPortal(${cid}, { activo: ${!act} })">
+                            ${act ? "⛔ Revocar" : "✅ Reactivar"}
+                        </button>
+                    </td>
+                </tr>`;
+            }).join("");
+        } catch (err) {
+            body.innerHTML = `<tr><td colspan="7" class="table-empty">❌ ${_esc(err.message)}</td></tr>`;
+        }
+    };
+
+    window.crearInvitacionPortal = async function () {
+        const btn = document.getElementById("btn-crear-inv-portal");
+        if (btn) btn.disabled = true;
+        try {
+            const pidRaw = (document.getElementById("portal-inv-partner-id")?.value || "").trim();
+            const body = {
+                cliente_id: (document.getElementById("portal-inv-cliente-id")?.value || "").trim(),
+                partner_odoo_id: pidRaw ? Number(pidRaw) : null,
+                cliente_nombre: (document.getElementById("portal-inv-cliente-nombre")?.value || "").trim(),
+                email: (document.getElementById("portal-inv-email")?.value || "").trim().toLowerCase(),
+                rol_portal: document.getElementById("portal-inv-rol")?.value || "titular",
+                ttl_horas: 48,
+            };
+            const res = await _reqJson("/api/v1/portal/invitaciones", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const urlAbs = window.location.origin + String(res.enlace_activacion || "");
+            const box = document.getElementById("portal-inv-resultado");
+            const elLink = document.getElementById("portal-inv-enlace");
+            if (elLink) elLink.textContent = urlAbs;
+            if (box) box.style.display = "block";
+            _mostrarAviso(`✅ Invitación 48h generada para ${body.email}.`, "ok");
+        } catch (err) {
+            _mostrarAviso(`❌ ${err.message}`, "err");
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
+
+    window.actualizarCuentaPortal = async function (cuentaId, payload) {
+        try {
+            await _reqJson(`/api/v1/portal/invitaciones/cuentas/${Number(cuentaId)}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            _mostrarAviso("✅ Cuenta del portal actualizada.", "ok");
+            await window.cargarCuentasPortal();
+        } catch (err) {
+            _mostrarAviso(`❌ ${err.message}`, "err");
+        }
+    };
+
+    window.copiarEnlaceInvitacionPortal = function () {
+        const txt = document.getElementById("portal-inv-enlace")?.textContent || "";
+        if (!txt) return;
+        navigator.clipboard?.writeText(txt);
+        _mostrarAviso("📋 Enlace de activación copiado al portapapeles.", "ok");
     };
 
     window.cargarColaDuplicados = async function () {

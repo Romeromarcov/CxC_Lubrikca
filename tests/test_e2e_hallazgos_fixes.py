@@ -459,7 +459,7 @@ def test_fix4_rutas_plan_cuentas_paginacion_cobranza_y_etiqueta_asiento() -> Non
     pagos_unif_js = (root / "js" / "pagos_unificados.js").read_text(encoding="utf-8")
     assert 'id="op-pagos-pagination"' in index_html
     assert "op-pagos-pagination" in pagos_unif_js
-    assert "js/contactos_maestro.js?v=20261119_8" in index_html
+    assert "js/contactos_maestro.js?v=20261122_fase3" in index_html
     assert "window.setCobranzaPage" in app_js
     assert "window.setCobranzaPageSize" in app_js
 

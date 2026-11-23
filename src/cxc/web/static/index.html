@@ -2544,6 +2544,7 @@
                         <button type="button" class="tab-btn active" data-contactos-subtab="maestro" onclick="switchContactosSubtab('maestro')">📋 Directorio Unificado</button>
                         <button type="button" class="tab-btn" data-contactos-subtab="duplicados" onclick="switchContactosSubtab('duplicados')">⚠️ Revisión de Duplicados <span id="contactos-duplicados-badge" class="badge" style="background:#fef3c7; color:#92400e; margin-left:0.25rem;">0</span></button>
                         <button type="button" class="tab-btn" data-contactos-subtab="odoo-raw" onclick="switchContactosSubtab('odoo-raw')">🔍 Consulta Directa Odoo</button>
+                        <button type="button" class="tab-btn" data-contactos-subtab="portal" onclick="switchContactosSubtab('portal')">🌐 Portal Clientes</button>
                     </div>
 
                     <div id="contactos-maestro-aviso" style="display:none; margin-bottom:0.75rem; padding:0.6rem 0.85rem; border-radius:8px; font-size:0.85rem;"></div>
@@ -2668,6 +2669,74 @@
                             </table>
                         </div>
                         <div id="dir-paginacion" style="display:flex; gap:0.75rem; align-items:center; justify-content:flex-end; margin-top:0.75rem; font-size:0.85rem; color:#475569;"></div>
+                    </div>
+
+                    <!-- SUBVISTA 4: PORTAL DE CLIENTES (Invitaciones 48h y Cuentas Activas) -->
+                    <div id="contactos-subtab-portal" style="display:none;">
+                        <div class="card" style="padding:1rem; margin-bottom:1rem; background:#f8fafc;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+                                <h3 style="margin:0;">✉️ Nueva Invitación al Portal (vigencia 48h)</h3>
+                                <a href="/portal/" target="_blank" rel="noopener" class="btn-secondary" style="text-decoration:none; font-size:0.82rem;">🌐 Abrir Portal Clientes</a>
+                            </div>
+                            <form id="portal-inv-form" onsubmit="event.preventDefault(); crearInvitacionPortal();" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0.65rem; align-items:end;">
+                                <div>
+                                    <label for="portal-inv-cliente-id" style="font-size:0.78rem; color:#475569;">Cliente ID (CxC/Odoo)</label>
+                                    <input type="text" id="portal-inv-cliente-id" class="filter-select" style="width:100%; cursor:text;" required placeholder="Ej. 197">
+                                </div>
+                                <div>
+                                    <label for="portal-inv-partner-id" style="font-size:0.78rem; color:#475569;">Partner Odoo ID</label>
+                                    <input type="number" id="portal-inv-partner-id" class="filter-select" style="width:100%; cursor:text;" placeholder="Opcional">
+                                </div>
+                                <div>
+                                    <label for="portal-inv-cliente-nombre" style="font-size:0.78rem; color:#475569;">Razón Social</label>
+                                    <input type="text" id="portal-inv-cliente-nombre" class="filter-select" style="width:100%; cursor:text;" placeholder="Nombre empresa">
+                                </div>
+                                <div>
+                                    <label for="portal-inv-email" style="font-size:0.78rem; color:#475569;">Correo de acceso</label>
+                                    <input type="email" id="portal-inv-email" class="filter-select" style="width:100%; cursor:text;" required placeholder="cliente@empresa.com">
+                                </div>
+                                <div>
+                                    <label for="portal-inv-rol" style="font-size:0.78rem; color:#475569;">Rol Portal</label>
+                                    <select id="portal-inv-rol" class="filter-select" style="width:100%;">
+                                        <option value="titular">Titular (Acceso completo)</option>
+                                        <option value="compras">Compras (Catálogo y Pedidos)</option>
+                                        <option value="tesoreria">Tesorería (Estado y Pagos)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <button type="submit" id="btn-crear-inv-portal" class="btn-primary" style="width:100%;">✉️ Generar Invitación 48h</button>
+                                </div>
+                            </form>
+                            <div id="portal-inv-resultado" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:8px; background:#ecfdf5; border:1px solid #a7f3d0; font-size:0.84rem; color:#065f46;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                                    <span>Enlace de activación listo (48h): <code id="portal-inv-enlace" style="word-break:break-all;"></code></span>
+                                    <button type="button" class="btn-secondary" onclick="copiarEnlaceInvitacionPortal()">📋 Copiar Enlace</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <h3 style="margin:0;">🔐 Cuentas del Portal de Clientes</h3>
+                            <button type="button" class="btn-secondary" onclick="cargarCuentasPortal()">↻ Actualizar Cuentas</button>
+                        </div>
+                        <div class="table-wrapper">
+                            <table class="cxc-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Empresa / Cliente</th>
+                                        <th>Correo</th>
+                                        <th>Rol Portal</th>
+                                        <th>Estado</th>
+                                        <th>Último Acceso</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="portal-cuentas-body">
+                                    <tr><td colspan="7" class="table-empty">Selecciona esta pestaña para listar cuentas del portal...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -4602,6 +4671,6 @@
     <script src="/static/js/ventas_unificadas.js?v=20261121_1"></script>
     <script src="/static/js/compras_unificadas.js?v=20261121_1"></script>
     <script src="/static/js/reportes_propios.js?v=20261119_8"></script>
-    <script src="/static/js/contactos_maestro.js?v=20261119_8"></script>
+    <script src="/static/js/contactos_maestro.js?v=20261122_fase3"></script>
 </body>
 </html>

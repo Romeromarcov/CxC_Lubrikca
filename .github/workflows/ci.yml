@@ -81,3 +81,7 @@ jobs:
       - name: Frontend tests
         working-directory: frontend
         run: npm run test
+
+      - name: Frontend build (Portal PWA)
+        working-directory: frontend
+        run: npm run build
