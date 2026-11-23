@@ -2941,6 +2941,34 @@
                     <div id="cfg-limpieza-descuentos-status" style="margin-top:0.55rem; font-size:0.84rem; font-weight:600;"></div>
                 </section>
 
+                <!-- OBSERVABILIDAD PILOTO APP MÓVIL, PORTAL Y STORAGE R2 (FASE 4) -->
+                <section class="config-card card" data-subpage="motor" id="observabilidad-piloto-card" style="grid-column: 1 / span 2; border-top: 4px solid #0f766e;">
+                    <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+                        <div>
+                            <h2 style="margin:0;">📡 Observabilidad Piloto · App Móvil, Portal y Storage R2</h2>
+                            <p style="margin:0.2rem 0 0 0;">Criterios de salida Go-Live (&ge;99% éxito sync, 0% pagos a destino ajeno, push multicanal y auditoría v1).</p>
+                        </div>
+                        <button type="button" id="btn-refresh-metricas-piloto" class="btn-secondary">↻ Actualizar Métricas Piloto</button>
+                    </div>
+                    <div class="dashboard-kpi-row" style="margin-bottom:0.85rem;">
+                        <div class="card kpi-card"><h3>Tasa Éxito Sync</h3><p id="piloto-tasa-sync">—</p></div>
+                        <div class="card kpi-card"><h3>Pagos Destino Ajeno</h3><p id="piloto-destino-ajeno">—</p></div>
+                        <div class="card kpi-card"><h3>Storage Comprobantes</h3><p id="piloto-storage-backend">—</p></div>
+                        <div class="card kpi-card"><h3>Dispositivos / Portal</h3><p id="piloto-dispositivos-portal">—</p></div>
+                        <div class="card kpi-card"><h3>Cola Push Multicanal</h3><p id="piloto-push-outbox">—</p></div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table class="cxc-table">
+                            <thead>
+                                <tr><th>Fecha</th><th>Cuenta / Email</th><th>Actor</th><th>Evento Seguridad API v1</th></tr>
+                            </thead>
+                            <tbody id="piloto-seguridad-tbody">
+                                <tr><td colspan="4" class="table-empty">Cargando auditoría API v1...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
                 <!-- PANEL MASTER: MATRIZ CONSOLIDADA DE REGLAS DE DESCUENTO (MOTOR CXC) -->
                 <!-- FORMULARIO ÚNICO DE REGLAS (paso 4 del plan de unificación).
                      Reemplaza a los seis formularios por tabla, que ofrecían
@@ -4672,5 +4700,6 @@
     <script src="/static/js/compras_unificadas.js?v=20261121_1"></script>
     <script src="/static/js/reportes_propios.js?v=20261119_8"></script>
     <script src="/static/js/contactos_maestro.js?v=20261122_fase3"></script>
+    <script src="/static/js/observabilidad_piloto.js?v=20261122_fase4"></script>
 </body>
 </html>

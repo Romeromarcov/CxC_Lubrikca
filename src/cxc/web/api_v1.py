@@ -27,6 +27,7 @@ from cxc.api_v1.jwt_tokens import (
     secret_v1_desde_entorno,
     verificar_access_token,
 )
+from cxc.api_v1.notificaciones import RepoNotificacionesSQL
 from cxc.api_v1.repositorio import (
     ApiV1Conflicto,
     ApiV1Error,
@@ -137,6 +138,11 @@ def _jwt_secret() -> str:
 
 def get_adjuntos_storage() -> AdjuntosStorage:
     return AdjuntosStorage(get_repo_api_v1(), _jwt_secret())
+
+
+def get_repo_notificaciones() -> RepoNotificacionesSQL:
+    _repo, engine = _repo_y_engine()
+    return RepoNotificacionesSQL(engine)
 
 
 def _resolver_dep(fabrica: Any) -> Any:
@@ -336,6 +342,18 @@ class PortalInvitarUsuarioIn(BaseModel):
     ttl_horas: int = 48
 
 
+class PushTokenUpdateIn(BaseModel):
+    device_id: str
+    push_token: str
+
+
+class WebPushSuscripcionIn(BaseModel):
+    endpoint: str
+    p256dh: str = ""
+    auth: str = ""
+    user_agent: str = ""
+
+
 # ── Auth Vendedores (App Móvil) ───────────────────────────────────────────────
 
 
@@ -359,6 +377,12 @@ def v1_auth_login(body: LoginV1In, request: Request, repo_v1: RepoV1Dep) -> dict
 
     user_info, err_msg = autenticar_usuario(execute, repo, email_clean, body.password)
     if not user_info:
+        repo_v1.registrar_evento_seguridad_v1(
+            email=email_clean,
+            evento="v1_vendedor_login_fail",
+            detalle={"ip": ip, "motivo": err_msg or "Credenciales inválidas"},
+            actor=f"ip:{ip}",
+        )
         raise HTTPException(status_code=401, detail=err_msg or "Credenciales inválidas.")
 
     _RATE_LIMITER_V1.limpiar(f"v1_vend:{ip}", email_clean)
@@ -379,6 +403,12 @@ def v1_auth_login(body: LoginV1In, request: Request, repo_v1: RepoV1Dep) -> dict
         device_id=str(disp["device_id"]),
         password_version=pwd_ver,
         ip_origen=ip,
+    )
+    repo_v1.registrar_evento_seguridad_v1(
+        email=email_clean,
+        evento="v1_vendedor_login_ok",
+        detalle={"device_id": disp["device_id"], "plataforma": body.plataforma, "ip": ip},
+        actor=email_clean,
     )
     access_tok = crear_access_token(
         subject=email_clean,
@@ -421,6 +451,13 @@ def v1_auth_refresh(body: RefreshV1In, request: Request, repo_v1: RepoV1Dep) -> 
             repo_v1.revocar_refresh_tokens_sujeto(sujeto_tipo="vendedor", sujeto_id=user["email"])
             raise ApiV1NoAutorizado("Sesión invalidada tras cambio de contraseña.")
     except ApiV1NoAutorizado as exc:
+        if "reuso" in str(exc).lower():
+            repo_v1.registrar_evento_seguridad_v1(
+                email="desconocido",
+                evento="v1_refresh_reuse_alert",
+                detalle={"sujeto_tipo": "vendedor", "ip": _client_ip(request), "detalle": str(exc)},
+                actor=f"ip:{_client_ip(request)}",
+            )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     access_tok = crear_access_token(
@@ -462,6 +499,12 @@ def v1_auth_logout(
         sujeto_id=sujeto_id,
         device_id=body.device_id or None,
         raw_refresh_token=body.refresh_token or None,
+    )
+    repo_v1.registrar_evento_seguridad_v1(
+        email=sujeto_id or "desconocido",
+        evento="v1_vendedor_logout",
+        detalle={"device_id": body.device_id, "revocados": revocados},
+        actor=sujeto_id or "vendedor",
     )
     return {"status": "ok", "revocados": revocados}
 
@@ -666,6 +709,12 @@ def v1_admin_crear_invitacion_portal(
         )
     except ApiV1Error as exc:
         return JSONResponse(status_code=422, content={"error": str(exc)})
+    repo_v1.registrar_evento_seguridad_v1(
+        email=body.email,
+        evento="v1_portal_invitacion_creada",
+        detalle={"cliente_id": body.cliente_id, "rol_portal": body.rol_portal},
+        actor=str(user.get("email") or user.get("nombre") or "admin"),
+    )
     return JSONResponse(
         status_code=201,
         content={
@@ -691,7 +740,7 @@ def v1_admin_actualizar_cuenta_portal(
     cuenta_id: int,
     body: ActualizarCuentaPortalIn,
     repo_v1: RepoV1Dep,
-    _user: Annotated[dict[str, Any], Depends(_admin_portal)],
+    user: Annotated[dict[str, Any], Depends(_admin_portal)],
 ) -> JSONResponse:
     try:
         actualizado = repo_v1.actualizar_cuenta_portal(
@@ -703,6 +752,12 @@ def v1_admin_actualizar_cuenta_portal(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApiV1Error as exc:
         return JSONResponse(status_code=422, content={"error": str(exc)})
+    repo_v1.registrar_evento_seguridad_v1(
+        email=str(actualizado.get("email") or f"cuenta:{cuenta_id}"),
+        evento="v1_portal_cuenta_actualizada",
+        detalle={"cuenta_id": cuenta_id, "activo": body.activo, "rol_portal": body.rol_portal},
+        actor=str(user.get("email") or user.get("nombre") or "admin"),
+    )
     return JSONResponse(status_code=200, content=actualizado)
 
 
@@ -726,6 +781,12 @@ def v1_portal_activar_invitacion(
         return JSONResponse(status_code=409, content={"error": str(exc)})
     except ApiV1Error as exc:
         return JSONResponse(status_code=422, content={"error": str(exc)})
+    repo_v1.registrar_evento_seguridad_v1(
+        email=str(cuenta.get("email") or ""),
+        evento="v1_portal_activacion_ok",
+        detalle={"cuenta_id": cuenta.get("cuenta_id"), "cliente_id": cuenta.get("cliente_id")},
+        actor=str(cuenta.get("email") or "portal"),
+    )
     return JSONResponse(status_code=200, content={"status": "activada", "cuenta": cuenta})
 
 
@@ -745,6 +806,12 @@ def v1_portal_auth_login(
     try:
         cuenta = repo_v1.autenticar_cuenta_portal(email=email_clean, password=body.password)
     except ApiV1NoAutorizado as exc:
+        repo_v1.registrar_evento_seguridad_v1(
+            email=email_clean,
+            evento="v1_portal_login_fail",
+            detalle={"ip": ip, "motivo": str(exc)},
+            actor=f"ip:{ip}",
+        )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     _RATE_LIMITER_V1.limpiar(f"v1_portal:{ip}", email_clean)
@@ -764,6 +831,12 @@ def v1_portal_auth_login(
         device_id=str(disp["device_id"]),
         password_version=pwd_ver,
         ip_origen=ip,
+    )
+    repo_v1.registrar_evento_seguridad_v1(
+        email=email_clean,
+        evento="v1_portal_login_ok",
+        detalle={"cuenta_id": cuenta["cuenta_id"], "cliente_id": cuenta["cliente_id"], "ip": ip},
+        actor=email_clean,
     )
     access_tok = crear_access_token(
         subject=sujeto_id,
@@ -813,6 +886,17 @@ def v1_portal_auth_refresh(
             )
             raise ApiV1NoAutorizado("Cuenta de portal desactivada.")
     except ApiV1NoAutorizado as exc:
+        if "reuso" in str(exc).lower():
+            repo_v1.registrar_evento_seguridad_v1(
+                email="desconocido",
+                evento="v1_portal_refresh_reuse_alert",
+                detalle={
+                    "sujeto_tipo": "cliente_portal",
+                    "ip": _client_ip(request),
+                    "detalle": str(exc),
+                },
+                actor=f"ip:{_client_ip(request)}",
+            )
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     access_tok = crear_access_token(
@@ -1521,6 +1605,12 @@ def v1_portal_titular_invitar_usuario(
         )
     except ApiV1Error as exc:
         return JSONResponse(status_code=422, content={"error": str(exc)})
+    repo_v1.registrar_evento_seguridad_v1(
+        email=body.email,
+        evento="v1_portal_invitacion_creada_por_titular",
+        detalle={"cliente_id": cuenta["cliente_id"], "rol_portal": body.rol_portal},
+        actor=f"portal:{cuenta['email']}",
+    )
     return JSONResponse(
         status_code=201,
         content={
@@ -1563,4 +1653,129 @@ def v1_portal_titular_actualizar_usuario(
         )
     except ApiV1Error as exc:
         return JSONResponse(status_code=422, content={"error": str(exc)})
+    repo_v1.registrar_evento_seguridad_v1(
+        email=str(actualizado.get("email") or ""),
+        evento="v1_portal_usuario_modificado_por_titular",
+        detalle={"cuenta_id": cuenta_id, "activo": body.activo, "rol_portal": body.rol_portal},
+        actor=f"portal:{cuenta['email']}",
+    )
     return JSONResponse(status_code=200, content=actualizado)
+
+
+# ── Fase 4: Push Multicanal, Adjuntos R2/S3 Seguros y Observabilidad Piloto ───
+
+
+@router.post("/dispositivos/push-token")
+def v1_registrar_push_token(
+    body: PushTokenUpdateIn,
+    user: VendedorV1Dep,
+    repo_v1: RepoV1Dep,
+) -> dict[str, Any]:
+    if not body.device_id.strip():
+        raise HTTPException(status_code=422, detail="device_id es obligatorio.")
+    disp = repo_v1.actualizar_push_token(
+        device_id=body.device_id,
+        sujeto_tipo="vendedor",
+        sujeto_id=str(user["email"]),
+        push_token=body.push_token,
+    )
+    return {"status": "ok", "dispositivo": disp}
+
+
+@router.get("/notificaciones")
+def v1_listar_notificaciones(
+    actor: CualquierActorV1Dep,
+    limit: int = 50,
+) -> dict[str, Any]:
+    repo_n = _resolver_dep(get_repo_notificaciones)
+    items = repo_n.listar_para_sujeto(
+        sujeto_tipo=str(actor["actor_tipo"]),
+        sujeto_id=str(actor["actor_id"]),
+        limit=limit,
+    )
+    return {
+        "actor_tipo": actor["actor_tipo"],
+        "total": len(items),
+        "no_leidas": sum(1 for x in items if not x.get("leida_en")),
+        "items": items,
+    }
+
+
+@router.post("/notificaciones/{notificacion_id}/leer")
+def v1_marcar_notificacion_leida(
+    notificacion_id: int,
+    actor: CualquierActorV1Dep,
+) -> dict[str, Any]:
+    repo_n = _resolver_dep(get_repo_notificaciones)
+    act = repo_n.marcar_leida(
+        notificacion_id,
+        sujeto_tipo=str(actor["actor_tipo"]),
+        sujeto_id=str(actor["actor_id"]),
+    )
+    if act is None:
+        raise HTTPException(status_code=404, detail="Notificación no encontrada.")
+    return {"status": "ok", "notificacion": act}
+
+
+@router.post("/portal/push/suscribir")
+def v1_portal_suscribir_web_push(
+    body: WebPushSuscripcionIn,
+    cuenta: ClientePortalV1Dep,
+) -> JSONResponse:
+    if not body.endpoint.strip().startswith("https://"):
+        return JSONResponse(
+            status_code=422, content={"error": "El endpoint Web Push debe iniciar con https://."}
+        )
+    repo_n = _resolver_dep(get_repo_notificaciones)
+    sub = repo_n.registrar_web_push(
+        sujeto_tipo="cliente_portal",
+        sujeto_id=str(cuenta["cuenta_id"]),
+        endpoint=body.endpoint,
+        p256dh=body.p256dh,
+        auth=body.auth,
+        user_agent=body.user_agent,
+    )
+    return JSONResponse(status_code=201, content={"status": "suscrita", "suscripcion": sub})
+
+
+@router.get("/adjuntos/{adjunto_id}/url")
+def v1_obtener_url_adjunto(
+    adjunto_id: int,
+    actor: CualquierActorV1Dep,
+    storage: StorageV1Dep,
+) -> dict[str, Any]:
+    try:
+        info = storage.preparar_descarga_segura(adjunto_id, expires=300)
+    except AdjuntoError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if info is None:
+        raise HTTPException(status_code=404, detail="Adjunto no encontrado.")
+    if actor["actor_tipo"] == "cliente_portal" and (
+        info.get("subido_por_tipo") != "cliente_portal"
+        or str(info.get("subido_por_id")) != str(actor["actor_id"])
+    ):
+        raise HTTPException(
+            status_code=403, detail="No autorizado para acceder a este comprobante."
+        )
+    return {
+        "adjunto_id": info["adjunto_id"],
+        "storage_backend": info["storage_backend"],
+        "mime": info["mime"],
+        "bytes": info["bytes"],
+        "expires_in": info["expires_in"],
+        "download_url": info["download_url"],
+        "descarga_local": info["descarga_local"],
+    }
+
+
+@router.get("/observabilidad/metricas-piloto")
+def v1_observabilidad_metricas_piloto(
+    repo_v1: RepoV1Dep,
+    storage: StorageV1Dep,
+    _user: Annotated[dict[str, Any], Depends(_admin_portal)],
+) -> dict[str, Any]:
+    repo_n = _resolver_dep(get_repo_notificaciones)
+    metricas = repo_v1.metricas_piloto()
+    metricas["storage"] = storage.estado_storage()
+    metricas["push_outbox"] = repo_n.resumen_salud()
+    return metricas

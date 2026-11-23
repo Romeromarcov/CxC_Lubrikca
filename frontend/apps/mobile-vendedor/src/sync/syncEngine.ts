@@ -187,6 +187,17 @@ export class SyncEngine {
     return rep;
   }
 
+  async registrarPushToken(deviceId: string, pushToken: string): Promise<boolean> {
+    if (!deviceId.trim() || !pushToken.trim()) return false;
+    try {
+      await this.api.registrarPushToken(deviceId, pushToken);
+      return true;
+    } catch (err) {
+      await this.manejarErrorHttp(err);
+      return false;
+    }
+  }
+
   adjuntarListenerRed(deviceId: string, onSynced?: (report: SyncReport) => void): () => void {
     let previoOnline = false;
     return NetInfo.addEventListener((state) => {

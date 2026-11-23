@@ -6,7 +6,10 @@ import hashlib
 import hmac
 import os
 import re
+import urllib.error
+import urllib.request
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,13 +58,14 @@ def _s3_config() -> dict[str, str] | None:
     return None
 
 
-def _sigv4_presigned_put(
+def _sigv4_presigned_url(
     cfg: dict[str, str],
     *,
+    method: str,
     key: str,
     expires: int = 300,
 ) -> str:
-    """Firma URL PUT prefirmada AWS SigV4 compatible con Cloudflare R2 / S3 usando stdlib."""
+    """Firma URL prefirmada AWS SigV4 (GET o PUT) compatible con Cloudflare R2 / S3."""
     now = datetime.now(UTC)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
@@ -79,7 +83,7 @@ def _sigv4_presigned_put(
     canonical_qs = "&".join(f"{k}={quote(v, safe='')}" for k, v in sorted(query_params))
     canonical_req = "\n".join(
         [
-            "PUT",
+            method.upper(),
             canonical_uri,
             canonical_qs,
             f"host:{host}\n",
@@ -105,6 +109,15 @@ def _sigv4_presigned_put(
     k_signing = _hmac(k_service, "aws4_request")
     sig = hmac.new(k_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{endpoint}{canonical_uri}?{canonical_qs}&X-Amz-Signature={sig}"
+
+
+def _sigv4_presigned_put(
+    cfg: dict[str, str],
+    *,
+    key: str,
+    expires: int = 300,
+) -> str:
+    return _sigv4_presigned_url(cfg, method="PUT", key=key, expires=expires)
 
 
 class AdjuntosStorage:
@@ -250,3 +263,79 @@ class AdjuntosStorage:
             entidad_tipo=entidad_tipo,
             entidad_id=entidad_id,
         )
+
+    def estado_storage(self) -> dict[str, Any]:
+        s3 = _s3_config()
+        return {
+            "backend_activo": "s3_r2" if s3 is not None else "local",
+            "s3_configurado": s3 is not None,
+            "bucket": s3["bucket"] if s3 is not None else "",
+            "local_dir": str(self._local_dir),
+        }
+
+    def preparar_descarga_segura(
+        self, adjunto_id: int, *, expires: int = 300
+    ) -> dict[str, Any] | None:
+        reg = self._repo.obtener_adjunto(adjunto_id)
+        if reg is None:
+            return None
+        s3 = _s3_config()
+        key = str(reg["storage_key"])
+        if str(reg.get("storage_backend")) == "s3_r2" and s3 is not None:
+            url = _sigv4_presigned_url(s3, method="GET", key=key, expires=expires)
+            return {
+                "adjunto_id": int(reg["adjunto_id"]),
+                "storage_backend": "s3_r2",
+                "storage_key": key,
+                "mime": reg["mime"],
+                "bytes": int(reg["bytes"]),
+                "expires_in": expires,
+                "download_url": url,
+                "descarga_local": False,
+                "subido_por_tipo": reg["subido_por_tipo"],
+                "subido_por_id": reg["subido_por_id"],
+            }
+        archivo = (self._local_dir / key.lstrip("/")).resolve()
+        base_resolved = self._local_dir.resolve()
+        if base_resolved not in archivo.parents or not archivo.is_file():
+            raise AdjuntoError("Archivo local no encontrado o fuera del directorio permitido.")
+        return {
+            "adjunto_id": int(reg["adjunto_id"]),
+            "storage_backend": "local",
+            "storage_key": key,
+            "mime": reg["mime"],
+            "bytes": int(reg["bytes"]),
+            "expires_in": expires,
+            "download_url": None,
+            "descarga_local": True,
+            "archivo_path": str(archivo),
+            "subido_por_tipo": reg["subido_por_tipo"],
+            "subido_por_id": reg["subido_por_id"],
+        }
+
+    def subir_bytes_r2(
+        self,
+        *,
+        key: str,
+        contenido: bytes,
+        mime: str,
+        http_put: Callable[[str, bytes, str], int] | None = None,
+    ) -> str:
+        s3 = _s3_config()
+        if s3 is None:
+            raise AdjuntoError("Variables S3/R2 (S3_ENDPOINT_URL, S3_BUCKET, ...) no configuradas.")
+        put_url = _sigv4_presigned_url(s3, method="PUT", key=key, expires=300)
+        if http_put is not None:
+            code = http_put(put_url, contenido, mime)
+        else:
+            req = urllib.request.Request(
+                put_url,
+                data=contenido,
+                method="PUT",
+                headers={"Content-Type": mime},
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                code = resp.status
+        if code < 200 or code >= 300:
+            raise AdjuntoError(f"Error subiendo a R2/S3 (HTTP {code}).")
+        return put_url
