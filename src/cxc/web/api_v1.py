@@ -1215,6 +1215,7 @@ def v1_portal_registrar_pago(
             detail="Tu rol en el portal no permite registrar pagos.",
         )
     repo, engine = _repo_y_engine()
+    repo_v1: RepoApiV1SQL = _resolver_dep(get_repo_api_v1)
     svc_ops: ServicioOperativos = _resolver_dep(get_servicio_operativos)
 
     pid = cuenta.get("partner_odoo_id")
@@ -1226,6 +1227,31 @@ def v1_portal_registrar_pago(
         "partner_odoo_id": pid,
         "contraparte_nombre": cuenta.get("cliente_nombre") or f"Cliente #{cuenta['cliente_id']}",
     }
+
+    adj_id_val: int | None = None
+    adj_key_val = ""
+    adj_raw = datos.get("comprobante_adjunto_id")
+    if adj_raw not in (None, "", False):
+        try:
+            adj_id = int(str(adj_raw))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="comprobante_adjunto_id inválido."
+            ) from exc
+        adj = repo_v1.obtener_adjunto(adj_id)
+        if adj is None:
+            raise HTTPException(
+                status_code=404, detail="Comprobante adjunto no encontrado."
+            )
+        if str(adj.get("subido_por_tipo") or "") != "cliente_portal" or str(
+            adj.get("subido_por_id") or ""
+        ) != str(cuenta["cuenta_id"]):
+            raise HTTPException(
+                status_code=403,
+                detail="No autorizado para vincular este comprobante adjunto.",
+            )
+        adj_id_val = int(adj["adjunto_id"])
+        adj_key_val = str(adj.get("storage_key") or "")
 
     pedido_ref = str(datos.get("pedido_ref") or "").strip()
     if pedido_ref:
@@ -1293,7 +1319,14 @@ def v1_portal_registrar_pago(
             status_code=422,
             content={"error": str(exc), "faltan": list(getattr(exc, "faltan", []))},
         )
-    return JSONResponse(status_code=201, content=op.a_dict())
+    resp_op = op.a_dict()
+    if adj_id_val is not None:
+        repo_v1.vincular_adjunto_entidad(
+            adj_id_val, entidad_tipo="operativo", entidad_id=str(op.documento_id)
+        )
+        resp_op["comprobante_adjunto_id"] = adj_id_val
+        resp_op["comprobante_storage_key"] = adj_key_val
+    return JSONResponse(status_code=201, content=resp_op)
 
 
 @router.get("/portal/estado-cuenta/export")

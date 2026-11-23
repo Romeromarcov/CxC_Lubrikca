@@ -1,9 +1,9 @@
 # Runbook Operativo: Piloto Controlado y Go-Live App Móvil + Portal de Clientes (Lubrikca)
 
-## 1. Arquitectura Desplegada (Fases 1–4)
-- **Backend unificado (`CxC_Lubrikca`)**: `/api/v1/*` con aislamiento estricto de audiencias (`lubrikca-seller-app` vs `lubrikca-client-portal`), idempotencia (`sync_idempotency_keys`), push outbox anti-loop (`notificaciones_push_outbox`), suscripciones Web Push (`web_push_suscripciones`) y bitácora unificada (`accesos_bitacora`).
-- **App Móvil Vendedores (`frontend/apps/mobile-vendedor`)**: React Native + Expo SDK 52 + SQLite WAL offline-first, validador SUDEBAN offline (`BANCOS_SUDEBAN` `0102`–`0191`), detección de duplicados y máquina Outbox anti-loop (`400`/`403`/`404`/`409`/`422` -> `CONFLICT_USER_ACTION`).
-- **Portal de Clientes PWA (`frontend/apps/portal-clientes` servida en `/portal`)**: Estado de cuenta dual **Ruta BCV** vs **Ruta Binance**, recompra rápida, cuentas filtradas por ruta, trazabilidad 5 pasos y gestión de equipo para rol `titular`.
+## 1. Arquitectura Desplegada (Fases 1–4 + Cierre Go-Live)
+- **Backend unificado (`CxC_Lubrikca`)**: `/api/v1/*` con aislamiento estricto de audiencias (`lubrikca-seller-app` vs `lubrikca-client-portal`), idempotencia (`sync_idempotency_keys`), push outbox anti-loop (`notificaciones_push_outbox`) conectado al daemon (`run_despachador_push_en_background` + alertas automáticas por variación de tasa >= 1.5%), suscripciones Web Push (`web_push_suscripciones`) y bitácora unificada (`accesos_bitacora`).
+- **App Móvil Vendedores (`frontend/apps/mobile-vendedor`)**: React Native + Expo SDK 52 + SQLite WAL offline-first, `deviceId` único persistido por dispositivo en `SecureStore`, validador SUDEBAN offline (`BANCOS_SUDEBAN` `0102`–`0191`), detección de duplicados, máquina Outbox anti-loop (`400`/`403`/`404`/`409`/`422` -> `CONFLICT_USER_ACTION`) y perfiles EAS (`eas.json`) para APK `preview` y bundle `production`.
+- **Portal de Clientes PWA (`frontend/apps/portal-clientes` servida en `/portal`)**: Estado de cuenta dual **Ruta BCV** vs **Ruta Binance**, recompra rápida, cuentas filtradas por ruta, subida directa de comprobante (JPG/PNG/WEBP/PDF vía SHA-256 + presign R2/S3 o local HMAC), Service Worker con soporte `push` + `notificationclick`, trazabilidad 5 pasos y gestión de equipo para rol `titular`.
 
 ---
 
@@ -24,8 +24,13 @@
 ---
 
 ## 3. Protocolo de Piloto en `staging_V1` (2–3 Vendedores + 3–5 Clientes)
-1. **Preparar cuentas**:
-   - Verificar que los vendedores piloto tengan clave creada en `CxC` (`usuarios_plataforma`) y su teléfono instale la app apuntando a `EXPO_PUBLIC_CXC_API_URL=https://cxclubrikca-stagingv1.up.railway.app`.
+1. **Preparar cuentas y APK piloto**:
+   - Compilar el APK interno para vendedores desde `frontend/apps/mobile-vendedor`:
+     ```bash
+     npx eas build --profile preview --platform android
+     ```
+     (Usa `EXPO_PUBLIC_CXC_API_URL=https://cxclubrikca-stagingv1.up.railway.app` definido en `eas.json`.)
+   - Verificar que los vendedores piloto tengan clave creada en `CxC` (`usuarios_plataforma`).
    - Desde **Contactos -> 🌐 Portal Clientes**, emitir invitaciones de 48h (`titular`) a 3–5 clientes piloto y entregarles su enlace `/portal/activar?token=...`.
 2. **Pruebas obligatorias de campo (modo avión / reconexión)**:
    - Buscar catálogo y stock en modo avión, crear 1 cotización y 1 pedido offline.

@@ -441,4 +441,20 @@ describe("MobileSqliteRepo + SyncEngine offline-first", () => {
       push_token: "ExponentPushToken[abc]",
     });
   });
+
+  it("genera y persiste un deviceId único por instalación en SecureStore", async () => {
+    const kv = new MemoryKv();
+    const store1 = new MobileSessionStore(kv);
+    const id1 = await store1.obtenerOCrearDeviceId();
+    expect(id1.startsWith("lubrikca-")).toBe(true);
+    expect(id1).not.toBe("lubrikca-expo-device");
+
+    const store2 = new MobileSessionStore(kv);
+    const id2 = await store2.obtenerOCrearDeviceId();
+    expect(id2).toBe(id1);
+
+    const otroStore = new MobileSessionStore(new MemoryKv());
+    const idOtro = await otroStore.obtenerOCrearDeviceId();
+    expect(idOtro).not.toBe(id1);
+  });
 });

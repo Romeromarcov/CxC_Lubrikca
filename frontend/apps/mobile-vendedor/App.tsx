@@ -29,6 +29,7 @@ export default function App(): React.JSX.Element {
   const repo = useMemo(() => new MobileSqliteRepo(new ExpoSqliteExecutor()), []);
   const sessionStore = useMemo(() => new MobileSessionStore(), []);
   const [session, setSession] = useState<SessionTokens | null>(null);
+  const [deviceId, setDeviceId] = useState<string>("");
   const [listo, setListo] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [tab, setTab] = useState<TabId>("catalogo");
@@ -61,6 +62,8 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     void (async () => {
       await repo.init();
+      const devId = await sessionStore.obtenerOCrearDeviceId();
+      setDeviceId(devId);
       const s = await sessionStore.leerSesion();
       if (s && (await sessionStore.verificarBiometriaSiDisponible())) {
         setSession(s);
@@ -101,7 +104,7 @@ export default function App(): React.JSX.Element {
         <LoginScreen
           api={api}
           sessionStore={sessionStore}
-          deviceId="lubrikca-expo-device"
+          deviceId={deviceId || "lubrikca-pending-device"}
           onLoggedIn={(s) => {
             setSession(s);
             void syncEngine.sincronizarCompleto(s.device_id);

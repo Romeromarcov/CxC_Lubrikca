@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { CuentaReceptora } from "@lubrikca/domain-ts";
 
 import {
+  calcularSha256Hex,
   filtrarCuentasPorRutaPago,
   permisosPorRolPortal,
   prepararCarritoRecompra,
+  validarArchivoComprobante,
   validarPagoPortalAntesDeEnviar,
 } from "../portalLogic";
 
@@ -107,5 +109,17 @@ describe("Portal Clientes — RBAC, Recompra y Filtrado por Ruta", () => {
       cuentasRuta: bin,
     });
     expect(rutaCruzada.valido).toBe(false);
+  });
+
+  it("valida formato/tamaño del comprobante y calcula SHA-256 hex", async () => {
+    expect(validarArchivoComprobante({ type: "image/jpeg", size: 1024 }).valido).toBe(true);
+    expect(validarArchivoComprobante({ type: "application/pdf", size: 2048 }).valido).toBe(true);
+    expect(validarArchivoComprobante({ type: "text/plain", size: 128 }).valido).toBe(false);
+    expect(validarArchivoComprobante({ type: "image/png", size: 11 * 1024 * 1024 }).valido).toBe(
+      false,
+    );
+
+    const sha = await calcularSha256Hex(new TextEncoder().encode("abc"));
+    expect(sha).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   });
 });

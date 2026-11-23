@@ -636,6 +636,19 @@ class RepoApiV1SQL:
                 .values(storage_backend=storage_backend[:32])
             )
 
+    def vincular_adjunto_entidad(
+        self, adjunto_id: int, entidad_tipo: str, entidad_id: str
+    ) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(adjuntos_objeto)
+                .where(adjuntos_objeto.c.adjunto_id == int(adjunto_id))
+                .values(
+                    entidad_tipo=str(entidad_tipo)[:40],
+                    entidad_id=str(entidad_id)[:64],
+                )
+            )
+
     def actualizar_push_token(
         self,
         *,

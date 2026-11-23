@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BANCOS_SUDEBAN,
+  LubrikcaApiClient,
   clasificarErrorRed,
   clasificarResultadoPush,
   describirResolucionConflicto,
@@ -291,5 +292,77 @@ describe("Anti-duplicados de contactos y Outbox anti-loop", () => {
     expect(describirResolucionConflicto({ retenidoAprobacion: true }).escenario).toBe(
       "PENDIENTE_APROBACION",
     );
+  });
+
+  it("sube comprobante por presign + PUT y respeta dedupe SHA-256", async () => {
+    let putCalls = 0;
+    const api = new LubrikcaApiClient({
+      baseUrl: "https://cxc.test",
+      getAccessToken: async () => "tok-portal",
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/adjuntos/presign")) {
+          const b = JSON.parse(String(init?.body ?? "{}")) as { sha256: string };
+          if (b.sha256.startsWith("dup")) {
+            return new Response(
+              JSON.stringify({
+                ya_existe: true,
+                adjunto_id: 99,
+                storage_key: "adjuntos/dup.jpg",
+                storage_backend: "local",
+                upload_method: null,
+                upload_url: null,
+                sha256: b.sha256,
+              }),
+              { status: 200 },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              ya_existe: false,
+              adjunto_id: null,
+              storage_key: "adjuntos/nuevo.jpg",
+              storage_backend: "local",
+              upload_method: "PUT",
+              upload_url: "/api/v1/adjuntos/upload/tok-up",
+              sha256: b.sha256,
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith("/api/v1/adjuntos/upload/tok-up")) {
+          putCalls += 1;
+          return new Response(
+            JSON.stringify({
+              adjunto_id: 45,
+              storage_key: "adjuntos/nuevo.jpg",
+              storage_backend: "local",
+              sha256: "a".repeat(64),
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("{}", { status: 404 });
+      },
+    });
+
+    const sub1 = await api.subirAdjuntoBytes({
+      bytes: new Uint8Array([1, 2, 3]),
+      mime: "image/jpeg",
+      sha256: "a".repeat(64),
+      nombre_archivo: "comprobante.jpg",
+      authMode: "portal",
+    });
+    expect(sub1.adjunto_id).toBe(45);
+    expect(putCalls).toBe(1);
+
+    const subDup = await api.subirAdjuntoBytes({
+      bytes: new Uint8Array([1, 2, 3]),
+      mime: "image/jpeg",
+      sha256: "dup" + "0".repeat(61),
+      authMode: "portal",
+    });
+    expect(subDup.adjunto_id).toBe(99);
+    expect(putCalls).toBe(1);
   });
 });

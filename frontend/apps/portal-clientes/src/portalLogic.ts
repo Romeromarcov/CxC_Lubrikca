@@ -139,3 +139,42 @@ export function validarPagoPortalAntesDeEnviar(params: {
   }
   return { valido: true };
 }
+
+export const MIMES_COMPROBANTE_PORTAL = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/pdf",
+] as const;
+
+export const MAX_BYTES_COMPROBANTE_PORTAL = 10 * 1024 * 1024;
+
+export function validarArchivoComprobante(file: {
+  type: string;
+  size: number;
+  name?: string;
+}): { valido: boolean; error?: string } {
+  const mime = String(file.type || "").trim().toLowerCase();
+  if (!MIMES_COMPROBANTE_PORTAL.includes(mime as (typeof MIMES_COMPROBANTE_PORTAL)[number])) {
+    return {
+      valido: false,
+      error: "Formato no permitido. Sube una imagen JPG/PNG/WEBP o PDF.",
+    };
+  }
+  if (!Number.isFinite(file.size) || file.size <= 0) {
+    return { valido: false, error: "El archivo está vacío." };
+  }
+  if (file.size > MAX_BYTES_COMPROBANTE_PORTAL) {
+    return { valido: false, error: "El comprobante excede el límite de 10 MB." };
+  }
+  return { valido: true };
+}
+
+export async function calcularSha256Hex(bytes: Uint8Array): Promise<string> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", copy.buffer);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
