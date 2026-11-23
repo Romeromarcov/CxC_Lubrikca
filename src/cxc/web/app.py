@@ -15,6 +15,7 @@ from collections import defaultdict
 from dataclasses import replace as dataclasses_replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -29,6 +30,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
@@ -4087,6 +4089,49 @@ async def handle_logout_post():
     )
     res.delete_cookie(key="cxc_session")
     return res
+
+
+def _portal_static_root() -> Path:
+    return (Path(static_dir) / "portal").resolve()
+
+
+@app.get("/portal/manifest.webmanifest")
+async def serve_portal_manifest():
+    f_path = (_portal_static_root() / "manifest.webmanifest").resolve()
+    if not f_path.is_relative_to(_portal_static_root()) or not f_path.is_file():
+        raise HTTPException(status_code=404, detail="Manifest del portal no encontrado.")
+    return FileResponse(f_path, media_type="application/manifest+json")
+
+
+@app.get("/portal/sw.js")
+async def serve_portal_sw():
+    f_path = (_portal_static_root() / "sw.js").resolve()
+    if not f_path.is_relative_to(_portal_static_root()) or not f_path.is_file():
+        raise HTTPException(status_code=404, detail="Service worker del portal no encontrado.")
+    return FileResponse(
+        f_path,
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/portal"},
+    )
+
+
+@app.get("/portal")
+@app.get("/portal/{subpath:path}")
+async def serve_portal_spa(subpath: str = ""):
+    root = _portal_static_root()
+    clean = subpath.lstrip("/")
+    if clean:
+        candidate = (root / clean).resolve()
+        if candidate.is_relative_to(root) and candidate.is_file():
+            return FileResponse(candidate)
+    index_f = (root / "index.html").resolve()
+    if not index_f.is_file():
+        return HTMLResponse(
+            "<html><body><h1>Portal de Clientes · Lubrikca</h1>"
+            "<p>Build del portal no generado aún.</p></body></html>",
+            status_code=200,
+        )
+    return FileResponse(index_f)
 
 
 def render_page_or_login(page_name: str, cxc_session: str | None):

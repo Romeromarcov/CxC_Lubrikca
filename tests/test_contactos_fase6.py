@@ -483,7 +483,7 @@ def test_pagina_contactos_html_contiene_maestro_y_subtabs() -> None:
         assert 'id="contactos-maestro-body"' in html
         assert 'id="contactos-duplicados-lista"' in html
         assert 'id="dir-contactos-body"' in html
-        assert "js/contactos_maestro.js?v=20261119_8" in html
+        assert "js/contactos_maestro.js?v=20261122_fase3" in html
 
 
 # ── Pruebas RepoContactosSQL (SQLite en memoria + Postgres CI si disponible) ──

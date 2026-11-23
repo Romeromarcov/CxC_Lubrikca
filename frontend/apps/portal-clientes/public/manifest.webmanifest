@@ -1,0 +1,18 @@
+{
+  "name": "Portal de Clientes · Lubrikca",
+  "short_name": "Lubrikca",
+  "description": "Estado de cuenta BCV/Binance, pedidos, recompra rápida y registro de pagos Lubrikca.",
+  "start_url": "/portal/",
+  "scope": "/portal/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e40af",
+  "icons": [
+    {
+      "src": "/portal/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

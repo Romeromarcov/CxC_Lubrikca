@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import csv
+import html
+import io
 import json
 import logging
 import re
@@ -10,7 +13,7 @@ from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Cookie, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import Engine
 
@@ -51,7 +54,11 @@ from cxc.documentos.preview_html import renderizar_preview_cotizacion
 from cxc.documentos.repositorio import RepoDocumentosSQL
 from cxc.documentos.servicio import DocumentoNoEncontrado, ServicioDocumentos
 from cxc.engine.rutas_pago import RUTA_BCV, RUTA_BINANCE, normalizar_ruta, ruta_de_lista
-from cxc.engine.saldos_propios import estado_cuenta_cliente
+from cxc.engine.saldos_propios import (
+    ESTADOS_ORDEN_CONFIRMADA,
+    ESTADOS_VINC_CONFIRMADA,
+    estado_cuenta_cliente,
+)
 from cxc.odoo.client import _connect
 from cxc.operativos.cuentas_receptoras import RepoCuentasReceptorasSQL
 from cxc.operativos.lotes_efectivo import RepoLotesEfectivo
@@ -321,6 +328,12 @@ class ActivarInvitacionIn(BaseModel):
 class ActualizarCuentaPortalIn(BaseModel):
     activo: bool | None = None
     rol_portal: str | None = None
+
+
+class PortalInvitarUsuarioIn(BaseModel):
+    email: str
+    rol_portal: str = "compras"
+    ttl_horas: int = 48
 
 
 # ── Auth Vendedores (App Móvil) ───────────────────────────────────────────────
@@ -1197,3 +1210,357 @@ def v1_portal_registrar_pago(
             content={"error": str(exc), "faltan": list(getattr(exc, "faltan", []))},
         )
     return JSONResponse(status_code=201, content=op.a_dict())
+
+
+@router.get("/portal/estado-cuenta/export")
+def v1_portal_exportar_estado_cuenta(
+    cuenta: ClientePortalV1Dep,
+    formato: str = "csv",
+) -> Response:
+    ec = v1_portal_estado_cuenta(cuenta)
+    cli_nom = str(ec.get("cliente_nombre") or f"Cliente #{ec['cliente_id']}")
+    movs_bcv = list(ec["ruta_bcv"]["movimientos"])
+    movs_bin = list(ec["ruta_binance"]["movimientos"])
+
+    if formato.strip().lower() == "html":
+        filas_html = []
+        for ruta_lbl, movs in (("Ruta BCV", movs_bcv), ("Ruta Binance", movs_bin)):
+            for m in movs:
+                filas_html.append(
+                    "<tr>"
+                    f"<td>{html.escape(ruta_lbl)}</td>"
+                    f"<td>{html.escape(str(m.get('fecha') or ''))}</td>"
+                    f"<td>{html.escape(str(m.get('etiqueta') or m.get('tipo') or ''))}</td>"
+                    f"<td>{html.escape(str(m.get('referencia') or ''))}</td>"
+                    f"<td style='text-align:right'>${float(m.get('debito_usd') or 0):.2f}</td>"
+                    f"<td style='text-align:right'>${float(m.get('credito_usd') or 0):.2f}</td>"
+                    "</tr>"
+                )
+        html_doc = (
+            "<!doctype html><html lang='es'><head><meta charset='utf-8'>"
+            f"<title>Estado de Cuenta · {html.escape(cli_nom)}</title>"
+            "<style>body{font-family:system-ui,sans-serif;padding:24px;color:#0f172a}"
+            ".cards{display:flex;gap:16px;margin:16px 0}"
+            ".card{border:1px solid #cbd5e1;border-radius:10px;padding:12px 16px;flex:1}"
+            "table{width:100%;border-collapse:collapse;font-size:13px}"
+            "th,td{border-bottom:1px solid #e2e8f0;padding:8px;text-align:left}</style></head>"
+            "<body>"
+            f"<h1>Estado de Cuenta · {html.escape(cli_nom)}</h1>"
+            "<div class='cards'>"
+            "<div class='card'><strong>Saldo Ruta BCV</strong><div>"
+            f"${float(ec['ruta_bcv']['saldo_usd']):.2f} USD</div></div>"
+            "<div class='card'><strong>Saldo Ruta Binance</strong><div>"
+            f"${float(ec['ruta_binance']['saldo_usd']):.2f} USD</div></div>"
+            "</div>"
+            "<table><thead><tr><th>Ruta</th><th>Fecha</th><th>Concepto</th>"
+            "<th>Referencia</th><th>Débito USD</th><th>Crédito USD</th></tr></thead>"
+            f"<tbody>{''.join(filas_html) or '<tr><td colspan=6>Sin movimientos</td></tr>'}"
+            "</tbody></table></body></html>"
+        )
+        return HTMLResponse(content=html_doc)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Ruta", "Fecha", "Concepto", "Referencia", "Debito USD", "Credito USD"])
+    for ruta_lbl, movs in (("BCV", movs_bcv), ("BINANCE", movs_bin)):
+        for m in movs:
+            writer.writerow(
+                [
+                    ruta_lbl,
+                    str(m.get("fecha") or ""),
+                    str(m.get("etiqueta") or m.get("tipo") or ""),
+                    str(m.get("referencia") or ""),
+                    f"{float(m.get('debito_usd') or 0):.2f}",
+                    f"{float(m.get('credito_usd') or 0):.2f}",
+                ]
+            )
+    csv_bytes = ("\ufeff" + buf.getvalue()).encode("utf-8")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="estado_cuenta_lubrikca.csv"'},
+    )
+
+
+def _pasos_trazabilidad(
+    *,
+    cot_recibida: bool,
+    aprobado: bool,
+    despachado: bool,
+    facturado: bool,
+    pagado: bool,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "codigo": "cotizacion_recibida",
+            "titulo": "Cotización recibida",
+            "completado": cot_recibida,
+        },
+        {"codigo": "aprobado_ventas", "titulo": "Aprobado por Ventas", "completado": aprobado},
+        {"codigo": "despachado", "titulo": "Despachado", "completado": despachado},
+        {"codigo": "facturado", "titulo": "Facturado", "completado": facturado},
+        {"codigo": "pagado_conciliado", "titulo": "Pagado / Conciliado", "completado": pagado},
+    ]
+
+
+@router.get("/portal/pedidos")
+def v1_portal_pedidos(cuenta: ClientePortalV1Dep) -> dict[str, Any]:
+    repo, engine = _repo_y_engine()
+    svc_docs: ServicioDocumentos = _resolver_dep(get_servicio_documentos)
+    cid = str(cuenta["cliente_id"])
+
+    try:
+        entregas = repo.all_entregas()
+    except NotImplementedError:
+        entregas = []
+    entregas_done_so = {
+        str(e.so_id).upper()
+        for e in entregas
+        if e.so_id and e.estado == "done" and not e.es_devolucion
+    }
+
+    try:
+        facturas = repo.all_facturas()
+    except NotImplementedError:
+        facturas = []
+    facturas_so = {
+        str(f.so_id).upper()
+        for f in facturas
+        if f.so_id and f.estado == "posted" and f.move_type == "out_invoice"
+    }
+
+    pagos_por_id = {str(p.pago_id): p for p in repo.all_pagos() if str(p.cliente_id) == cid}
+    pagado_so: set[str] = set()
+    for v in repo.all_vinculaciones():
+        if v.estado in ESTADOS_VINC_CONFIRMADA and str(v.pago_id) in pagos_por_id:
+            pagado_so.add(str(v.so_id).upper())
+
+    mapeo: dict[str, Any] = {}
+    try:
+        raw_m = repo.get_config("pricelist_mapeo_unificado")
+        if raw_m and isinstance(raw_m, str):
+            parsed = json.loads(raw_m)
+            if isinstance(parsed, dict):
+                mapeo = parsed
+    except Exception:
+        mapeo = {}
+
+    pedidos_out: list[dict[str, Any]] = []
+    sos_vistos: set[str] = set()
+    ultimo_recompra: dict[str, Any] | None = None
+
+    docs_cli = [
+        d
+        for d in RepoDocumentosSQL(engine).listar(limit=500)[0]
+        if _es_dueno_registro(cuenta, partner_id=d.partner_odoo_id, nombre=d.cliente_nombre)
+    ]
+    for d in docs_cli:
+        so_up = (d.odoo_order_name or "").strip().upper()
+        if so_up:
+            sos_vistos.add(so_up)
+        aprobado = d.estado in ("APROBADO_AUTO", ENVIADO_ODOO) or bool(so_up)
+        despachado = bool(so_up and so_up in entregas_done_so)
+        facturado = bool(so_up and so_up in facturas_so)
+        pagado = bool(so_up and so_up in pagado_so)
+        pasos = _pasos_trazabilidad(
+            cot_recibida=True,
+            aprobado=aprobado,
+            despachado=despachado,
+            facturado=facturado,
+            pagado=pagado,
+        )
+        etapa = next(
+            (p["titulo"] for p in reversed(pasos) if p["completado"]), "Cotización recibida"
+        )
+        lineas_dict = [ln.a_dict() for ln in getattr(d, "lineas", ())]
+        if ultimo_recompra is None and lineas_dict:
+            ultimo_recompra = {
+                "referencia": d.odoo_order_name or d.numero,
+                "lista_precios_id": str(d.lista_precios_id or ""),
+                "ruta_pago": normalizar_ruta(d.ruta_pago) or RUTA_BCV,
+                "lineas": [
+                    {
+                        "producto_id": str(ln.get("producto_id") or ""),
+                        "codigo": str(ln.get("codigo") or ""),
+                        "descripcion": str(ln.get("descripcion") or ""),
+                        "cantidad": float(ln.get("cantidad") or 0),
+                        "precio_unitario": float(ln.get("precio_unitario") or 0),
+                    }
+                    for ln in lineas_dict
+                ],
+            }
+        pedidos_out.append(
+            {
+                "origen": "cxc",
+                "documento_id": d.documento_id,
+                "numero": d.numero,
+                "odoo_order_name": d.odoo_order_name,
+                "tipo": d.tipo,
+                "estado": d.estado,
+                "fecha": d.creado_en.date().isoformat() if d.creado_en else None,
+                "ruta_pago": normalizar_ruta(d.ruta_pago) or RUTA_BCV,
+                "total_usd": float(d.total_con_iva or d.subtotal_neto or d.subtotal or 0),
+                "etapa_actual": etapa,
+                "pasos": pasos,
+            }
+        )
+
+    catalogo_por_nombre = {
+        normalizar_nombre(it.nombre): it for it in svc_docs.catalogo_items()
+    }
+    ordenes_cli = sorted(
+        (
+            o
+            for o in repo.all_ordenes()
+            if str(o.cliente_id) == cid and o.estado_orden != "cancel"
+        ),
+        key=lambda x: (x.fecha, str(x.so_id)),
+        reverse=True,
+    )
+    for o in ordenes_cli:
+        so_up = str(o.so_id).strip().upper()
+        if so_up in sos_vistos:
+            continue
+        ruta_o = normalizar_ruta(getattr(o, "ruta_pago", "")) or ruta_de_lista(
+            o.lista_precios, mapeo
+        )
+        aprobado = o.estado_orden in ESTADOS_ORDEN_CONFIRMADA
+        despachado = bool(o.entregada_completa or so_up in entregas_done_so)
+        facturado = bool(o.facturada or so_up in facturas_so)
+        pagado = so_up in pagado_so
+        pasos = _pasos_trazabilidad(
+            cot_recibida=True,
+            aprobado=aprobado,
+            despachado=despachado,
+            facturado=facturado,
+            pagado=pagado,
+        )
+        etapa = next(
+            (p["titulo"] for p in reversed(pasos) if p["completado"]), "Cotización recibida"
+        )
+        if ultimo_recompra is None:
+            lns_ord = repo.lineas_de_orden(o.so_id)
+            lns_rec = []
+            for ln in lns_ord:
+                it_cat = catalogo_por_nombre.get(normalizar_nombre(ln.producto))
+                if it_cat is not None:
+                    lns_rec.append(
+                        {
+                            "producto_id": it_cat.producto_id,
+                            "codigo": it_cat.codigo,
+                            "descripcion": it_cat.nombre,
+                            "cantidad": float(ln.cantidad),
+                            "precio_unitario": float(ln.precio_unitario),
+                        }
+                    )
+            if lns_rec:
+                ultimo_recompra = {
+                    "referencia": o.so_id,
+                    "lista_precios_id": str(o.lista_precios or ""),
+                    "ruta_pago": ruta_o or RUTA_BCV,
+                    "lineas": lns_rec,
+                }
+        pedidos_out.append(
+            {
+                "origen": "odoo",
+                "documento_id": None,
+                "numero": o.so_id,
+                "odoo_order_name": o.so_id,
+                "tipo": "pedido",
+                "estado": o.estado_orden,
+                "fecha": o.fecha.isoformat(),
+                "ruta_pago": ruta_o or RUTA_BCV,
+                "total_usd": float(o.monto_total),
+                "etapa_actual": etapa,
+                "pasos": pasos,
+            }
+        )
+
+    return {
+        "cliente_id": cid,
+        "total": len(pedidos_out),
+        "pedidos": pedidos_out,
+        "ultimo_pedido_recompra": ultimo_recompra,
+    }
+
+
+@router.get("/portal/usuarios")
+def v1_portal_titular_listar_usuarios(
+    cuenta: ClientePortalV1Dep,
+    repo_v1: RepoV1Dep,
+) -> dict[str, Any]:
+    if cuenta.get("rol_portal") != "titular":
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el usuario titular puede administrar el equipo del portal.",
+        )
+    items = repo_v1.listar_cuentas_portal(cliente_id=str(cuenta["cliente_id"]))
+    return {"cliente_id": str(cuenta["cliente_id"]), "total": len(items), "items": items}
+
+
+@router.post("/portal/usuarios")
+def v1_portal_titular_invitar_usuario(
+    body: PortalInvitarUsuarioIn,
+    cuenta: ClientePortalV1Dep,
+    repo_v1: RepoV1Dep,
+) -> JSONResponse:
+    if cuenta.get("rol_portal") != "titular":
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el usuario titular puede invitar miembros del portal.",
+        )
+    try:
+        token_raw, inv = repo_v1.crear_invitacion_portal(
+            cliente_id=str(cuenta["cliente_id"]),
+            partner_odoo_id=cuenta.get("partner_odoo_id"),
+            cliente_nombre=str(cuenta.get("cliente_nombre") or ""),
+            email=body.email,
+            rol_portal=body.rol_portal,
+            creado_por=f"portal:{cuenta['email']}",
+            ttl_horas=body.ttl_horas,
+        )
+    except ApiV1Error as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    return JSONResponse(
+        status_code=201,
+        content={
+            **inv,
+            "token": token_raw,
+            "enlace_activacion": f"/portal/activar?token={token_raw}",
+        },
+    )
+
+
+@router.put("/portal/usuarios/{cuenta_id}")
+def v1_portal_titular_actualizar_usuario(
+    cuenta_id: int,
+    body: ActualizarCuentaPortalIn,
+    cuenta: ClientePortalV1Dep,
+    repo_v1: RepoV1Dep,
+) -> JSONResponse:
+    if cuenta.get("rol_portal") != "titular":
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el usuario titular puede modificar cuentas del portal.",
+        )
+    objetivo = repo_v1.obtener_cuenta_portal(cuenta_id)
+    if objetivo is None:
+        raise HTTPException(status_code=404, detail="Cuenta de portal no encontrada.")
+    if str(objetivo["cliente_id"]) != str(cuenta["cliente_id"]):
+        raise HTTPException(
+            status_code=403, detail="No autorizado para modificar cuentas de otra empresa."
+        )
+    if int(cuenta["cuenta_id"]) == int(cuenta_id) and body.activo is False:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "No puedes desactivar tu propia cuenta titular."},
+        )
+    try:
+        actualizado = repo_v1.actualizar_cuenta_portal(
+            cuenta_id,
+            activo=body.activo,
+            rol_portal=body.rol_portal,
+        )
+    except ApiV1Error as exc:
+        return JSONResponse(status_code=422, content={"error": str(exc)})
+    return JSONResponse(status_code=200, content=actualizado)
