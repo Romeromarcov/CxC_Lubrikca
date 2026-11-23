@@ -416,4 +416,29 @@ describe("MobileSqliteRepo + SyncEngine offline-first", () => {
     expect(finalRow?.estado).toBe("FAILED_RETRY");
     expect(finalRow?.intentos).toBe(5);
   });
+
+  it("registra Expo push_token del dispositivo en backend", async () => {
+    const repo = new MobileSqliteRepo(new NodeSqliteExecutor());
+    await repo.init();
+    const sessionStore = new MobileSessionStore(new MemoryKv());
+    let enviadoBody: Record<string, unknown> | null = null;
+    const api = new LubrikcaApiClient({
+      baseUrl: "https://cxc.test",
+      fetchImpl: async (input, init) => {
+        if (String(input).endsWith("/api/v1/dispositivos/push-token")) {
+          enviadoBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+        }
+        return new Response("{}", { status: 404 });
+      },
+      getAccessToken: async () => "acc-tok",
+    });
+    const engine = new SyncEngine({ api, repo, sessionStore });
+    const ok = await engine.registrarPushToken("pixel-9", "ExponentPushToken[abc]");
+    expect(ok).toBe(true);
+    expect(enviadoBody).toEqual({
+      device_id: "pixel-9",
+      push_token: "ExponentPushToken[abc]",
+    });
+  });
 });

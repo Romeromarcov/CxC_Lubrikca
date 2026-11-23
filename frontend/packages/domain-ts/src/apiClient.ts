@@ -338,4 +338,41 @@ export class LubrikcaApiClient {
       body: JSON.stringify(body),
     });
   }
+
+  registrarPushToken(deviceId: string, pushToken: string): Promise<Record<string, unknown>> {
+    return this.requestJson("/api/v1/dispositivos/push-token", {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, push_token: pushToken }),
+    });
+  }
+
+  listarNotificaciones(
+    mode: "vendedor" | "portal" = "vendedor",
+    limit = 50,
+  ): Promise<Record<string, unknown>> {
+    return this.requestJson(`/api/v1/notificaciones?limit=${limit}`, { authMode: mode });
+  }
+
+  marcarNotificacionLeida(
+    notificacionId: number,
+    mode: "vendedor" | "portal" = "vendedor",
+  ): Promise<Record<string, unknown>> {
+    return this.requestJson(`/api/v1/notificaciones/${notificacionId}/leer`, {
+      method: "POST",
+      authMode: mode,
+    });
+  }
+
+  portalSuscribirWebPush(sub: {
+    endpoint: string;
+    p256dh?: string;
+    auth?: string;
+    user_agent?: string;
+  }): Promise<Record<string, unknown>> {
+    return this.requestJson("/api/v1/portal/push/suscribir", {
+      method: "POST",
+      authMode: "portal",
+      body: JSON.stringify(sub),
+    });
+  }
 }

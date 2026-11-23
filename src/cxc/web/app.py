@@ -4010,7 +4010,9 @@ async def exigir_sesion_en_api(request: Request, call_next):
     """
     ruta = request.url.path
     if ruta.startswith("/api/v1/"):
-        if ruta.startswith("/api/v1/portal/invitaciones"):
+        if ruta.startswith("/api/v1/portal/invitaciones") or ruta.startswith(
+            "/api/v1/observabilidad"
+        ):
             if hay_sesion_valida(request):
                 return await call_next(request)
             return JSONResponse(status_code=401, content={"detail": "No autenticado"})

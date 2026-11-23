@@ -1743,3 +1743,40 @@ adjuntos_objeto = Table(
     Column("entidad_id", String(64), nullable=False, server_default=""),
     Column("creado_en", DateTime(timezone=False), nullable=False),
 )
+
+# --- Fase 4: Notificaciones Push Multicanal y Suscripciones Web Push -------
+notificaciones_push_outbox = Table(
+    "notificaciones_push_outbox",
+    metadata,
+    Column("notificacion_id", Integer, primary_key=True, autoincrement=True),
+    Column("dedupe_key", String(160), nullable=False, unique=True),
+    Column("canal", String(32), nullable=False),
+    Column("sujeto_tipo", String(32), nullable=False, index=True),
+    Column("sujeto_id", String(160), nullable=False, index=True),
+    Column("evento_tipo", String(64), nullable=False, index=True),
+    Column("titulo", String(180), nullable=False),
+    Column("cuerpo", Text, nullable=False),
+    Column("datos_json", Text, nullable=False, server_default="{}"),
+    Column("estado", String(32), nullable=False, server_default="PENDIENTE", index=True),
+    Column("intentos", Integer, nullable=False, server_default="0"),
+    Column("max_intentos", Integer, nullable=False, server_default="3"),
+    Column("ultimo_error", Text, nullable=False, server_default=""),
+    Column("leida_en", DateTime(timezone=False), nullable=True),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("enviado_en", DateTime(timezone=False), nullable=True),
+)
+
+web_push_suscripciones = Table(
+    "web_push_suscripciones",
+    metadata,
+    Column("suscripcion_id", Integer, primary_key=True, autoincrement=True),
+    Column("sujeto_tipo", String(32), nullable=False, index=True),
+    Column("sujeto_id", String(160), nullable=False, index=True),
+    Column("endpoint", String(500), nullable=False, unique=True),
+    Column("p256dh", String(255), nullable=False, server_default=""),
+    Column("auth", String(255), nullable=False, server_default=""),
+    Column("user_agent", String(200), nullable=False, server_default=""),
+    Column("activa", Boolean, nullable=False, server_default="true", index=True),
+    Column("creado_en", DateTime(timezone=False), nullable=False),
+    Column("actualizado_en", DateTime(timezone=False), nullable=False),
+)

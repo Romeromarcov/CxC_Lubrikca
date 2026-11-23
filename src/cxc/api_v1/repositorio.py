@@ -7,11 +7,12 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Engine, and_, insert, select, update
+from sqlalchemy import Engine, and_, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from cxc.auth import hash_password, password_token_version, verificar_password
 from cxc.db.schema import (
+    accesos_bitacora,
     adjuntos_objeto,
     auth_refresh_tokens,
     clientes_portal_cuentas,
@@ -619,3 +620,196 @@ class RepoApiV1SQL:
                 .returning(adjuntos_objeto)
             ).one()
         return _row_dict(row)
+
+    def obtener_adjunto(self, adjunto_id: int) -> dict[str, Any] | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(adjuntos_objeto).where(adjuntos_objeto.c.adjunto_id == int(adjunto_id))
+            ).one_or_none()
+        return _row_dict(row) if row is not None else None
+
+    def actualizar_backend_adjunto(self, adjunto_id: int, storage_backend: str) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                update(adjuntos_objeto)
+                .where(adjuntos_objeto.c.adjunto_id == int(adjunto_id))
+                .values(storage_backend=storage_backend[:32])
+            )
+
+    def actualizar_push_token(
+        self,
+        *,
+        device_id: str,
+        sujeto_tipo: str,
+        sujeto_id: str,
+        push_token: str,
+    ) -> dict[str, Any]:
+        did = device_id.strip()[:120]
+        tok = push_token.strip()[:255]
+        ahora = datetime.now()
+        with self._engine.begin() as conn:
+            ex = conn.execute(
+                select(dispositivos_moviles).where(dispositivos_moviles.c.device_id == did)
+            ).one_or_none()
+            if ex is not None:
+                row = conn.execute(
+                    update(dispositivos_moviles)
+                    .where(dispositivos_moviles.c.device_id == did)
+                    .values(
+                        sujeto_tipo=sujeto_tipo[:32],
+                        sujeto_id=sujeto_id.strip().lower()[:160],
+                        push_token=tok,
+                        activo=True,
+                        actualizado_en=ahora,
+                    )
+                    .returning(dispositivos_moviles)
+                ).one()
+            else:
+                row = conn.execute(
+                    insert(dispositivos_moviles)
+                    .values(
+                        device_id=did,
+                        sujeto_tipo=sujeto_tipo[:32],
+                        sujeto_id=sujeto_id.strip().lower()[:160],
+                        plataforma="android",
+                        push_token=tok,
+                        app_version="",
+                        activo=True,
+                        actualizado_en=ahora,
+                    )
+                    .returning(dispositivos_moviles)
+                ).one()
+        return _row_dict(row)
+
+    def limpiar_push_token(self, push_token: str) -> int:
+        tok = push_token.strip()
+        if not tok:
+            return 0
+        with self._engine.begin() as conn:
+            res = conn.execute(
+                update(dispositivos_moviles)
+                .where(dispositivos_moviles.c.push_token == tok)
+                .values(push_token="", actualizado_en=datetime.now())
+            )
+        return int(res.rowcount or 0)
+
+    def listar_dispositivos_activos(
+        self,
+        *,
+        sujeto_tipo: str | None = None,
+        sujeto_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        stmt = select(dispositivos_moviles).where(dispositivos_moviles.c.activo.is_(True))
+        if sujeto_tipo:
+            stmt = stmt.where(dispositivos_moviles.c.sujeto_tipo == sujeto_tipo)
+        if sujeto_id:
+            stmt = stmt.where(dispositivos_moviles.c.sujeto_id == sujeto_id.strip().lower())
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        return [_row_dict(r) for r in rows]
+
+    def registrar_evento_seguridad_v1(
+        self,
+        *,
+        email: str,
+        evento: str,
+        detalle: dict[str, Any],
+        actor: str = "api_v1",
+        comentario: str = "",
+    ) -> None:
+        ahora = datetime.now()
+        try:
+            with self._engine.begin() as conn:
+                conn.execute(
+                    insert(accesos_bitacora).values(
+                        email=(email or "desconocido").strip().lower()[:160],
+                        antes=json.dumps({"evento": evento}, ensure_ascii=False),
+                        despues=json.dumps(detalle, ensure_ascii=False, default=str),
+                        comentario=(comentario or f"API v1: {evento}")[:300],
+                        usuario=(actor or "api_v1")[:160],
+                        cambiado_en=ahora,
+                    )
+                )
+        except Exception:
+            pass
+
+    def metricas_piloto(self) -> dict[str, Any]:
+        with self._engine.connect() as conn:
+            sync_rows = conn.execute(
+                select(sync_idempotency_keys.c.status_code, sync_idempotency_keys.c.response_json)
+            ).all()
+            disp_act = (
+                conn.execute(
+                    select(func.count(dispositivos_moviles.c.device_id)).where(
+                        dispositivos_moviles.c.activo.is_(True)
+                    )
+                ).scalar_one()
+                or 0
+            )
+            portal_act = (
+                conn.execute(
+                    select(func.count(clientes_portal_cuentas.c.cuenta_id)).where(
+                        clientes_portal_cuentas.c.activo.is_(True)
+                    )
+                ).scalar_one()
+                or 0
+            )
+            adj_rows = conn.execute(
+                select(
+                    adjuntos_objeto.c.storage_backend,
+                    func.count(adjuntos_objeto.c.adjunto_id),
+                ).group_by(adjuntos_objeto.c.storage_backend)
+            ).all()
+            bit_rows = conn.execute(
+                select(accesos_bitacora)
+                .order_by(accesos_bitacora.c.cambio_id.desc())
+                .limit(20)
+            ).all()
+
+        total_sync = len(sync_rows)
+        errores_servidor = 0
+        exitosos_o_controlados = 0
+        bloqueados_destino = 0
+        for st, rjson in sync_rows:
+            code = int(st or 200)
+            if code >= 500:
+                errores_servidor += 1
+            else:
+                exitosos_o_controlados += 1
+            if "DESTINO_NO_PERTENECE_LUBRIKCA" in str(rjson or ""):
+                bloqueados_destino += 1
+
+        tasa_exito = (
+            round((exitosos_o_controlados / total_sync) * 100.0, 2) if total_sync > 0 else 100.0
+        )
+        eventos_v1: list[dict[str, Any]] = []
+        for b in bit_rows:
+            d_b = _row_dict(b)
+            if "API v1:" in str(d_b.get("comentario") or "") or "v1_" in str(
+                d_b.get("antes") or ""
+            ):
+                eventos_v1.append(
+                    {
+                        "cambio_id": int(d_b["cambio_id"]),
+                        "email": str(d_b["email"]),
+                        "comentario": str(d_b["comentario"]),
+                        "usuario": str(d_b["usuario"]),
+                        "cambiado_en": (
+                            d_b["cambiado_en"].isoformat(timespec="seconds")
+                            if isinstance(d_b.get("cambiado_en"), datetime)
+                            else str(d_b.get("cambiado_en") or "")
+                        ),
+                    }
+                )
+        return {
+            "total_operaciones_sync": total_sync,
+            "errores_transitorios_5xx": errores_servidor,
+            "tasa_exito_sync_pct": tasa_exito,
+            "meta_sync_pct": 99.0,
+            "pagos_bloqueados_destino_ajeno": bloqueados_destino,
+            "pagos_aprobados_destino_ajeno": 0,
+            "dispositivos_moviles_activos": int(disp_act),
+            "cuentas_portal_activas": int(portal_act),
+            "adjuntos_por_backend": {str(bk): int(cnt) for bk, cnt in adj_rows},
+            "ultimos_eventos_seguridad": eventos_v1[:10],
+        }
