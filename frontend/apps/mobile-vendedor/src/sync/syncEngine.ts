@@ -67,25 +67,41 @@ export class SyncEngine {
         sha256: adj.sha256,
         mime: adj.mime,
         bytes: adj.bytes,
-        entidad_tipo: "outbox",
-        entidad_id: adj.outbox_key,
+        nombre_archivo: adj.outbox_key,
       });
-      if (!presign.ya_existia && presign.upload_url) {
+      let adjuntoId: number | undefined = presign.adjunto_id ?? undefined;
+      let storageKey = presign.storage_key;
+      if (!presign.ya_existe && presign.upload_url) {
         const bytes = await this.byteReader.readBytes(adj.local_uri);
-        const putRes = await this.uploadFetch(presign.upload_url, {
-          method: "PUT",
-          headers: { "Content-Type": adj.mime, ...(presign.upload_headers ?? {}) },
-          body: bytes as unknown as BodyInit,
+        const targetUrl = presign.upload_url.startsWith("/")
+          ? `${this.api.baseUrl}${presign.upload_url}`
+          : presign.upload_url;
+        const putRes = await this.uploadFetch(targetUrl, {
+          method: presign.upload_method || "PUT",
+          headers: { "Content-Type": adj.mime },
+          body: new Uint8Array(bytes).buffer,
         });
         if (!putRes.ok) {
           throw new Error(`Error subiendo comprobante (${putRes.status})`);
+        }
+        try {
+          const parsed = (await putRes.json()) as {
+            adjunto_id?: number;
+            storage_key?: string;
+          } | null;
+          if (typeof parsed?.adjunto_id === "number") adjuntoId = parsed.adjunto_id;
+          if (typeof parsed?.storage_key === "string" && parsed.storage_key) {
+            storageKey = parsed.storage_key;
+          }
+        } catch {
+          // R2/S3 devuelve cuerpo vacío en 200 OK y adjunto_id ya vino en presign
         }
       }
       await this.repo.marcarAdjuntoSubido(
         adj.adjunto_local_id,
         adj.outbox_key,
-        presign.storage_key,
-        presign.adjunto_id,
+        storageKey,
+        adjuntoId,
       );
       subidos += 1;
     }

@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from "react";
 import type { CuentaReceptora, LubrikcaApiClient, RutaPago } from "@lubrikca/domain-ts";
 
-import { filtrarCuentasPorRutaPago, validarPagoPortalAntesDeEnviar } from "../portalLogic";
+import {
+  calcularSha256Hex,
+  filtrarCuentasPorRutaPago,
+  validarArchivoComprobante,
+  validarPagoPortalAntesDeEnviar,
+} from "../portalLogic";
 
 interface Props {
   api: LubrikcaApiClient;
@@ -17,6 +22,8 @@ export function RegistrarPagoView({ api }: Props): React.JSX.Element {
   const [referencia, setReferencia] = useState("");
   const [bancoOrigen, setBancoOrigen] = useState("");
   const [cuentaSelId, setCuentaSelId] = useState<number | null>(null);
+  const [archivoComprobante, setArchivoComprobante] = useState<File | null>(null);
+  const [enviando, setEnviando] = useState(false);
   const [copiado, setCopiado] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -58,7 +65,30 @@ export function RegistrarPagoView({ api }: Props): React.JSX.Element {
       setErr(val.error || "La cuenta destino no pertenece a Lubrikca.");
       return;
     }
+    setEnviando(true);
     try {
+      let adjuntoMeta: { adjunto_id: number; storage_key: string } | null = null;
+      if (archivoComprobante) {
+        const valArch = validarArchivoComprobante(archivoComprobante);
+        if (!valArch.valido) {
+          setErr(valArch.error || "Comprobante inválido.");
+          setEnviando(false);
+          return;
+        }
+        const bytes = new Uint8Array(await archivoComprobante.arrayBuffer());
+        const sha256 = await calcularSha256Hex(bytes);
+        const subido = await api.subirAdjuntoBytes({
+          bytes,
+          mime: archivoComprobante.type,
+          sha256,
+          nombre_archivo: archivoComprobante.name,
+          authMode: "portal",
+        });
+        adjuntoMeta = {
+          adjunto_id: subido.adjunto_id,
+          storage_key: subido.storage_key,
+        };
+      }
       const creado = await api.portalRegistrarPago({
         pedido_ref: pedidoRef.trim() || undefined,
         monto: Number(monto),
@@ -72,14 +102,19 @@ export function RegistrarPagoView({ api }: Props): React.JSX.Element {
         telefono_destino: cuentaSel?.telefono || "",
         email_destino: cuentaSel?.email_zelle || "",
         diario_odoo_id: cuentaSel?.diario_odoo_id ?? undefined,
+        comprobante_adjunto_id: adjuntoMeta?.adjunto_id,
+        comprobante_storage_key: adjuntoMeta?.storage_key,
       });
       setMonto("");
       setReferencia("");
+      setArchivoComprobante(null);
       setMsg(
         `Pago #${String(creado.numero || creado.documento_id)} registrado y enviado a revisión de Tesorería.`,
       );
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "No se pudo registrar el pago.");
+    } finally {
+      setEnviando(false);
     }
   }
 
@@ -187,8 +222,51 @@ export function RegistrarPagoView({ api }: Props): React.JSX.Element {
           value={bancoOrigen}
           onChange={(e) => setBancoOrigen(e.target.value)}
         />
-        <button type="submit" className="btn btn-primary">
-          Reportar Pago a Lubrikca
+        <div style={{ margin: "8px 0 12px" }}>
+          <label
+            style={{
+              display: "block",
+              fontSize: "0.84rem",
+              fontWeight: 600,
+              marginBottom: 4,
+            }}
+          >
+            Comprobante / captura (JPG, PNG, WEBP o PDF · máx. 10 MB)
+          </label>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              setErr(null);
+              if (f) {
+                const v = validarArchivoComprobante(f);
+                if (!v.valido) {
+                  setErr(v.error || "Archivo inválido.");
+                  setArchivoComprobante(null);
+                  return;
+                }
+              }
+              setArchivoComprobante(f);
+            }}
+          />
+          {archivoComprobante ? (
+            <div style={{ marginTop: 6, fontSize: "0.82rem", display: "flex", gap: 8, alignItems: "center" }}>
+              <span>
+                Adjunto: <strong>{archivoComprobante.name}</strong> ({Math.ceil(archivoComprobante.size / 1024)} KB)
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setArchivoComprobante(null)}
+              >
+                Quitar
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={enviando}>
+          {enviando ? "Subiendo y enviando pago..." : "Reportar Pago a Lubrikca"}
         </button>
       </form>
     </div>

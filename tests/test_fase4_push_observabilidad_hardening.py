@@ -503,3 +503,143 @@ def test_fase4_simulacion_piloto_e2e_y_auditoria_unificada(
     assert m["pagos_bloqueados_destino_ajeno"] == 3
     assert m["dispositivos_moviles_activos"] == 3
     assert m["cuentas_portal_activas"] == 3
+
+
+def test_golive_daemon_push_variacion_tasa_y_pago_portal_con_adjunto(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env = _setup_fase4(monkeypatch, tmp_path)
+    eng = env["eng"]
+
+    # 1) Login vendedor + registro push_token para recibir alerta de tasa
+    tok_v1 = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "vendedor1@lubrikca.com",
+            "password": "Vend123!",
+            "device_id": "golive-v1",
+            "plataforma": "android",
+        },
+    ).json()["access_token"]
+    assert (
+        client.post(
+            "/api/v1/dispositivos/push-token",
+            headers={"Authorization": f"Bearer {tok_v1}"},
+            json={"device_id": "golive-v1", "push_token": "ExponentPushToken[golive-1]"},
+        ).status_code
+        == 200
+    )
+
+    # Variación < 1.5% NO encola; variación >= 1.5% SÍ encola y el ciclo despachador la envía
+    res_bajo = web_app._notificar_variacion_tasas_post_scrape(
+        eng, prev_bcv=100.0, prev_bin=100.0, nueva_bcv=101.0, nueva_bin=101.0
+    )
+    assert res_bajo == {"bcv": 0, "binance": 0}
+
+    res_alto = web_app._notificar_variacion_tasas_post_scrape(
+        eng, prev_bcv=100.0, prev_bin=100.0, nueva_bcv=102.5, nueva_bin=100.2
+    )
+    assert res_alto == {"bcv": 1, "binance": 0}
+
+    enviados_expo: list[dict[str, Any]] = []
+
+    def _fake_post(_url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        enviados_expo.append(payload)
+        return 200, {"data": [{"status": "ok", "id": "t-golive"}]}
+
+    ciclo = web_app._ejecutar_ciclo_despachador_push(eng, http_post=_fake_post)
+    assert ciclo == {"procesadas": 1, "enviadas": 1, "reintentables": 0, "permanentes": 0}
+    assert len(enviados_expo) == 1
+
+    # 2) Portal: subir comprobante propio -> vincular (201) y bloquear ajeno (403)
+    tok_admin = auth.crear_session_token("admin@lubrikca.com", web_app.SECRET_KEY)
+    r_inv1 = client.post(
+        "/api/v1/portal/invitaciones",
+        cookies={"cxc_session": tok_admin},
+        json={"cliente_id": "201", "partner_odoo_id": 201, "email": "p1@golive.com"},
+    )
+    r_inv2 = client.post(
+        "/api/v1/portal/invitaciones",
+        cookies={"cxc_session": tok_admin},
+        json={"cliente_id": "202", "partner_odoo_id": 202, "email": "p2@golive.com"},
+    )
+    for r_i in (r_inv1, r_inv2):
+        assert (
+            client.post(
+                "/api/v1/portal/auth/activar-invitacion",
+                json={"token": r_i.json()["token"], "password": "Portal123!"},
+            ).status_code
+            == 200
+        )
+
+    tok_p1 = client.post(
+        "/api/v1/portal/auth/login",
+        json={"email": "p1@golive.com", "password": "Portal123!", "device_id": "wp-g1"},
+    ).json()["access_token"]
+    tok_p2 = client.post(
+        "/api/v1/portal/auth/login",
+        json={"email": "p2@golive.com", "password": "Portal123!", "device_id": "wp-g2"},
+    ).json()["access_token"]
+
+    raw = b"\xff\xd8\xff\xe0pago-portal-golive"
+    sha = hashlib.sha256(raw).hexdigest()
+    r_pre = client.post(
+        "/api/v1/adjuntos/presign",
+        headers={"Authorization": f"Bearer {tok_p1}"},
+        json={
+            "mime": "image/jpeg",
+            "bytes": len(raw),
+            "sha256": sha,
+            "nombre_archivo": "recibo.jpg",
+        },
+    )
+    assert r_pre.status_code == 200
+    r_put = client.put(
+        r_pre.json()["upload_url"], content=raw, headers={"Content-Type": "image/jpeg"}
+    )
+    assert r_put.status_code == 200
+    adj_id = r_put.json()["adjunto_id"]
+
+    ctas_bcv = client.get(
+        "/api/v1/portal/cuentas-pago?ruta=bcv", headers={"Authorization": f"Bearer {tok_p1}"}
+    ).json()["items"]
+    cta = next(c for c in ctas_bcv if c.get("es_propia") and c.get("activa"))
+
+    pago_base = {
+        "monto": 2500.0,
+        "moneda": "VES",
+        "metodo_pago": "Transferencia Bancaria",
+        "referencia": "REF-GOLIVE-7788",
+        "banco_origen": "Banesco",
+        "banco_destino": cta["banco_nombre"] or cta["nombre"],
+        "cuenta_destino": cta["numero_cuenta"],
+        "rif_destino": cta["titular_rif"],
+        "telefono_destino": cta["telefono"],
+        "diario_odoo_id": cta["diario_odoo_id"],
+        "comprobante_adjunto_id": adj_id,
+        "comprobante_storage_key": r_put.json()["storage_key"],
+    }
+
+    # Cliente 2 intenta usar el comprobante de Cliente 1 -> 403
+    assert (
+        client.post(
+            "/api/v1/portal/pagos",
+            headers={"Authorization": f"Bearer {tok_p2}"},
+            json=pago_base,
+        ).status_code
+        == 403
+    )
+
+    # Cliente 1 registra su pago con su propio comprobante -> 201 y queda guardado
+    r_p_ok = client.post(
+        "/api/v1/portal/pagos",
+        headers={"Authorization": f"Bearer {tok_p1}"},
+        json=pago_base,
+    )
+    assert r_p_ok.status_code == 201
+    body_ok = r_p_ok.json()
+    assert body_ok["comprobante_adjunto_id"] == adj_id
+    adj_db = RepoApiV1SQL(eng).obtener_adjunto(adj_id)
+    assert adj_db is not None
+    assert adj_db["entidad_tipo"] == "operativo"
+    assert adj_db["entidad_id"] == str(body_ok["documento_id"])

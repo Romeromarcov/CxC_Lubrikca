@@ -35,3 +35,48 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+self.addEventListener("push", (event) => {
+  let payload = { title: "Lubrikca Portal", body: "Tienes una actualización en tu cuenta.", data: { url: "/portal/" } };
+  try {
+    if (event.data) {
+      const parsed = event.data.json();
+      if (parsed && typeof parsed === "object") {
+        payload = {
+          title: parsed.title || payload.title,
+          body: parsed.body || payload.body,
+          data: parsed.data || payload.data,
+        };
+      }
+    }
+  } catch {
+    const txt = event.data ? event.data.text() : "";
+    if (txt) payload.body = txt;
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: "/portal/icon.svg",
+      badge: "/portal/icon.svg",
+      data: payload.data,
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/portal/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientsArr) => {
+      for (const client of clientsArr) {
+        if ("focus" in client && client.url.includes("/portal")) {
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
+      return undefined;
+    }),
+  );
+});

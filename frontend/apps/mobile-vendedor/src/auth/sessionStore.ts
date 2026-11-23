@@ -21,12 +21,31 @@ export interface SessionTokens {
 
 const KEY_SESSION = "lubrikca_v1_session";
 const KEY_BIOMETRIA = "lubrikca_v1_biometria_activa";
+const KEY_DEVICE_ID = "lubrikca_v1_device_id";
+
+function generarDeviceIdUnico(): string {
+  const uuidFn = globalThis.crypto?.randomUUID;
+  if (typeof uuidFn === "function") {
+    return `lubrikca-${uuidFn.call(globalThis.crypto)}`;
+  }
+  const rnd = Math.random().toString(16).slice(2, 10);
+  const ts = Date.now().toString(16);
+  return `lubrikca-${ts}-${rnd}`;
+}
 
 export class MobileSessionStore {
   private readonly kv: SecureKv;
 
   constructor(kv: SecureKv = SecureStore) {
     this.kv = kv;
+  }
+
+  async obtenerOCrearDeviceId(): Promise<string> {
+    const actual = (await this.kv.getItemAsync(KEY_DEVICE_ID))?.trim();
+    if (actual) return actual;
+    const nuevo = generarDeviceIdUnico();
+    await this.kv.setItemAsync(KEY_DEVICE_ID, nuevo);
+    return nuevo;
   }
 
   async guardarSesion(resp: AuthTokensResponse): Promise<SessionTokens> {

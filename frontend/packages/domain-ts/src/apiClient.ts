@@ -33,7 +33,7 @@ export interface ApiClientConfig {
 }
 
 export class LubrikcaApiClient {
-  private readonly baseUrl: string;
+  readonly baseUrl: string;
   private readonly fetchFn: typeof fetch;
   private readonly cfg: ApiClientConfig;
   private refreshEnCurso: Promise<string | null> | null = null;
@@ -176,23 +176,93 @@ export class LubrikcaApiClient {
     });
   }
 
-  presignAdjunto(body: {
-    sha256: string;
-    mime: string;
-    bytes: number;
-    entidad_tipo?: string;
-    entidad_id?: string;
-  }): Promise<{
-    adjunto_id?: number;
-    ya_existia: boolean;
+  presignAdjunto(
+    body: {
+      sha256: string;
+      mime: string;
+      bytes: number;
+      nombre_archivo?: string;
+    },
+    authMode: "vendedor" | "portal" = "vendedor",
+  ): Promise<{
+    adjunto_id?: number | null;
+    ya_existe: boolean;
+    storage_backend: string;
+    upload_method?: string | null;
     upload_url?: string | null;
-    upload_headers?: Record<string, string>;
     storage_key: string;
+    sha256: string;
   }> {
     return this.requestJson("/api/v1/adjuntos/presign", {
       method: "POST",
+      authMode,
       body: JSON.stringify(body),
     });
+  }
+
+  async subirAdjuntoBytes(params: {
+    bytes: Uint8Array;
+    mime: string;
+    sha256: string;
+    nombre_archivo?: string;
+    authMode?: "vendedor" | "portal";
+  }): Promise<{
+    adjunto_id: number;
+    storage_key: string;
+    storage_backend: string;
+    sha256: string;
+  }> {
+    const authMode = params.authMode ?? "vendedor";
+    const pre = await this.presignAdjunto(
+      {
+        sha256: params.sha256,
+        mime: params.mime,
+        bytes: params.bytes.byteLength,
+        nombre_archivo: params.nombre_archivo,
+      },
+      authMode,
+    );
+    if (pre.ya_existe && pre.adjunto_id != null) {
+      return {
+        adjunto_id: pre.adjunto_id,
+        storage_key: pre.storage_key,
+        storage_backend: pre.storage_backend,
+        sha256: pre.sha256,
+      };
+    }
+    if (!pre.upload_url) {
+      throw new ApiHttpError(500, "El servidor no devolvió upload_url para el comprobante.");
+    }
+    const targetUrl = pre.upload_url.startsWith("/") ? `${this.baseUrl}${pre.upload_url}` : pre.upload_url;
+    const putBody = new Uint8Array(params.bytes).buffer;
+    const putRes = await this.fetchFn(targetUrl, {
+      method: pre.upload_method || "PUT",
+      headers: { "Content-Type": params.mime },
+      body: putBody,
+    });
+    const text = await putRes.text();
+    let parsed: Record<string, unknown> | null = null;
+    if (text) {
+      try {
+        parsed = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        parsed = null;
+      }
+    }
+    if (!putRes.ok) {
+      const detail = String(parsed?.detail ?? parsed?.error ?? putRes.statusText) || `HTTP ${putRes.status}`;
+      throw new ApiHttpError(putRes.status, detail, parsed);
+    }
+    const adjId = pre.adjunto_id ?? (typeof parsed?.adjunto_id === "number" ? parsed.adjunto_id : null);
+    if (adjId == null) {
+      throw new ApiHttpError(500, "No se recibió adjunto_id tras subir el comprobante.");
+    }
+    return {
+      adjunto_id: adjId,
+      storage_key: String(parsed?.storage_key ?? pre.storage_key),
+      storage_backend: String(parsed?.storage_backend ?? pre.storage_backend),
+      sha256: String(parsed?.sha256 ?? pre.sha256),
+    };
   }
 
   verificarStock(params: { q?: string; producto_id?: string; refresh?: boolean } = {}): Promise<StockVerificarResponse> {

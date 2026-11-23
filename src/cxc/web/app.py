@@ -3628,6 +3628,101 @@ def _segundos_hasta_proxima_hora_en_punto(now: datetime) -> float:
     return max((proxima - now).total_seconds(), 60.0)
 
 
+def _notificar_variacion_tasas_post_scrape(
+    engine: Any,
+    *,
+    prev_bcv: float | None,
+    prev_bin: float | None,
+    nueva_bcv: float | None,
+    nueva_bin: float | None,
+    umbral_pct: float = 1.5,
+) -> dict[str, int]:
+    """Encola alertas push para vendedores cuando BCV o Binance cambian >= ``umbral_pct``."""
+    if engine is None:
+        return {"bcv": 0, "binance": 0}
+    from cxc.api_v1.notificaciones import (
+        RepoNotificacionesSQL,
+        notificar_cambio_tasa_significativo,
+    )
+    from cxc.api_v1.repositorio import RepoApiV1SQL
+
+    creadas = {"bcv": 0, "binance": 0}
+    try:
+        repo_n = RepoNotificacionesSQL(engine)
+        repo_v1 = RepoApiV1SQL(engine)
+        if prev_bcv and nueva_bcv and prev_bcv > 0 and nueva_bcv > 0:
+            creadas["bcv"] = notificar_cambio_tasa_significativo(
+                repo_n,
+                repo_v1,
+                tasa_anterior=float(prev_bcv),
+                tasa_nueva=float(nueva_bcv),
+                tipo_tasa="BCV",
+                umbral_pct=umbral_pct,
+            )
+        if prev_bin and nueva_bin and prev_bin > 0 and nueva_bin > 0:
+            creadas["binance"] = notificar_cambio_tasa_significativo(
+                repo_n,
+                repo_v1,
+                tasa_anterior=float(prev_bin),
+                tasa_nueva=float(nueva_bin),
+                tipo_tasa="BINANCE",
+                umbral_pct=umbral_pct,
+            )
+    except Exception as exc:
+        logger.warning("Error encolando alertas push por variación de tasas: %s", exc)
+    return creadas
+
+
+def _ejecutar_ciclo_despachador_push(
+    engine: Any,
+    *,
+    limit: int = 50,
+    http_post: Any = None,
+) -> dict[str, int] | None:
+    """Despacha ``notificaciones_push_outbox`` bajo advisory lock PostgreSQL."""
+    if engine is None:
+        return None
+    from cxc.api_v1.notificaciones import DespachadorPush, RepoNotificacionesSQL
+    from cxc.api_v1.repositorio import RepoApiV1SQL
+    from cxc.db.locks import try_advisory_session_lock
+
+    with try_advisory_session_lock(engine, "daemon", "push_outbox") as libre:
+        if not libre:
+            return None
+        despachador = DespachadorPush(
+            RepoNotificacionesSQL(engine),
+            RepoApiV1SQL(engine),
+            http_post=http_post,
+        )
+        return despachador.despachar_pendientes(limit=limit)
+
+
+async def run_despachador_push_en_background() -> None:
+    """Bucle periódico para despachar notificaciones push pendientes sin loops infinitos."""
+    raw_int = os.environ.get("CXC_PUSH_DAEMON_INTERVALO_SEG", "60").strip()
+    try:
+        intervalo = max(int(raw_int), 15)
+    except ValueError:
+        intervalo = 60
+
+    while True:
+        try:
+            eng = _inicio_engine_seguro()
+            res = await asyncio.to_thread(_ejecutar_ciclo_despachador_push, eng)
+            if res and res.get("procesadas", 0) > 0:
+                logger.info(
+                    "FastAPI Daemon Push: procesadas=%d enviadas=%d "
+                    "reintentables=%d permanentes=%d",
+                    res.get("procesadas", 0),
+                    res.get("enviadas", 0),
+                    res.get("reintentables", 0),
+                    res.get("permanentes", 0),
+                )
+        except Exception as exc:
+            logger.warning("Error en daemon despachador push: %s", exc)
+        await asyncio.sleep(intervalo)
+
+
 async def run_scraper_in_background():
     from cxc.alerts import build_alerter
     from cxc.scraper.bcv import BcvClient
@@ -3644,6 +3739,17 @@ async def run_scraper_in_background():
                 )
                 config = AppConfig.from_env()
                 repo = get_repo()
+                prev_bcv: float | None = None
+                prev_bin: float | None = None
+                try:
+                    serie_prev = repo.all_serie_tasas()
+                    if serie_prev:
+                        ultima = serie_prev[-1]
+                        prev_bcv = float(ultima.tasa_bcv or 0) or None
+                        prev_bin = float(ultima.tasa_binance or 0) or None
+                except Exception:
+                    prev_bcv = None
+                    prev_bin = None
                 # BcvClient hace scraping directo del sitio del BCV (USD y
                 # EUR), NO depende de que alguien cargue la tasa en Odoo.
                 # Bug real encontrado en auditoría (agosto 2026):
@@ -3685,6 +3791,19 @@ async def run_scraper_in_background():
                         f"FastAPI Daemon: Tasas actualizadas. BCV={fila.tasa_bcv} "
                         f"Binance={fila.tasa_binance}"
                     )
+                    notifs_enc = await asyncio.to_thread(
+                        _notificar_variacion_tasas_post_scrape,
+                        getattr(repo, "_engine", None),
+                        prev_bcv=prev_bcv,
+                        prev_bin=prev_bin,
+                        nueva_bcv=float(fila.tasa_bcv or 0) or None,
+                        nueva_bin=float(fila.tasa_binance or 0) or None,
+                    )
+                    if (notifs_enc["bcv"] + notifs_enc["binance"]) > 0:
+                        logger.info(
+                            "Alertas push encoladas por variación de tasa: %s",
+                            notifs_enc,
+                        )
             else:
                 print(
                     "FastAPI Daemon: fuera de la ventana de captura "
@@ -3757,6 +3876,7 @@ async def startup_event():
     _TAREAS_DEMONIO.add(asyncio.create_task(run_sync_in_background()))
     _TAREAS_DEMONIO.add(asyncio.create_task(run_scraper_in_background()))
     _TAREAS_DEMONIO.add(asyncio.create_task(run_reintentos_capturas_en_background()))
+    _TAREAS_DEMONIO.add(asyncio.create_task(run_despachador_push_en_background()))
 
 
 def _es_entorno_produccion() -> bool:
