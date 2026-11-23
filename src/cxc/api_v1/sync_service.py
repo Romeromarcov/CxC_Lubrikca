@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -10,13 +11,15 @@ from sqlalchemy import Engine
 
 from cxc.capturas.modelos import CapturaInvalida
 from cxc.contactos.modelos import ContactoDuplicadoError, ContactoInvalido
+from cxc.contactos.repositorio import RepoContactosSQL
 from cxc.contactos.servicio import ServicioContactos
 from cxc.decimal_utils import q2
 from cxc.documentos.modelos import BORRADOR, COTIZACION, ENVIADO_ODOO, PEDIDO, DocumentoInvalido
 from cxc.documentos.politica_ventas import cargar_politica_global, listar_overrides_clientes
 from cxc.documentos.repositorio import RepoDocumentosSQL
 from cxc.documentos.servicio import ServicioDocumentos
-from cxc.engine.saldos_propios import calcular_saldos_propios
+from cxc.engine.rutas_pago import RUTA_BCV, RUTA_BINANCE, normalizar_ruta, ruta_de_lista
+from cxc.engine.saldos_propios import ESTADOS_ORDEN_CONFIRMADA, calcular_saldos_propios
 from cxc.operativos.cuentas_receptoras import RepoCuentasReceptorasSQL
 from cxc.operativos.lotes_efectivo import RepoLotesEfectivo
 from cxc.operativos.modelos import OperativoInvalido
@@ -69,6 +72,123 @@ def _tasas_snapshot(repo: Repository) -> dict[str, Any]:
     }
 
 
+def _naive_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(UTC).replace(tzinfo=None)
+    return dt
+
+
+def _contactos_maestro_para_sync(
+    engine: Engine | None,
+    *,
+    cursor_dt: datetime | None = None,
+) -> list[dict[str, Any]]:
+    if engine is None:
+        return []
+    cursor_norm = _naive_utc(cursor_dt)
+    salida: list[dict[str, Any]] = []
+    for c in RepoContactosSQL(engine).listar_activos():
+        act_norm = _naive_utc(c.actualizado_en)
+        if cursor_norm is not None and act_norm is not None and act_norm < cursor_norm:
+            continue
+        salida.append(
+            {
+                "contacto_id": c.contacto_id,
+                "odoo_partner_id": c.odoo_partner_id,
+                "rol": c.rol,
+                "nombre": c.nombre,
+                "nombre_normalizado": c.nombre_normalizado,
+                "rif": c.rif,
+                "rif_normalizado": c.rif_normalizado,
+                "telefono": c.telefono,
+                "vendedor_email": c.vendedor_email,
+                "actualizado_en": c.actualizado_en.isoformat() if c.actualizado_en else None,
+            }
+        )
+    return salida
+
+
+def _cargar_mapeo_listas(repo: Repository) -> dict[str, Any]:
+    try:
+        raw_m = repo.get_config("pricelist_mapeo_unificado")
+        if raw_m and isinstance(raw_m, str):
+            parsed = json.loads(raw_m)
+            if isinstance(parsed, dict):
+                return parsed
+    except Exception:
+        pass
+    return {}
+
+
+def _ordenes_pendientes_fifo_por_cliente(
+    repo: Repository,
+    *,
+    clientes_rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Calcula obligaciones pendientes en USD por cliente y ruta ordenadas FIFO."""
+    mapeo = _cargar_mapeo_listas(repo)
+    credito_por_ruta: dict[str, dict[str, Decimal]] = {}
+    for c in clientes_rows:
+        cid = str(c.get("cliente_id") or "")
+        if not cid:
+            continue
+        credito_por_ruta[cid] = {
+            RUTA_BCV: Decimal(str(c.get("pagos_bcv_usd") or 0))
+            + Decimal(str(c.get("descuentos_confirmados_usd") or 0)),
+            RUTA_BINANCE: Decimal(str(c.get("pagos_binance_usd") or 0)),
+        }
+
+    ordenes_por_cli: dict[str, list[Any]] = {}
+    for o in repo.all_ordenes():
+        if o.estado_orden not in ESTADOS_ORDEN_CONFIRMADA:
+            continue
+        cid = str(o.cliente_id or "")
+        if cid in credito_por_ruta:
+            ordenes_por_cli.setdefault(cid, []).append(o)
+
+    pendientes: dict[str, list[dict[str, Any]]] = {}
+    for cid, ords in ordenes_por_cli.items():
+        rem_bcv = q2(credito_por_ruta[cid][RUTA_BCV])
+        rem_bin = q2(credito_por_ruta[cid][RUTA_BINANCE])
+        lista_cli: list[dict[str, Any]] = []
+        for o in sorted(ords, key=lambda x: (x.fecha, str(x.so_id))):
+            ruta_o = normalizar_ruta(ruta_de_lista(o.lista_precios, mapeo)) or RUTA_BCV
+            monto_o = q2(Decimal(str(o.monto_total or 0)))
+            if monto_o <= Decimal("0"):
+                continue
+            if ruta_o == RUTA_BINANCE:
+                cub = min(monto_o, rem_bin)
+                rem_bin = q2(rem_bin - cub)
+            else:
+                cub = min(monto_o, rem_bcv)
+                rem_bcv = q2(rem_bcv - cub)
+            pend = q2(monto_o - cub)
+            if pend <= Decimal("0.01"):
+                continue
+            f_base = o.fecha_entrega or o.fecha
+            f_venc = (
+                f_base + timedelta(days=int(o.dias_credito or 0))
+                if isinstance(f_base, date)
+                else None
+            )
+            lista_cli.append(
+                {
+                    "so_id": str(o.so_id),
+                    "fecha": o.fecha.isoformat(),
+                    "fecha_vencimiento": f_venc.isoformat() if f_venc else None,
+                    "dias_credito": int(o.dias_credito or 0),
+                    "ruta_pago": ruta_o,
+                    "monto_total_usd": float(monto_o),
+                    "saldo_pendiente_usd": float(pend),
+                }
+            )
+        if lista_cli:
+            pendientes[cid] = lista_cli
+    return pendientes
+
+
 def _clientes_para_vendedor(
     *,
     repo: Repository,
@@ -91,9 +211,11 @@ def _clientes_para_vendedor(
         for ov in overrides_raw
         if ov.get("partner_odoo_id") is not None
     }
+    clientes_raw = list(saldos.get("clientes") or [])
+    ord_pend_por_cli = _ordenes_pendientes_fifo_por_cliente(repo, clientes_rows=clientes_raw)
 
     salida: list[dict[str, Any]] = []
-    for c in saldos.get("clientes") or []:
+    for c in clientes_raw:
         cid = str(c.get("cliente_id") or "")
         pid = int(cid) if cid.isdigit() else None
         ov = overrides.get(pid) if pid is not None else None
@@ -115,12 +237,81 @@ def _clientes_para_vendedor(
                 "pagos_bcv_usd": float(q2(p_bcv)),
                 "ventas_binance_usd": float(q2(v_bin)),
                 "pagos_binance_usd": float(q2(p_bin)),
-                "max_dias_mora": int(c.get("max_dias_mora") or 0),
+                "vencido_usd": float(c.get("vencido_usd") or 0.0),
+                "vigente_usd": float(c.get("vigente_usd") or 0.0),
+                "max_dias_mora": int(c.get("dias_mora_max") or c.get("max_dias_mora") or 0),
                 "tramos": dict(c.get("tramos") or {}),
                 "politica_credito": ov or pol_global,
+                "ordenes_pendientes": ord_pend_por_cli.get(cid, []),
             }
         )
     return salida
+
+
+def construir_cartera_vendedor(
+    *,
+    repo: Repository,
+    engine: Engine | None,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    """Construye la vista de cartera del vendedor separada estrictamente por Ruta BCV vs Binance."""
+    docs_com = RepoDocumentosSQL(engine).listar(limit=2000)[0] if engine is not None else []
+    docs_op = RepoOperativosSQL(engine).listar(limit=2000)[0] if engine is not None else []
+    clientes = _clientes_para_vendedor(
+        repo=repo,
+        engine=engine,
+        user=user,
+        docs_comerciales=docs_com,
+        docs_operativos=docs_op,
+    )
+    items: list[dict[str, Any]] = []
+    tot_bcv = Decimal("0.00")
+    tot_bin = Decimal("0.00")
+    tot_vencido = Decimal("0.00")
+    for cli in clientes:
+        s_bcv = Decimal(str(cli["saldo_bcv_usd"]))
+        s_bin = Decimal(str(cli["saldo_binance_usd"]))
+        tot_bcv += s_bcv
+        tot_bin += s_bin
+        tot_vencido += Decimal(str(cli["vencido_usd"]))
+        ords = list(cli.get("ordenes_pendientes") or [])
+        items.append(
+            {
+                "cliente_id": cli["cliente_id"],
+                "partner_odoo_id": cli["partner_odoo_id"],
+                "cliente_nombre": cli["cliente_nombre"],
+                "vendedor_email": cli["vendedor_email"],
+                "saldo_deudor_usd": cli["saldo_deudor_usd"],
+                "saldo_favor_usd": cli["saldo_favor_usd"],
+                "vencido_usd": cli["vencido_usd"],
+                "max_dias_mora": cli["max_dias_mora"],
+                "tramos": cli["tramos"],
+                "ruta_bcv": {
+                    "ventas_usd": cli["ventas_bcv_usd"],
+                    "pagos_usd": cli["pagos_bcv_usd"],
+                    "saldo_usd": cli["saldo_bcv_usd"],
+                    "ordenes_pendientes": [o for o in ords if o["ruta_pago"] == RUTA_BCV],
+                },
+                "ruta_binance": {
+                    "ventas_usd": cli["ventas_binance_usd"],
+                    "pagos_usd": cli["pagos_binance_usd"],
+                    "saldo_usd": cli["saldo_binance_usd"],
+                    "ordenes_pendientes": [o for o in ords if o["ruta_pago"] == RUTA_BINANCE],
+                },
+            }
+        )
+    return {
+        "vendedor_email": str(user.get("email") or ""),
+        "alcance_global": _es_alcance_global(user),
+        "tasas_vigentes": _tasas_snapshot(repo),
+        "resumen": {
+            "total_clientes": len(items),
+            "saldo_bcv_usd": float(q2(tot_bcv)),
+            "saldo_binance_usd": float(q2(tot_bin)),
+            "vencido_usd": float(q2(tot_vencido)),
+        },
+        "clientes": items,
+    }
 
 
 def construir_bootstrap_vendedor(
@@ -151,6 +342,7 @@ def construir_bootstrap_vendedor(
         "modo": "bootstrap",
         "cursor": cursor_ahora,
         "tasas_vigentes": _tasas_snapshot(repo),
+        "politica_ventas": cargar_politica_global(repo),
         "lista_defecto": lista_def.a_dict(),
         "listas_precio": servicio_docs.listas_precio_activas(),
         "descuentos_catalogo": servicio_docs.catalogo_descuentos(
@@ -158,6 +350,7 @@ def construir_bootstrap_vendedor(
         ),
         "cuentas_receptoras": cuentas_rec,
         "cuentas_terceros": cuentas_ter,
+        "contactos_maestro": _contactos_maestro_para_sync(engine),
         "catalogo": [it.a_dict() for it in servicio_docs.catalogo_items()],
         "clientes": _clientes_para_vendedor(
             repo=repo,
@@ -201,6 +394,8 @@ def construir_delta_vendedor(
             snap["cuentas_receptoras"] = [
                 c.a_dict() for c in todas_cr if c.activa and c.actualizado_en >= cursor_dt
             ]
+    if cursor_dt is not None:
+        snap["contactos_maestro"] = _contactos_maestro_para_sync(engine, cursor_dt=cursor_dt)
     snap["modo"] = "delta"
     snap["desde_cursor"] = cursor_str or None
     snap["tumbstones"] = {"cuentas_receptoras_inactivas": inactivas}

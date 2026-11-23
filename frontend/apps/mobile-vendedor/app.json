@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Lubrikca Vendedores",
+    "slug": "lubrikca-vendedor",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      "expo-sqlite",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Permite proteger el acceso a tu cartera y registro de cobros."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Registra coordenadas de la visita comercial del cliente."
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.lubrikca.vendedor"
+    },
+    "ios": {
+      "bundleIdentifier": "com.lubrikca.vendedor"
+    }
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -32,7 +33,9 @@ from cxc.api_v1.repositorio import (
 )
 from cxc.api_v1.storage import AdjuntoError, AdjuntosStorage
 from cxc.api_v1.sync_service import (
+    _es_alcance_global,
     construir_bootstrap_vendedor,
+    construir_cartera_vendedor,
     construir_delta_vendedor,
     procesar_push_batch,
 )
@@ -51,6 +54,7 @@ from cxc.engine.rutas_pago import RUTA_BCV, RUTA_BINANCE, normalizar_ruta, ruta_
 from cxc.engine.saldos_propios import estado_cuenta_cliente
 from cxc.odoo.client import _connect
 from cxc.operativos.cuentas_receptoras import RepoCuentasReceptorasSQL
+from cxc.operativos.lotes_efectivo import RepoLotesEfectivo
 from cxc.operativos.modelos import (
     ENVIADO_ODOO,
     TIPO_PAGO,
@@ -510,6 +514,71 @@ def v1_sync_push(
         servicio_ops=servicio_ops,
         servicio_contactos=servicio_contactos,
     )
+
+
+@router.get("/stock/verificar")
+def v1_stock_verificar(
+    _user: VendedorV1Dep,
+    q: str = "",
+    producto_id: str = "",
+    refresh: bool = False,
+) -> dict[str, Any]:
+    svc_docs: ServicioDocumentos = _resolver_dep(get_servicio_documentos)
+    pid_f = producto_id.strip()
+    q_low = q.strip().lower()
+    ahora = datetime.now().isoformat(timespec="seconds")
+    salida: list[dict[str, Any]] = []
+    for it in svc_docs.catalogo_items(refresh=refresh):
+        d = it.a_dict()
+        if pid_f and str(d.get("producto_id") or "") != pid_f:
+            continue
+        if q_low:
+            claves = ("codigo", "nombre", "marca", "presentacion", "etiqueta")
+            hay = " ".join(str(d.get(k) or "") for k in claves).lower()
+            if q_low not in hay:
+                continue
+        salida.append(
+            {
+                "producto_id": d["producto_id"],
+                "codigo": d["codigo"],
+                "nombre": d["nombre"],
+                "marca": d["marca"],
+                "presentacion": d["presentacion"],
+                "precio_usd": d["precio_usd"],
+                "precio_ves": d["precio_ves"],
+                "precios_por_lista": d["precios_por_lista"],
+                "stock_disponible": d["stock_disponible"],
+                "actualizado_en": ahora,
+            }
+        )
+    return {
+        "total": len(salida),
+        "actualizado_en": ahora,
+        "items": salida,
+    }
+
+
+@router.get("/vendedor/lotes-efectivo")
+def v1_vendedor_lotes_efectivo(
+    user: VendedorV1Dep,
+    limit: int = 100,
+) -> dict[str, Any]:
+    _repo, engine = _repo_y_engine()
+    global_scope = _es_alcance_global(user)
+    vend = None if global_scope else str(user["email"])
+    lotes = RepoLotesEfectivo(engine).listar(vendedor_email=vend, limit=limit)
+    return {
+        "vendedor_email": str(user["email"]),
+        "alcance_global": global_scope,
+        "total": len(lotes),
+        "items": lotes,
+    }
+
+
+@router.get("/vendedor/cartera")
+def v1_vendedor_cartera(user: VendedorV1Dep) -> dict[str, Any]:
+    repo, engine = _repo_y_engine()
+    return construir_cartera_vendedor(repo=repo, engine=engine, user=user)
 
 
 # ── Adjuntos (Comprobantes R2/S3 o Local HMAC) ────────────────────────────────
