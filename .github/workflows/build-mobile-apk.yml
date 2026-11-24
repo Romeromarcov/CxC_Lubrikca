@@ -1,0 +1,99 @@
+name: Build Mobile Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Entorno CxC destino del APK"
+        required: true
+        default: "staging_V1"
+        type: choice
+        options:
+          - staging_V1
+          - production
+  push:
+    branches: [develop]
+    paths:
+      - "frontend/apps/mobile-vendedor/**"
+      - "frontend/packages/domain-ts/**"
+      - ".github/workflows/build-mobile-apk.yml"
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-24.04
+
+    env:
+      JAVA_TOOL_OPTIONS: "-Xmx2048m"
+      GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run TypeScript & Vitest checks
+        working-directory: frontend
+        run: |
+          npm run typecheck
+          npm run test
+
+      - name: Resolve API URL for target environment
+        id: api_cfg
+        run: |
+          TARGET="${{ github.event.inputs.target_env || 'staging_V1' }}"
+          if [ "$TARGET" = "production" ]; then
+            URL="https://cxclubrikca-production.up.railway.app"
+          else
+            URL="https://cxclubrikca-stagingv1.up.railway.app"
+          fi
+          echo "target_env=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "api_url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Prebuild Android project (Expo SDK 52)
+        working-directory: frontend/apps/mobile-vendedor
+        env:
+          EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
+        run: npx expo prebuild --platform android --clean --non-interactive
+
+      - name: Build Android Release APK
+        working-directory: frontend/apps/mobile-vendedor/android
+        env:
+          EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Package, verify signature, and compute SHA-256
+        working-directory: frontend/apps/mobile-vendedor
+        run: |
+          APK_SRC="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK_SRC"
+          OUT_DIR="apk-out"
+          mkdir -p "$OUT_DIR"
+          APK_OUT="$OUT_DIR/lubrikca-vendedores-${{ steps.api_cfg.outputs.target_env }}.apk"
+          cp "$APK_SRC" "$APK_OUT"
+          jarsigner -verify -verbose "$APK_OUT" > /dev/null
+          ls -lh "$APK_OUT"
+          sha256sum "$APK_OUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lubrikca-vendedores-${{ steps.api_cfg.outputs.target_env }}-apk
+          path: frontend/apps/mobile-vendedor/apk-out/*.apk
+          retention-days: 30
