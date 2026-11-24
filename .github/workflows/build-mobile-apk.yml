@@ -17,14 +17,19 @@ on:
       - "frontend/apps/mobile-vendedor/**"
       - "frontend/packages/domain-ts/**"
       - ".github/workflows/build-mobile-apk.yml"
+  pull_request:
+    branches: [develop]
+    paths:
+      - "frontend/apps/mobile-vendedor/**"
+      - "frontend/packages/domain-ts/**"
+      - ".github/workflows/build-mobile-apk.yml"
 
 jobs:
   build-android-apk:
     runs-on: ubuntu-24.04
 
     env:
-      JAVA_TOOL_OPTIONS: "-Xmx2048m"
-      GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"'
+      ORG_GRADLE_JVMARGS: "-Xmx4096m -XX:MaxMetaspaceSize=1024m"
 
     steps:
       - uses: actions/checkout@v4
@@ -74,14 +79,41 @@ jobs:
           KOTLIN_VER=$(node -e "const fs=require('fs');const t=fs.readFileSync('../../node_modules/@react-native/gradle-plugin/gradle/libs.versions.toml','utf8');const m=t.match(/kotlin\s*=\s*\"([^\"]+)\"/);console.log(m?m[1]:'1.9.25')")
           echo "Detected RN Kotlin version: $KOTLIN_VER"
           echo "android.kotlinVersion=$KOTLIN_VER" >> android/gradle.properties
+          node -e "
+            const fs = require('fs');
+            const snippet = [
+              '',
+              'subprojects { sub ->',
+              '  sub.configurations.all {',
+              '    resolutionStrategy {',
+              \"      force 'com.facebook.fbjni:fbjni:0.6.0'\",
+              '    }',
+              '  }',
+              '  sub.plugins.withId(\"com.android.library\") {',
+              '    if (rootProject.ext.has(\"ndkVersion\")) {',
+              '      sub.android.ndkVersion = rootProject.ext.ndkVersion',
+              '    }',
+              '  }',
+              '}',
+              ''
+            ].join('\n');
+            fs.appendFileSync('android/build.gradle', snippet);
+          "
 
       - name: Build Android Release APK
         working-directory: frontend/apps/mobile-vendedor/android
         env:
           EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
         run: |
+          unset JAVA_TOOL_OPTIONS || true
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Diagnose native CMake/Prefab failure
+        if: failure()
+        working-directory: frontend/apps/mobile-vendedor/android
+        run: |
+          ./gradlew :expo-sqlite:configureCMakeRelWithDebInfo[arm64-v8a] --info --no-daemon | tail -n 120 || true
 
       - name: Package, verify signature, and compute SHA-256
         working-directory: frontend/apps/mobile-vendedor
