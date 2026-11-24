@@ -71,7 +71,9 @@ jobs:
           EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
         run: |
           npx expo prebuild --platform android --clean
-          echo "android.kotlinVersion=1.9.24" >> android/gradle.properties
+          KOTLIN_VER=$(node -e "const fs=require('fs');const t=fs.readFileSync('../../node_modules/@react-native/gradle-plugin/gradle/libs.versions.toml','utf8');const m=t.match(/kotlin\s*=\s*\"([^\"]+)\"/);console.log(m?m[1]:'1.9.25')")
+          echo "Detected RN Kotlin version: $KOTLIN_VER"
+          echo "android.kotlinVersion=$KOTLIN_VER" >> android/gradle.properties
 
       - name: Build Android Release APK
         working-directory: frontend/apps/mobile-vendedor/android
@@ -79,7 +81,7 @@ jobs:
           EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Package, verify signature, and compute SHA-256
         working-directory: frontend/apps/mobile-vendedor
