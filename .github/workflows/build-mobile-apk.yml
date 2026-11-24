@@ -67,8 +67,11 @@ jobs:
       - name: Prebuild Android project (Expo SDK 52)
         working-directory: frontend/apps/mobile-vendedor
         env:
+          CI: "1"
           EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
-        run: npx expo prebuild --platform android --clean --non-interactive
+        run: |
+          npx expo prebuild --platform android --clean
+          echo "android.kotlinVersion=1.9.24" >> android/gradle.properties
 
       - name: Build Android Release APK
         working-directory: frontend/apps/mobile-vendedor/android
