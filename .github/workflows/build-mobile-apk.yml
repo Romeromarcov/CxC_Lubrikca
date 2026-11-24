@@ -29,8 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      JAVA_TOOL_OPTIONS: "-Xmx2048m"
-      GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"'
+      ORG_GRADLE_JVMARGS: "-Xmx4096m -XX:MaxMetaspaceSize=1024m"
 
     steps:
       - uses: actions/checkout@v4
@@ -106,6 +105,7 @@ jobs:
         env:
           EXPO_PUBLIC_CXC_API_URL: ${{ steps.api_cfg.outputs.api_url }}
         run: |
+          unset JAVA_TOOL_OPTIONS || true
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace
 
