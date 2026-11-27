@@ -25,10 +25,12 @@ export interface TasasVigentes {
 }
 
 export interface ListaPrecio {
+  id?: string;
   lista_id: string;
   nombre: string;
   moneda: string;
   ruta_pago: string;
+  ruta_pago_label?: string;
   es_defecto?: boolean;
 }
 
@@ -50,10 +52,15 @@ export interface ProductoCatalogo {
 
 export interface DescuentoCatalogo {
   codigo: string;
-  nombre: string;
+  nombre?: string;
+  titulo?: string;
+  familia?: string;
+  familia_label?: string;
+  condicion?: string;
   porcentaje?: number;
   max_pct?: number;
   aplica_lista_ids?: string[];
+  aplica_lista_actual?: boolean;
   notas?: string;
 }
 
@@ -82,12 +89,15 @@ export interface CuentaReceptora {
 
 export interface CuentaTercero {
   id?: number;
+  cuenta_id?: number;
   cuenta_tercero_id?: number;
   titular: string;
   alias?: string;
   email?: string;
+  correo_telefono?: string;
   moneda?: string;
-  activa: boolean;
+  activa?: boolean;
+  activo?: boolean;
 }
 
 export interface ContactoMaestroResumen {

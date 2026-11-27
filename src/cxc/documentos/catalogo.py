@@ -81,6 +81,7 @@ class ListaComercialActiva:
         ruta = self.ruta_efectiva
         return {
             "id": self.lista_id,
+            "lista_id": self.lista_id,
             "nombre": self.nombre,
             "moneda": self.moneda,
             "ruta_pago": ruta,

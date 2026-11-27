@@ -323,7 +323,34 @@ def test_fase2_bootstrap_delta_contactos_y_politica(
     assert r_boot.status_code == 200
     boot = r_boot.json()
     assert isinstance(boot["politica_ventas"], dict)
+    assert boot["listas_precio"]
+    assert all("lista_id" in lp for lp in boot["listas_precio"])
+    assert all("nombre" in d for d in boot["descuentos_catalogo"])
     assert any(c["rif"] == "J-30112233-4" for c in boot["contactos_maestro"])
+
+    from cxc.operativos.terceros import CuentaTercero
+
+    ct_dict = CuentaTercero(
+        cuenta_id=7,
+        alias="Zelle Aliado",
+        titular="Aliado CA",
+        correo_telefono="aliado@example.com",
+        proveedor_odoo_id=123,
+        proveedor_nombre="Aliado Proveedor",
+        diario_odoo_id=None,
+        diario_odoo_nombre="",
+        cuenta_cxp_override_id=None,
+        cuenta_cxc_override_id=None,
+        moneda="USD",
+        notas="",
+        activo=True,
+        creado_por="admin",
+        creado_en=datetime.now(UTC).replace(tzinfo=None),
+        actualizado_en=datetime.now(UTC).replace(tzinfo=None),
+    ).a_dict()
+    assert ct_dict["cuenta_tercero_id"] == 7
+    assert ct_dict["email"] == "aliado@example.com"
+    assert ct_dict["activa"] is True
 
     cli_197 = next(c for c in boot["clientes"] if c["cliente_id"] == "197")
     assert len(cli_197["ordenes_pendientes"]) == 2

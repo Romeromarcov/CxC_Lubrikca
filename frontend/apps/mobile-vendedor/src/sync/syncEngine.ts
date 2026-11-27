@@ -19,6 +19,7 @@ export interface SyncReport {
   itemsRetry: number;
   deltaAplicado: boolean;
   sesionRevocada: boolean;
+  errorMsg?: string | null;
 }
 
 export interface AttachmentByteReader {
@@ -117,6 +118,7 @@ export class SyncEngine {
       itemsRetry: 0,
       deltaAplicado: false,
       sesionRevocada: false,
+      errorMsg: null,
     };
 
     try {
@@ -171,6 +173,7 @@ export class SyncEngine {
             rep.sesionRevocada = true;
             return rep;
           }
+          rep.errorMsg = err instanceof Error ? err.message : String(err);
           for (const orig of cola) {
             const cls = clasificarErrorRed(err, orig.intentos, this.maxIntentos);
             const proximoIso =
@@ -198,6 +201,8 @@ export class SyncEngine {
     } catch (err) {
       if (await this.manejarErrorHttp(err)) {
         rep.sesionRevocada = true;
+      } else {
+        rep.errorMsg = err instanceof Error ? err.message : String(err);
       }
     }
     return rep;

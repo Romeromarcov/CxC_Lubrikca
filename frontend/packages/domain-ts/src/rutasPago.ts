@@ -24,7 +24,7 @@ export function rutaDeLista(
   const raw = String(listaRef ?? "").trim();
   if (!raw) return RUTA_BCV;
 
-  const porId = listasPrecio.find((l) => String(l.lista_id) === raw);
+  const porId = listasPrecio.find((l) => String(l.lista_id ?? l.id ?? "") === raw);
   if (porId) {
     const r = normalizarRuta(porId.ruta_pago) || normalizarRuta(porId.moneda);
     if (r) return r;
