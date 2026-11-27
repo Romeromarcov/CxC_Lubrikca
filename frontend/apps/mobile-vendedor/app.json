@@ -2,7 +2,7 @@
   "expo": {
     "name": "Lubrikca Vendedores",
     "slug": "lubrikca-vendedor",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": false,
@@ -23,7 +23,8 @@
       ]
     ],
     "android": {
-      "package": "com.lubrikca.vendedor"
+      "package": "com.lubrikca.vendedor",
+      "versionCode": 2
     },
     "ios": {
       "bundleIdentifier": "com.lubrikca.vendedor"

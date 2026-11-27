@@ -479,6 +479,7 @@ def obtener_catalogo_descuentos(
 
     for it in catalogo_out:
         it["familia_label"] = _FAMILIA_LABELS.get(str(it.get("familia") or ""), "Descuento")
+        it["nombre"] = str(it.get("titulo") or it.get("codigo") or "")
 
     return catalogo_out
 

@@ -457,4 +457,134 @@ describe("MobileSqliteRepo + SyncEngine offline-first", () => {
     const idOtro = await otroStore.obtenerOCrearDeviceId();
     expect(idOtro).not.toBe(id1);
   });
+
+  it("soporta aliases del backend (id/titulo/activo) sin hacer rollback, fallback VES y clientes buscables combinados", async () => {
+    const db = new NodeSqliteExecutor();
+    const repo = new MobileSqliteRepo(db);
+    await repo.init();
+    const snap = makeBootstrap();
+    // Simular payload crudo del backend sin alias normalizados en cliente
+    snap.listas_precio = [
+      {
+        id: "21",
+        nombre: "Lista Foránea VES",
+        moneda: "VES",
+        ruta_pago: "bcv",
+      } as unknown as (typeof snap.listas_precio)[number],
+    ];
+    snap.descuentos_catalogo = [
+      {
+        codigo: "VOL_5",
+        titulo: "Volumen 5%",
+        porcentaje: 5,
+      } as unknown as (typeof snap.descuentos_catalogo)[number],
+    ];
+    snap.cuentas_terceros = [
+      {
+        cuenta_id: 7,
+        alias: "Zelle Aliado",
+        titular: "Aliado CA",
+        correo_telefono: "zelle@aliado.com",
+        activo: true,
+        moneda: "USD",
+      } as unknown as (typeof snap.cuentas_terceros)[number],
+    ];
+    snap.catalogo = [
+      {
+        producto_id: "10",
+        codigo: "ACE-15W40-1L",
+        nombre: "Aceite 15W40 Mineral 1L",
+        marca: "GLOBAL OIL",
+        presentacion: "1L",
+        litros: 1,
+        precio_usd: 0,
+        precio_ves: 450,
+        precios_por_lista: {},
+        stock_disponible: 24,
+        etiqueta: "ACE-15W40-1L Aceite 15W40",
+      },
+    ];
+    snap.contactos_maestro = [
+      {
+        contacto_id: 9001,
+        odoo_partner_id: 197,
+        rol: "cliente",
+        nombre: "1080 ZIP MARKET, C.A",
+        nombre_normalizado: "1080 zip market",
+        rif: "J-50332770-7",
+        rif_normalizado: "J503327707",
+        telefono: "0414-0001122",
+        vendedor_email: "vendedor@lubrikca.com",
+        actualizado_en: "2026-11-22T12:00:00",
+      },
+      {
+        contacto_id: 9002,
+        odoo_partner_id: 999,
+        rol: "cliente",
+        nombre: "CLIENTE MAESTRO NUEVO CA",
+        nombre_normalizado: "cliente maestro nuevo ca",
+        rif: "J-99887766-5",
+        rif_normalizado: "J998877665",
+        telefono: "0412-9998877",
+        vendedor_email: "vendedor@lubrikca.com",
+        actualizado_en: "2026-11-22T12:00:00",
+      },
+    ];
+
+    await repo.aplicarBootstrap(snap);
+
+    const prods = await repo.buscarProductosOffline("Aceite", "21");
+    expect(prods).toHaveLength(1);
+    expect(prods[0]?.codigo).toBe("ACE-15W40-1L");
+    expect(prods[0]?.precio_lista).toBe(450);
+
+    const buscados = await repo.listarClientesBuscables("J-99887766");
+    expect(
+      buscados.some(
+        (c) => c.cliente_nombre === "CLIENTE MAESTRO NUEVO CA" && c.fuente === "maestro",
+      ),
+    ).toBe(true);
+
+    const carteraEnriquecida = await repo.listarClientesBuscables("50332770");
+    expect(
+      carteraEnriquecida.some(
+        (c) => c.cliente_nombre === "1080 ZIP MARKET, C.A" && c.partner_odoo_id === 197,
+      ),
+    ).toBe(true);
+
+    const resumen = await repo.obtenerResumenLocal();
+    expect(resumen.productos).toBe(1);
+    expect(resumen.listas).toBe(1);
+    expect(resumen.clientes).toBeGreaterThanOrEqual(1);
+
+    const rowsDesc = await db.getAll<{ nombre: string }>("SELECT nombre FROM reglas_descuento");
+    expect(rowsDesc[0]?.nombre).toBe("Volumen 5%");
+    const rowsTerc = await db.getAll<{ email: string; activa: number }>(
+      "SELECT email, activa FROM cuentas_terceros",
+    );
+    expect(rowsTerc[0]).toEqual({ email: "zelle@aliado.com", activa: 1 });
+  });
+
+  it("registra errorMsg en SyncEngine cuando syncBootstrap falla", async () => {
+    const db = new NodeSqliteExecutor();
+    const repo = new MobileSqliteRepo(db);
+    await repo.init();
+    const sessionStore = new MobileSessionStore(new MemoryKv());
+    await sessionStore.guardarSesion({
+      token_type: "Bearer",
+      access_token: "acc-1",
+      refresh_token: "ref-1",
+      expires_in: 900,
+      device_id: "dev-1",
+      user: { email: "vendedor@lubrikca.com", nombre: "Vendedor", rol: "ventas", permisos: [] },
+    });
+    const api = new LubrikcaApiClient({
+      baseUrl: "https://cxc.test",
+      fetchImpl: async () => new Response("Bad Gateway", { status: 502 }),
+      getAccessToken: async () => (await sessionStore.leerSesion())?.access_token ?? null,
+    });
+    const engine = new SyncEngine({ api, repo, sessionStore });
+    const rep = await engine.sincronizarCompleto("dev-1");
+    expect(rep.errorMsg).toBeTruthy();
+  });
 });

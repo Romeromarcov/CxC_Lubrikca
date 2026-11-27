@@ -47,8 +47,32 @@ export interface AdjuntoPendienteRegistro {
   creado_en: string;
 }
 
+export interface ClienteBuscable extends ClienteCartera {
+  rif: string;
+  telefono: string;
+  fuente: "cartera" | "maestro";
+}
+
+export interface ResumenCacheLocal {
+  productos: number;
+  clientes: number;
+  contactos: number;
+  listas: number;
+  outboxPendientes: number;
+  outboxConflictos: number;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function normalizarTexto(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export class OfflineValidationError extends Error {
@@ -124,8 +148,11 @@ export class MobileSqliteRepo {
       if (snap.modo === "bootstrap") {
         await this.db.run("DELETE FROM listas_precio");
       }
+      const defListaId = String(snap.lista_defecto?.lista_id ?? snap.lista_defecto?.id ?? "").trim();
       for (const l of snap.listas_precio ?? []) {
-        const esDef = snap.lista_defecto?.lista_id === l.lista_id ? 1 : 0;
+        const lid = String(l.lista_id ?? l.id ?? "").trim();
+        if (!lid) continue;
+        const esDef = defListaId && defListaId === lid ? 1 : 0;
         await this.db.run(
           `INSERT INTO listas_precio (lista_id, nombre, moneda, ruta_pago, es_defecto)
            VALUES (?, ?, ?, ?, ?)
@@ -134,16 +161,19 @@ export class MobileSqliteRepo {
              moneda = excluded.moneda,
              ruta_pago = excluded.ruta_pago,
              es_defecto = excluded.es_defecto`,
-          [String(l.lista_id), l.nombre, l.moneda, l.ruta_pago, esDef],
+          [lid, String(l.nombre ?? lid), String(l.moneda ?? "VES"), String(l.ruta_pago ?? "bcv"), esDef],
         );
       }
 
       for (const d of snap.descuentos_catalogo ?? []) {
+        const cod = String(d.codigo ?? "").trim();
+        if (!cod) continue;
+        const nom = String(d.nombre ?? d.titulo ?? cod);
         await this.db.run(
           `INSERT INTO reglas_descuento (codigo, nombre, json_data)
            VALUES (?, ?, ?)
            ON CONFLICT(codigo) DO UPDATE SET nombre = excluded.nombre, json_data = excluded.json_data`,
-          [d.codigo, d.nombre, JSON.stringify(d)],
+          [cod, nom, JSON.stringify({ ...d, codigo: cod, nombre: nom })],
         );
       }
 
@@ -151,6 +181,8 @@ export class MobileSqliteRepo {
         await this.db.run("DELETE FROM productos");
       }
       for (const p of snap.catalogo ?? []) {
+        const pid = String(p.producto_id ?? "").trim();
+        if (!pid) continue;
         await this.db.run(
           `INSERT INTO productos (producto_id, codigo, nombre, marca, presentacion, litros, precio_usd, precio_ves, precios_por_lista_json, etiqueta)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -165,23 +197,23 @@ export class MobileSqliteRepo {
              precios_por_lista_json = excluded.precios_por_lista_json,
              etiqueta = excluded.etiqueta`,
           [
-            String(p.producto_id),
-            p.codigo ?? "",
-            p.nombre ?? "",
-            p.marca ?? "",
-            p.presentacion ?? "",
-            p.litros ?? 0,
-            p.precio_usd ?? 0,
-            p.precio_ves ?? 0,
+            pid,
+            String(p.codigo ?? ""),
+            String(p.nombre ?? ""),
+            String(p.marca ?? ""),
+            String(p.presentacion ?? ""),
+            Number(p.litros ?? 0),
+            Number(p.precio_usd ?? 0),
+            Number(p.precio_ves ?? 0),
             JSON.stringify(p.precios_por_lista ?? {}),
-            p.etiqueta ?? "",
+            String(p.etiqueta ?? ""),
           ],
         );
         await this.db.run(
           `INSERT INTO stock_cache (producto_id, free_qty, actualizado_en)
            VALUES (?, ?, ?)
            ON CONFLICT(producto_id) DO UPDATE SET free_qty = excluded.free_qty, actualizado_en = excluded.actualizado_en`,
-          [String(p.producto_id), p.stock_disponible ?? null, snap.cursor || ts],
+          [pid, p.stock_disponible ?? null, snap.cursor || ts],
         );
       }
 
@@ -305,8 +337,10 @@ export class MobileSqliteRepo {
         await this.db.run("DELETE FROM cuentas_terceros");
       }
       for (const ct of snap.cuentas_terceros ?? []) {
-        const tid = Number(ct.cuenta_tercero_id ?? ct.id ?? 0);
+        const tid = Number(ct.cuenta_tercero_id ?? ct.cuenta_id ?? ct.id ?? 0);
         if (!tid) continue;
+        const email = String(ct.email ?? ct.correo_telefono ?? "");
+        const activa = (ct.activa ?? ct.activo ?? true) ? 1 : 0;
         await this.db.run(
           `INSERT INTO cuentas_terceros (cuenta_tercero_id, titular, alias, email, moneda, activa)
            VALUES (?, ?, ?, ?, ?, ?)
@@ -316,7 +350,7 @@ export class MobileSqliteRepo {
              email = excluded.email,
              moneda = excluded.moneda,
              activa = excluded.activa`,
-          [tid, ct.titular, ct.alias ?? "", ct.email ?? "", ct.moneda ?? "USD", ct.activa ? 1 : 0],
+          [tid, String(ct.titular ?? ""), String(ct.alias ?? ""), email, String(ct.moneda ?? "USD"), activa],
         );
       }
 
@@ -369,6 +403,16 @@ export class MobileSqliteRepo {
     listaId?: string,
   ): Promise<Array<ProductoCatalogo & { stock_actualizado_en: string; precio_lista: number }>> {
     const q = query.trim().toLowerCase();
+    let monedaLista = "USD";
+    if (listaId) {
+      const lr = await this.db.getFirst<{ moneda: string; ruta_pago: string }>(
+        "SELECT moneda, ruta_pago FROM listas_precio WHERE lista_id = ?",
+        [String(listaId)],
+      );
+      if (lr) {
+        monedaLista = String(lr.moneda || (lr.ruta_pago === "binance" ? "USD" : "VES")).toUpperCase();
+      }
+    }
     const rows = await this.db.getAll<{
       producto_id: string;
       codigo: string;
@@ -396,7 +440,10 @@ export class MobileSqliteRepo {
         if (!hay.includes(q)) continue;
       }
       const preciosLista = JSON.parse(r.precios_por_lista_json || "{}") as Record<string, number>;
-      const precioLista = listaId && preciosLista[listaId] !== undefined ? preciosLista[listaId] : r.precio_usd;
+      const fallbackPrecio =
+        monedaLista === "VES" && Number(r.precio_ves) > 0 ? Number(r.precio_ves) : Number(r.precio_usd);
+      const precioLista =
+        listaId && preciosLista[listaId] !== undefined ? Number(preciosLista[listaId]) : fallbackPrecio;
       out.push({
         producto_id: r.producto_id,
         codigo: r.codigo,
@@ -410,7 +457,7 @@ export class MobileSqliteRepo {
         stock_disponible: r.free_qty !== null ? Number(r.free_qty) : null,
         etiqueta: r.etiqueta,
         stock_actualizado_en: r.stock_actualizado_en ?? "",
-        precio_lista: Number(precioLista ?? r.precio_usd),
+        precio_lista: Number(precioLista ?? fallbackPrecio),
       });
     }
     return out;
@@ -586,6 +633,111 @@ export class MobileSqliteRepo {
       "SELECT json_data FROM politica_ventas_cache WHERE id = 1",
     );
     return r ? (JSON.parse(r.json_data) as PoliticaVentasGlobal) : null;
+  }
+
+  async listarClientesBuscables(query: string = ""): Promise<ClienteBuscable[]> {
+    const [cartera, maestro, polGlobal] = await Promise.all([
+      this.listarClientesCarteraOffline(),
+      this.obtenerContactosMaestro(),
+      this.obtenerPoliticaVentas(),
+    ]);
+
+    const porPartner = new Map<number, ContactoMaestroResumen>();
+    const porNombre = new Map<string, ContactoMaestroResumen>();
+    for (const cm of maestro) {
+      if (cm.odoo_partner_id) porPartner.set(cm.odoo_partner_id, cm);
+      const nomKey = normalizarTexto(cm.nombre_normalizado || cm.nombre);
+      if (nomKey && !porNombre.has(nomKey)) porNombre.set(nomKey, cm);
+    }
+
+    const vistosPartners = new Set<number>();
+    const vistosNombres = new Set<string>();
+    const combinado: ClienteBuscable[] = [];
+
+    for (const c of cartera) {
+      const match =
+        (c.partner_odoo_id ? porPartner.get(c.partner_odoo_id) : undefined) ??
+        porNombre.get(normalizarTexto(c.cliente_nombre));
+      if (c.partner_odoo_id) vistosPartners.add(c.partner_odoo_id);
+      vistosNombres.add(normalizarTexto(c.cliente_nombre));
+      combinado.push({
+        ...c,
+        rif: match?.rif ?? "",
+        telefono: match?.telefono ?? "",
+        fuente: "cartera",
+      });
+    }
+
+    const polDef: PoliticaVentasGlobal = polGlobal ?? {
+      autosend_activo: false,
+      limite_credito_usd: 0,
+      limite_facturas_pendientes: 0,
+      retener_si_vencidas: true,
+      dias_mora_max: 0,
+    };
+
+    for (const cm of maestro) {
+      const rol = String(cm.rol || "cliente").toLowerCase();
+      if (rol !== "cliente" && rol !== "ambos" && rol !== "prospecto") continue;
+      if (cm.odoo_partner_id && vistosPartners.has(cm.odoo_partner_id)) continue;
+      const nomKey = normalizarTexto(cm.nombre_normalizado || cm.nombre);
+      if (!nomKey || vistosNombres.has(nomKey)) continue;
+      if (cm.odoo_partner_id) vistosPartners.add(cm.odoo_partner_id);
+      vistosNombres.add(nomKey);
+      const cid = cm.odoo_partner_id ? String(cm.odoo_partner_id) : `maestro-${cm.contacto_id ?? nomKey}`;
+      combinado.push({
+        cliente_id: cid,
+        partner_odoo_id: cm.odoo_partner_id,
+        cliente_nombre: cm.nombre,
+        vendedor_email: cm.vendedor_email,
+        saldo_deudor_usd: 0,
+        saldo_favor_usd: 0,
+        saldo_bcv_usd: 0,
+        saldo_binance_usd: 0,
+        ventas_bcv_usd: 0,
+        pagos_bcv_usd: 0,
+        ventas_binance_usd: 0,
+        pagos_binance_usd: 0,
+        max_dias_mora: 0,
+        tramos: {},
+        politica_credito: polDef,
+        ordenes_pendientes: [],
+        rif: cm.rif ?? "",
+        telefono: cm.telefono ?? "",
+        fuente: "maestro",
+      });
+    }
+
+    combinado.sort((a, b) => a.cliente_nombre.localeCompare(b.cliente_nombre));
+    const q = normalizarTexto(query);
+    if (!q) return combinado;
+    return combinado.filter((c) => {
+      const hay = normalizarTexto(`${c.cliente_nombre} ${c.rif} ${c.telefono} ${c.cliente_id}`);
+      return hay.includes(q);
+    });
+  }
+
+  async obtenerResumenLocal(): Promise<ResumenCacheLocal> {
+    const [p, c, m, l, op, oc] = await Promise.all([
+      this.db.getFirst<{ n: number }>("SELECT COUNT(*) AS n FROM productos"),
+      this.db.getFirst<{ n: number }>("SELECT COUNT(*) AS n FROM clientes"),
+      this.db.getFirst<{ n: number }>("SELECT COUNT(*) AS n FROM contactos_maestro"),
+      this.db.getFirst<{ n: number }>("SELECT COUNT(*) AS n FROM listas_precio"),
+      this.db.getFirst<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM outbox_operaciones WHERE estado IN ('PENDING', 'FAILED_RETRY')",
+      ),
+      this.db.getFirst<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM outbox_operaciones WHERE estado = 'CONFLICT_USER_ACTION'",
+      ),
+    ]);
+    return {
+      productos: Number(p?.n ?? 0),
+      clientes: Number(c?.n ?? 0),
+      contactos: Number(m?.n ?? 0),
+      listas: Number(l?.n ?? 0),
+      outboxPendientes: Number(op?.n ?? 0),
+      outboxConflictos: Number(oc?.n ?? 0),
+    };
   }
 
   async encolarOperacionOutbox(input: {
